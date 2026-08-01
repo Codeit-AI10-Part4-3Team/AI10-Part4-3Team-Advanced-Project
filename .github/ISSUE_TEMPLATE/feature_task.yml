@@ -13,7 +13,7 @@ body:
     id: area
     attributes:
       label: 대상 모듈
-      # TODO: 프로젝트의 실제 모듈/파이프라인 단계 목록으로 교체하세요.
+      # ⚠️ 앱/폴더를 추가하면 이 목록도 함께 늘리세요 (bug_report·experiment·feature_task 3곳).
       options:
         - backend
         - ai-engine

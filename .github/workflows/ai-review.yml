@@ -1,0 +1,96 @@
+# .github/workflows/ai-review.yml
+name: AI review
+
+# LLM 기반 맥락 리뷰 — Greptile을 대체합니다(월 결제가 필요해 도입하지 않았습니다).
+# reviewdog(결정론적 린트)·SonarQube(정적 분석)와 같은 계층의 **보조 리뷰어**이고,
+# 하드 게이트는 ci.yml(ruff / mypy / pytest)이 담당합니다.
+#
+# ⚠️ required status check로 지정하지 마세요. 세 가지 상황에서 체크가 아예 생성되지 않고,
+#    그 순간 모든 PR이 영구히 "Expected" 상태로 머지 블록됩니다:
+#      (1) 아래 fork 가드로 외부 기여자 PR에서는 잡이 스킵됩니다
+#      (2) ANTHROPIC_API_KEY 미등록 시 스킵됩니다
+#      (3) API 크레딧 소진·외부 서비스 장애 시 실패합니다
+#    scripts/setup-github.sh의 contexts에 넣지 않는 이유가 이것입니다
+#    (reviewdog / SonarQube와 동일한 결정 — docs/공통_가이드/저장소_운영.md §8).
+#
+# ⚠️ pull_request_target으로 바꾸지 마세요. fork의 코드를 write 권한 + 시크릿 접근 컨텍스트에서
+#    실행하게 됩니다(=임의 코드 실행 + API 키 탈취). 이 저장소는 public이라 실제 위험입니다.
+#    외부 기여자 PR은 ci.yml 결과로 판단하세요.
+#
+# ⚠️ 시크릿은 write 권한자 전원이 꺼낼 수 있습니다(워크플로를 고쳐 값을 인코딩해 출력하면 됩니다).
+#    그래서 개인 구독 OAuth 토큰(CLAUDE_CODE_OAUTH_TOKEN)이 아니라 **조직 소유 API 키**를 씁니다 —
+#    유출 시 그 키만 폐기하면 되고, 개인 계정이나 팀원의 작업 쿼터에 영향이 없습니다.
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+concurrency:
+  # 같은 PR에 새 push가 오면 진행 중인 리뷰를 취소 — 중복 과금 방지.
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+
+# 인라인 코멘트 작성에 필요한 최소 권한. contents는 read면 충분합니다
+# (이 워크플로는 리뷰만 하고 코드를 고치지 않습니다).
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: AI review
+    runs-on: ubuntu-latest
+    # fork PR에서는 시크릿이 주입되지 않아 인증이 실패합니다. draft PR은 리뷰하지 않습니다
+    # (ready_for_review 이벤트로 초안 해제 시점에 한 번 돕니다).
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 리뷰 대상 diff를 계산하려면 base 브랜치까지 필요합니다.
+          fetch-depth: 0
+
+      # 키가 없으면 실패가 아니라 스킵 — 키 등록 전까지 팀이 빨간 X를 보지 않게 합니다
+      # (SonarQube 워크플로와 같은 처리).
+      - name: API 키 등록 여부 확인
+        id: guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::ANTHROPIC_API_KEY 미등록 — AI 리뷰를 건너뜁니다."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Claude 리뷰
+        if: steps.guard.outputs.enabled == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # ⚠️ 스타일·포맷·타입을 지적하게 두지 마세요. ruff / mypy / reviewdog가 이미
+          #    결정론적으로 판정하므로, LLM이 같은 주제로 코멘트하면 서로 충돌하는 조언이 되어
+          #    사람이 어느 쪽을 따를지 잃습니다. 그 순간 팀은 봇 코멘트 전체를 무시하기 시작합니다.
+          prompt: |
+            이 PR을 한국어로 리뷰하세요. 저장소 규약은 AGENTS.md가 원천입니다.
+
+            반드시 지적할 것:
+            - 앱 간 경계 위반 — apps/ai-engine 이 apps/backend 를 import(역도 동일),
+              training/ 과 apps/ 의 양방향 import, backend_core 가 api 를 import
+            - 요청/응답 스키마를 바꾸면서 packages/contracts/openapi.yaml 을 함께 고치지 않은 변경
+            - 하드코딩된 API 키·토큰·자격증명 (테스트 픽스처 포함, 최우선)
+            - 예외 처리 없는 외부 호출(HTTP, 모델 API, 파일 IO). 의도적 생략이면 주석에 이유가 있어야 합니다
+            - 논리 오류, 경계 조건 누락, 되돌릴 수 없는 부작용
+            - 가드레일을 목으로 대체하거나 우회해 테스트를 통과시키는 변경 (측정을 무효로 만듭니다)
+            - required check 이름(.github/workflows/ci.yml 의 잡 name)을 바꾸면서
+              scripts/setup-github.sh 의 contexts 를 함께 고치지 않은 변경
+
+            지적하지 말 것:
+            - 스타일·포맷·import 정렬·타입 (ruff / mypy / reviewdog 소관)
+            - 문서의 표현이나 오타
+
+            추측이 섞인 지적에는 '추정'이라고 밝히세요. 지적할 것이 없으면 그렇게 답하세요.
+          claude_args: |
+            --model claude-opus-5
+            --max-turns 8

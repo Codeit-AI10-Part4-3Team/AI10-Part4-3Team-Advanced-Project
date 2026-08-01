@@ -72,6 +72,7 @@ docs/              # 설계 문서, ADR, 역할 가이드/일정
 | 학습 파이프라인 | [training/README.md](training/README.md) |
 | 환경 세팅 문제 해결 | [docs/공통_가이드/환경_세팅_가이드.md](docs/공통_가이드/환경_세팅_가이드.md) |
 | PR 절차 | [docs/pr-checklist.md](docs/pr-checklist.md) |
+| 리뷰 코멘트 작성법 | [docs/공통_가이드/코드_리뷰_가이드.md](docs/공통_가이드/코드_리뷰_가이드.md) |
 | 저장소 설정·CI 계약 | [docs/공통_가이드/저장소_운영.md](docs/공통_가이드/저장소_운영.md) |
 | 아키텍처 규칙 (사람·에이전트 공용) | [AGENTS.md](AGENTS.md) |
 | 결정 기록 | [docs/adr/](docs/adr/) |

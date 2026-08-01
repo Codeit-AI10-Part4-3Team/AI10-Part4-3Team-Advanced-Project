@@ -2,6 +2,13 @@
 name: AI review
 
 # LLM 기반 맥락 리뷰 — Greptile을 대체합니다(월 결제가 필요해 도입하지 않았습니다).
+#
+# 사전 작업 2개 — 하나만 해서는 동작하지 않습니다:
+#   1. Claude GitHub App 설치 (https://github.com/apps/claude)
+#      ⚠️ 없으면 `Claude Code is not installed on this repository` 로 실패합니다.
+#         아래 시크릿 가드는 키만 검사하므로 이 상태를 걸러 주지 못합니다.
+#   2. ANTHROPIC_API_KEY 시크릿 등록 (없으면 실패 대신 스킵)
+#
 # reviewdog(결정론적 린트)·SonarQube(정적 분석)와 같은 계층의 **보조 리뷰어**이고,
 # 하드 게이트는 ci.yml(ruff / mypy / pytest)이 담당합니다.
 #

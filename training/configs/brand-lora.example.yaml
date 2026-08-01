@@ -1,0 +1,38 @@
+# 브랜드 스타일 LoRA 학습 설정 — 예시(자리표시자).
+#
+# 이 파일을 <dataset-id>.yaml 로 복사해서 쓰세요. config는 **커밋 대상**입니다:
+# 재현의 단일 원천이므로, 하이퍼파라미터를 코드나 셸 히스토리에 두면 그 실험은 사라집니다.
+#
+# ⚠️ 아래 값들은 아직 실측으로 정해진 것이 아닙니다. 첫 학습 전에 팀이 base 모델을
+#    확정하고(ADR로 남길 것) 이 파일을 실제 값으로 교체하세요.
+
+run_id: TODO                      # 결과가 training/runs/<run_id>/ 에 쌓입니다
+
+model:
+  base: TODO                      # 예: stabilityai/stable-diffusion-xl-base-1.0
+  revision: TODO                  # 커밋 해시로 고정 — 태그는 움직입니다
+  precision: fp16                 # VRAM 예산에 직결. GPU 확정 후 조정
+
+dataset:
+  id: TODO                        # training/data/<id> 와 정확히 일치해야 합니다
+  resolution: 1024
+  caption_dropout: 0.05           # 무조건부 생성 능력 보존용
+
+lora:
+  rank: 16                        # 낮을수록 가볍고 과적합에 강함. 브랜드 스타일은 저랭크로 충분한 편(추정)
+  alpha: 16
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+train:
+  learning_rate: 1.0e-4
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  max_train_steps: 1000
+  seed: 42                        # 고정하지 않으면 두 번째 실행이 첫 번째를 검증하지 못합니다
+  checkpoint_every: 250
+
+eval:
+  # 학습 중 고정 프롬프트로 샘플을 뽑아 스타일 수렴을 눈으로 확인합니다.
+  # 프롬프트를 실행마다 바꾸면 실행 간 비교가 불가능해집니다.
+  prompts: [TODO]
+  every_steps: 250

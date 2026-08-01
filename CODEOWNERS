@@ -1,37 +1,51 @@
 # CODEOWNERS — 경로별 기본 리뷰어 자동 배정.
 #
-# ⚠️ 이 파일은 **템플릿 상태**입니다. `{{GITHUB_OWNER}}` 자리를 실제 GitHub 계정으로 바꾸고,
-#    아래 규칙을 팀 구성에 맞게 다시 쓰세요. 그 전까지는 아무것도 배정되지 않습니다.
+# ⚠️ 이 파일은 **자리표시자 상태**입니다. `@role-*` 핸들은 실존하지 않는 계정이므로 현재
+#    아무것도 배정되지 않으며, `scripts/setup-github.sh`가 이를 감지해 코드오너 리뷰 요구를
+#    자동으로 꺼 둡니다(승인 가능한 오너가 0명이 되어 모든 PR이 영구 블록되는 사고 방지).
+#    2026-08-04 착수 회의에서 실제 GitHub ID로 교체한 뒤 setup-github.sh를 **재실행**하세요.
+#
+# 교체 시 함께 고쳐야 하는 곳 (넷이 어긋나면 리뷰 배정이 조용히 실패합니다):
+#    이 파일 · AGENTS.md 팀 표 · docs/역할_가이드/README.md · docs/공통_가이드/개발자_가이드.md §5
 #
 # ⚠️ @핸들은 **GitHub 계정 ID**여야 합니다. 실명이나 없는 계정을 적으면 조용히 무시되고
 #    리뷰어 자동 배정이 통째로 동작하지 않습니다. 또한 레포에 write 권한이 있어야 오너로 인정됩니다.
 # ⚠️ **모든 경로의 오너는 2명 이상**이어야 합니다. PR 작성자 본인의 승인은 코드오너 승인으로
-#    카운트되지 않으므로, 단독 소유 경로는 그 오너 자신의 PR이 영구히 머지 불가가 됩니다
-#    (setup-github.sh의 require_code_owner_reviews=true 상태에서 발동).
+#    카운트되지 않으므로, 단독 소유 경로는 그 오너 자신의 PR이 영구히 머지 불가가 됩니다.
 #    → 경로를 추가할 때 담당자 + 백업 리뷰어를 반드시 함께 적으세요.
-# ⚠️ 무료 플랜 private 리포에서는 CODEOWNERS가 동작하지 않습니다 (파일은 무해하게 남습니다).
+# ⚠️ 5명이 7역할을 겸임하므로, 한 사람이 같은 경로의 두 오너를 모두 맡는 조합이 생기지 않도록
+#    확인하세요 — 형식상 2명이지만 실질은 단독 소유가 되어 위 사고가 그대로 발생합니다.
 #
 # 위치: 레포 루트. GitHub은 루트 / .github/ / docs/ 중 **한 곳만** 읽으므로 사본을 만들지 마세요.
 # 문법: <경로 패턴> <@계정 또는 @org/팀>
 # ⚠️ 뒤에 오는 규칙이 앞을 덮어씁니다 — 더 좁은 경로를 아래쪽에 두세요.
+#
+# 역할 번호는 docs/역할_가이드/ 와 1:1입니다.
+#   01 기획/총괄(PM)   02 테크리드      03 AI 생성·서빙   04 AI 학습·데이터
+#   05 백엔드/인프라   06 프론트엔드    07 QA/보안
 
-# 기본 소유자 — 계약·스캐폴딩을 총괄하는 사람 + 백업
-*                            @{{GITHUB_OWNER}} @teammate-backup
+# 기본 소유자 — 계약·스캐폴딩을 총괄하는 사람(02) + 백업(01)
+*                            @role-lead @role-pm
 
-# 모듈 오너 (docs/역할_가이드/ 와 1:1로 맞추세요) — 담당자 + 백업
-/apps/backend/               @teammate-backend @{{GITHUB_OWNER}}
-/apps/ai-engine/             @teammate-ai @{{GITHUB_OWNER}}
-/apps/frontend/              @teammate-frontend @{{GITHUB_OWNER}}
-/packages/contracts/         @{{GITHUB_OWNER}} @teammate-backend
-/infra/                      @teammate-backend @{{GITHUB_OWNER}}
-/docs/adr/                   @{{GITHUB_OWNER}} @teammate-backup
+# 모듈 오너 (docs/역할_가이드/ 와 1:1) — 담당자 + 백업
+/apps/backend/               @role-backend @role-lead
+/apps/ai-engine/             @role-ai-serving @role-lead
+/apps/frontend/              @role-frontend @role-pm
+/training/                   @role-ai-training @role-ai-serving
+/packages/contracts/         @role-lead @role-backend
+/infra/                      @role-backend @role-lead
+/docs/adr/                   @role-lead @role-pm
 
-# 평가 하네스는 ai-engine 소속이지만 채점 기준은 QA와 공동 소유 (자기채점 편향 방지)
-/apps/ai-engine/eval/        @teammate-ai @teammate-qa
+# 평가 하네스는 ai-engine 소속이지만 채점 기준은 QA와 공동 소유 (자기채점 편향 방지).
+# ⚠️ 여기 오너가 03(생성)·04(학습)뿐이면 자기 결과의 채점 기준을 자기가 바꾸게 됩니다.
+/apps/ai-engine/eval/        @role-qa @role-ai-training
 
 # 앱을 가로지르는 관통 테스트 — 특정 앱이 아니라 QA 소유 (+ 백업)
-/e2e/                        @teammate-qa @{{GITHUB_OWNER}}
+/e2e/                        @role-qa @role-pm
 
 # 파이프라인·품질 게이트 변경은 영향 범위가 넓으므로 리드 + QA 동시 리뷰
-/.github/                    @{{GITHUB_OWNER}} @teammate-qa
-/scripts/                    @{{GITHUB_OWNER}} @teammate-qa
+/.github/                    @role-lead @role-qa
+/scripts/                    @role-lead @role-qa
+
+# 학습 데이터의 권리 근거는 잘못되면 되돌릴 수 없으므로 PM 승인을 함께 건다
+/training/data/              @role-ai-training @role-pm

@@ -26,7 +26,7 @@ from ai_engine.generation import (
 from ai_engine.models import GenerateRequest, GenerateResponse
 from ai_engine.retrieval import FixtureRetriever, Retriever
 
-app = FastAPI(title="my-ai-project-ai-engine")
+app = FastAPI(title="adgen-ai-engine")
 
 
 @lru_cache(maxsize=1)

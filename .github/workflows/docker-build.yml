@@ -51,14 +51,14 @@ jobs:
 
       - name: Build image
         if: hashFiles(format('apps/{0}/Dockerfile', matrix.app)) != ''
-        run: docker build -t "my-ai-project-${{ matrix.app }}:ci" "apps/${{ matrix.app }}"
+        run: docker build -t "adgen-${{ matrix.app }}:ci" "apps/${{ matrix.app }}"
 
       # 빌드만으로는 "배포 가능"이 증명되지 않습니다 — 실제로 떠서 응답하는지까지 확인합니다.
       - name: Smoke test (/health)
         if: hashFiles(format('apps/{0}/Dockerfile', matrix.app)) != ''
         run: |
           docker run -d --name "smoke-${{ matrix.app }}" \
-            -p ${{ matrix.port }}:${{ matrix.port }} "my-ai-project-${{ matrix.app }}:ci"
+            -p ${{ matrix.port }}:${{ matrix.port }} "adgen-${{ matrix.app }}:ci"
           # 기동 대기 — 최대 30초. 실패 시 컨테이너 로그를 남겨야 원인 파악이 가능하다.
           for i in $(seq 1 30); do
             if curl -sf "http://localhost:${{ matrix.port }}/health" > /dev/null; then

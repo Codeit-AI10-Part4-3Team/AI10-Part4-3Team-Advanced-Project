@@ -1,0 +1,76 @@
+# ADR-0002: 학습 파이프라인을 `apps/` 밖의 `training/`에 둔다
+
+- **상태**: Accepted
+- **날짜**: 2026-08-01
+- **결정자**: AI10-Part4-3Team
+- **관련**: [ADR-0001](0001-monorepo.md)
+
+## 배경
+
+이 프로젝트는 이미지 생성 모델을 **브랜드 스타일로 파인튜닝**하고, 그 결과를 서빙합니다.
+따라서 모노레포에 "학습"이라는 새 축이 들어옵니다. [ADR-0001](0001-monorepo.md)은 `apps/`
+아래의 것들에 규약을 부여했습니다 — **상시 기동되는 배포 단위**로서 자체 `Dockerfile`,
+`/health` 엔드포인트, CI 매트릭스 항목(mypy·pytest), `CODEOWNERS` 경로를 갖습니다.
+
+학습은 그 규약에 맞지 않습니다:
+
+- 요청을 받지 않습니다. `/health`가 의미를 갖지 않습니다.
+- 사람이 트리거하고 몇 시간 돌다가 끝납니다. `restart: unless-stopped`가 재앙이 됩니다.
+- GPU 점유 프로파일이 추론과 정반대입니다(장시간 고점유 vs 짧은 버스트).
+- 산출물이 서비스가 아니라 **파일**(어댑터 가중치)입니다.
+
+## 검토한 선택지
+
+| 선택지 | 장점 | 단점 |
+|---|---|---|
+| `apps/trainer/` (앱으로 승격) | 구조가 균일. CI가 학습 코드까지 검사 | 앱 규약(`/health`·상시 기동·docker-build 스모크)과 맞지 않아 CI 쪽에 예외를 파야 함. required check가 5개에서 7개로 늘어 22일 일정에서 유지 비용이 큼 |
+| `apps/ai-engine/` 안에 학습 코드 동거 | 모델 관련 코드가 한곳 | 서빙 이미지에 학습 의존성(torch 학습 스택·데이터 툴)이 딸려 들어가 배포 이미지가 비대해짐. 더 나쁜 것은 **학습 코드가 깨지면 서빙도 못 뜨는** 결합 |
+| **최상위 `training/`** | 앱 규약에서 자유롭고, 서빙과 파일로만 결합 | 구조가 비균일. "왜 여기만 다른가"를 문서로 설명해야 함 (이 ADR) |
+| 별도 레포 | 완전 분리 | [ADR-0001](0001-monorepo.md)이 거부한 멀티레포 조율 비용을 그대로 되가져옴 |
+
+## 결정
+
+**최상위 `training/`** 에 둡니다. 서빙과의 유일한 연결은 **파일**입니다:
+
+```
+training/  ──(어댑터 가중치 + adapter_card.json)──>  apps/ai-engine/
+```
+
+- `training/`은 `apps/`를 import하지 않고, `apps/`도 `training/`을 import하지 않습니다(양방향 금지).
+- `adapter_card.json`에는 base 모델 ID·revision, 학습 config 해시, 데이터셋 ID, 학습 일시가
+  들어갑니다. **카드 없는 가중치는 재현 불가능한 산출물**이므로 서빙에 올리지 않습니다.
+
+품질 게이트는 **비대칭으로** 적용합니다 — 이것이 이 결정의 실질적인 대가입니다:
+
+| 검사 | `apps/*` | `training/` | 이유 |
+|---|---|---|---|
+| ruff (lint + format) | ✅ CI required | ✅ CI required | `.pre-commit-config.yaml`의 `files` 정규식에 포함. required 잡 `Pre-commit hooks`가 `--all-files`로 실행하므로 **새 required check 없이** 적용됩니다 |
+| mypy | ✅ | ❌ | 학습 스택(torch·diffusers)의 타입 스텁 상태가 나빠, 켜면 `ignore` 주석만 늘어납니다 |
+| pytest | ✅ | ❌ | 학습 함수의 단위 테스트는 GPU 없이 의미 있는 대상이 적습니다. 대신 **config 재현성**이 검증 대상입니다 |
+| docker-build 스모크 | ✅ | ❌ | 상시 기동 대상이 아닙니다 |
+
+## 결과
+
+**생기는 제약**
+
+- `training/`의 코드는 mypy·pytest를 받지 않습니다. 따라서 **학습 로직 중 순수 함수로 분리 가능한
+  것**(데이터 정규화, 캡션 정제, 지표 계산)은 `apps/ai-engine/eval/`로 올려 검사를 받게 하세요.
+  검사받지 않는 코드가 늘어날수록 이 결정의 비용이 커집니다.
+- 루트 `pyproject.toml`의 ruff `src`에 `training/src`가 **미리** 등록되어 있습니다.
+  이 줄을 지우면 첫 코드가 들어오는 순간 isort가 `training`을 서드파티로 보고 I001로 실패합니다.
+- 학습 데이터·산출물은 `.gitignore` 대상입니다. `training/data/`는 `dir/*` + 예외 형태로
+  ignore되어 있으므로(디렉토리째 무시하면 예외가 동작하지 않음) 새 추적 대상 파일을 넣으려면
+  화이트리스트 줄을 함께 추가하세요.
+
+**쉬워지는 것**
+
+- 학습 코드가 깨져도 서비스는 base 모델로 뜹니다. 서빙 이미지에 학습 의존성이 들어가지 않습니다.
+- required status check가 5개로 유지되어, 브랜치 보호 계약(`scripts/setup-github.sh`의 `contexts`)을
+  건드리지 않습니다.
+
+**재검토 신호**
+
+- `training/` 안의 검사받지 않는 코드가 늘어나 회귀가 반복될 때
+- 학습을 자동화(스케줄 실행·CI 트리거)하기 시작할 때 — 그때는 앱 승격 또는 별도 워크플로가
+  필요하며, `ci.yml` matrix · `setup-github.sh` contexts · 루트 `pyproject.toml` · `CODEOWNERS`
+  **네 곳을 같은 PR에서** 고쳐야 합니다.

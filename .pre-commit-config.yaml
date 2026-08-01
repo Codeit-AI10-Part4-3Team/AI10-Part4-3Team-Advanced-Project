@@ -57,9 +57,9 @@ repos:
       # "(legacy alias)" 경고를 찍으므로, 버전 상향과 함께 정식 id로 정리합니다.
       - id: ruff-check
         args: ["--fix"]
-        files: ^(apps|packages|scripts|e2e)/.*\.py$
+        files: ^(apps|packages|scripts|e2e|training)/.*\.py$
       - id: ruff-format
-        files: ^(apps|packages|scripts|e2e)/.*\.py$
+        files: ^(apps|packages|scripts|e2e|training)/.*\.py$
 
   # ruff 버전 드리프트 차단 — 위 rev, 앱 dev extra의 `ruff==`, reviewdog 워크플로의
   # RUFF_VERSION이 모두 같은 값인지 검사합니다. 이유는 scripts/check_ruff_sync.py 참고.

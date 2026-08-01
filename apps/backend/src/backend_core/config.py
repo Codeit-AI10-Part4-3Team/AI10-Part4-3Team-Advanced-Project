@@ -9,9 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """`MYAPP_` prefix keeps our variables distinguishable from everything else on the host."""
+    """`ADGEN_` prefix keeps our variables distinguishable from everything else on the host."""
 
-    model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ADGEN_", extra="ignore")
 
     # Service name of the AI engine in docker-compose; localhost when run bare.
     ai_engine_url: str = "http://localhost:8100"

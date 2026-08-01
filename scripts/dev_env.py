@@ -266,7 +266,7 @@ def fix_isolation(ctx):
         # Creating a venv on top of conda base works but produces a confusing hybrid;
         # the conda-native path is the user's call, not ours.
         print("     conda 사용 중이므로 자동 생성하지 않습니다. 아래를 직접 실행하세요:")
-        print("       conda create -n my-ai-project python=3.12 && conda activate my-ai-project")
+        print("       conda create -n adgen python=3.12 && conda activate adgen")
         ctx.needs_restart = True
         return False
     venv = ctx.path(".venv")
@@ -549,7 +549,7 @@ CHECKS = [
         SCOPE_ALWAYS,
         BLOCK,
         probe_python,
-        hint="conda: conda create -n my-ai-project python=3.12 / 그 외: python.org 3.12+ 설치",
+        hint="conda: conda create -n adgen python=3.12 / 그 외: python.org 3.12+ 설치",
     ),
     Check(
         "E03",

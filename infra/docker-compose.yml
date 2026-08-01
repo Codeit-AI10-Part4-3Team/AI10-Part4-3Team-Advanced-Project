@@ -8,7 +8,7 @@
 # 로컬과 배포가 **같은 파일**을 쓰는 것이 목적입니다 — 로컬 전용 편의를 여기 넣지 말고
 # 필요하면 compose override 파일로 분리하세요.
 
-name: my-ai-project
+name: adgen
 
 services:
   ai-engine:
@@ -17,10 +17,10 @@ services:
     #    있게 되어 "독립 배포 가능" 성질이 사라집니다.
     build:
       context: ../apps/ai-engine
-    image: my-ai-project-ai-engine:dev
+    image: adgen-ai-engine:dev
     environment:
       # 값이 없으면 스텁으로 동작합니다. 실제 키가 들어오면 모델 클라이언트가 읽습니다.
-      MYAPP_MODEL_API_KEY: ${MYAPP_MODEL_API_KEY:-}
+      ADGEN_MODEL_API_KEY: ${ADGEN_MODEL_API_KEY:-}
     ports:
       # ⚠️ 배포에서는 이 포트를 외부에 열지 마세요. 내부 계약 경로(/v1/generate)는 인증이
       #    없습니다. 로컬 디버깅 편의로만 노출합니다.
@@ -37,11 +37,11 @@ services:
   backend:
     build:
       context: ../apps/backend
-    image: my-ai-project-backend:dev
+    image: adgen-backend:dev
     environment:
       # 컨테이너 간 통신은 서비스명으로 합니다(localhost가 아님).
-      MYAPP_AI_ENGINE_URL: http://ai-engine:8100
-      MYAPP_AI_ENGINE_TIMEOUT_S: ${MYAPP_AI_ENGINE_TIMEOUT_S:-8.0}
+      ADGEN_AI_ENGINE_URL: http://ai-engine:8100
+      ADGEN_AI_ENGINE_TIMEOUT_S: ${ADGEN_AI_ENGINE_TIMEOUT_S:-8.0}
     ports:
       - "8000:8000"
     depends_on:

@@ -10,7 +10,7 @@ openapi: 3.1.0
 #   generation — backend가 호출하는 ai-engine의 내부 경로 (⚠️ 외부 노출 금지)
 
 info:
-  title: my-ai-project API contract
+  title: adgen API contract
   version: 0.1.0
   description: |
     backend(공개) + ai-engine(내부) 계약. 서버가 둘이므로 `servers`는 대표값만 두고,

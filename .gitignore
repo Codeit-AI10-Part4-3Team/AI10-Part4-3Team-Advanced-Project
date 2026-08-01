@@ -157,6 +157,14 @@ credentials/
 !e2e/**/fixtures/*.csv
 !e2e/**/fixtures/*.jsonl
 
+# 학습 데이터·산출물 (training/ 는 루트 앵커 규칙 밖이라 별도 지정이 필요합니다)
+# ⚠️ `/training/data/` 가 아니라 `/training/data/*` 인 것이 중요합니다. 디렉토리째 무시하면
+#    git이 그 안으로 내려가지 않아 아래 README 예외가 동작하지 않습니다.
+/training/data/*
+!/training/data/README.md
+/training/runs/
+/training/outputs/
+
 # E2E 실행 산출물 (Playwright 리포트·트레이스·스크린샷 — 재생성 가능, 용량이 큼)
 /e2e/test-results/
 /e2e/playwright-report/

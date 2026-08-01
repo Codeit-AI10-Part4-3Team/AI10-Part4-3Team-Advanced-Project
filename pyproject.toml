@@ -15,7 +15,9 @@ target-version = "py312"
 # ⚠️ 모노레포 필수 설정: 각 앱의 src 디렉토리를 알려줘야 isort가 `api`/`backend_core`/
 #    `ai_engine`을 1st-party로 인식합니다. 이 줄이 없으면 앱 내부 import가 서드파티로
 #    분류돼 CI가 I001(import 정렬 오류)로 실패합니다 — 앱을 추가하면 여기도 추가하세요.
-src = ["apps/backend/src", "apps/ai-engine/src"]
+#    training/src 는 아직 코드가 없지만 미리 등록해 둡니다 — 첫 파일이 들어오는 순간부터
+#    `training` 이 1st-party로 잡혀야, 나중에 한꺼번에 I001을 고치는 일이 생기지 않습니다.
+src = ["apps/backend/src", "apps/ai-engine/src", "training/src"]
 
 # ⚠️ select를 명시하는 이유: 비워두면 ruff의 **기본 규칙셋**을 상속하는데, ruff는 0.x라
 #    마이너 업그레이드에서 기본값이 넓어집니다(실측: 0.15 통과 → 0.16에서 신규 23건).
@@ -36,9 +38,9 @@ select = [
     "SIM",     # simplify
     "PIE",
     "PTH",     # os.path → pathlib
-    # DTZ: naive datetime 금지. 이 프로젝트는 도달속도 p95와 재난 이력 리플레이를
-    #      타임스탬프로 측정하므로, tz 없는 datetime은 KST/UTC 경계에서 지표를 조용히
-    #      망가뜨립니다. 실패가 눈에 안 보이는 종류라 린트로 막는 게 맞습니다.
+    # DTZ: naive datetime 금지. 생성 지연 p95와 학습 run의 타임스탬프가 지표의 축이므로,
+    #      tz 없는 datetime은 KST/UTC 경계에서 지표를 조용히 망가뜨립니다(GCP VM은 UTC,
+    #      팀은 KST로 읽습니다). 실패가 눈에 안 보이는 종류라 린트로 막는 게 맞습니다.
     "DTZ",
     "ASYNC",   # FastAPI 비동기 함정 (async 안 blocking 호출 등)
     "LOG", "G",  # 로깅 정확성 — 지연 측정이 로그 기반이라 포맷 사고가 곧 지표 손실
@@ -63,6 +65,9 @@ select = [
 # 테스트에서 assert는 pytest의 표준 표현 방식입니다.
 "apps/*/tests/**" = ["S101"]
 "e2e/**" = ["S101"]
+# training/ 은 사람이 직접 돌리는 학습 CLI입니다. 스텝 진행·손실 출력이 곧 이 도구의 UX라
+# print를 허용합니다(T20). 나머지 규칙은 앱과 동일하게 적용됩니다.
+"training/**" = ["T20"]
 # eval/도 pytest 수집 대상입니다(지표 함수의 회귀 검사) — 같은 이유로 assert를 허용합니다.
 # ⚠️ 채점 실행 스크립트는 여기서 print를 쓰는 게 자연스러우므로 T20도 함께 풉니다.
 "apps/*/eval/**" = ["S101", "T20"]

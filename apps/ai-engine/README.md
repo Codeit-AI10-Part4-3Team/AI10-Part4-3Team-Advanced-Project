@@ -21,8 +21,8 @@ curl -X POST localhost:8100/v1/generate \
 컨테이너 단독 실행:
 
 ```bash
-docker build -t my-ai-project-ai-engine:dev apps/ai-engine
-docker run --rm -p 8100:8100 my-ai-project-ai-engine:dev
+docker build -t adgen-ai-engine:dev apps/ai-engine
+docker run --rm -p 8100:8100 adgen-ai-engine:dev
 ```
 
 ## 구조와 방향

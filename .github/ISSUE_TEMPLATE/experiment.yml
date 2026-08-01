@@ -17,6 +17,7 @@ body:
       options:
         - backend
         - ai-engine
+        - training
         - frontend
         - contracts
         - infra/CI

@@ -3,5 +3,5 @@ contact_links:
   - name: 🤝 협업 일지 (CollaborationLog)
     # ⚠️ Discussions 카테고리 'CollaborationLog' 는 API로 만들 수 없어 수동 생성 필요
     #    (docs/공통_가이드/저장소_운영.md §3 참고).
-    url: https://github.com/{{GITHUB_OWNER}}/{{GITHUB_REPO}}/discussions/new?category=collaborationlog
+    url: https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/discussions/new?category=collaborationlog
     about: 일일 업무/협업 내용은 이슈가 아닌 Discussions의 협업 일지에 작성하세요.

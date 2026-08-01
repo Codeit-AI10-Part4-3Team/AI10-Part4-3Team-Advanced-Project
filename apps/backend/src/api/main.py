@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from api.errors import api_error_handler
 from api.routes import ask
 
-app = FastAPI(title="my-ai-project-backend")
+app = FastAPI(title="adgen-backend")
 
 # The contract's error shape is {code, message}; FastAPI's default is {"detail": ...}.
 # ⚠️ Register on *Starlette's* HTTPException, not FastAPI's. FastAPI's is a subclass, and

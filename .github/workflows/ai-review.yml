@@ -80,7 +80,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          show_full_output: "true"
           # ⚠️ --allowedTools 는 **배타적 허용 목록**입니다. 여기 없는 도구는 거부됩니다.
           #    두 가지를 동시에 만족해야 합니다:
           #    (1) mcp__github_inline_comment__ 접두사 도구가 있어야 액션이 해당 MCP 서버를
@@ -90,8 +89,9 @@ jobs:
           #        AGENTS.md 규약과 파일을 가로지르는 정합성을 보므로 읽기 도구가 필요합니다.
           #    실측: 셋을 빼면 permission_denials_count: 2 가 뜨고 6초 만에 포기합니다.
           #    이 줄과 아래 프롬프트의 "게시하라" 지시는 한 쌍입니다. 하나만 있으면 동작하지 않습니다.
-          # 🔎 show_full_output: 진단용 임시 설정입니다. 이번 검증이 끝나면 되돌리세요 —
-          #    켜 두면 리뷰 전문이 공개 Actions 로그에 남습니다.
+          # 🔎 리뷰가 게시되지 않는데 원인을 모르겠다면 `show_full_output: "true"` 를 임시로
+          #    켜세요(액션이 기본으로 출력을 가립니다). 진단이 끝나면 반드시 되돌리세요 —
+          #    켜 둔 채로 두면 리뷰 전문이 공개 Actions 로그에 남습니다.
           claude_args: |
             --model claude-sonnet-5
             --effort medium

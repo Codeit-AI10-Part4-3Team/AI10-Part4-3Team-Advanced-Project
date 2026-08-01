@@ -1,0 +1,84 @@
+# .github/dependabot.yml — 의존성 취약점/노후화 자동 감지.
+#
+# 존재 이유: 취약 의존성은 공개 저장소에서 그대로 노출 리스크가 됩니다. Dependabot은
+# GitHub Actions 분을 소모하지 않으므로 무료 플랜에서도 부담이 없습니다.
+#
+# ⚠️ PR 노이즈 관리: 짧은 프로젝트 기간에 매일 PR이 쌓이면 팀이 통째로 무시하게 됩니다.
+#    weekly + minor/patch 그룹화 + PR 상한으로 "주 1회 한두 개"가 되도록 조정했습니다.
+version: 2
+updates:
+  # ── GitHub Actions 버전 (actions/checkout@v4 등)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # ── 파이썬 앱 (앱마다 pyproject.toml이 따로 있으므로 디렉토리도 따로 등록해야 합니다)
+  # 추정: Dependabot의 pip 생태계는 PEP 621 pyproject.toml을 인식합니다. 첫 주에 PR이
+  # 하나도 열리지 않으면 Insights > Dependency graph > Dependabot 탭에서 파싱 오류를 확인하세요.
+  - package-ecosystem: "pip"
+    directory: "/apps/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      backend-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/apps/ai-engine"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      ai-engine-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # ── pre-commit 훅 (.pre-commit-config.yaml의 rev)
+  # 왜 필요한가: pip 생태계는 apps/*/pyproject.toml만 보므로 ruff를 올려도 훅의 rev는
+  # 그대로 남습니다. 실제로 #2에서 pyproject만 0.16.0으로 올라가 훅과 어긋났고, 그때는
+  # 아무도 그 사실을 알 수 없었습니다. 이제는 pre-commit의 `ruff-sync` 훅이 드리프트를
+  # 막지만, 그건 "실패시키는" 장치일 뿐이라 rev를 실제로 올려줄 주체가 따로 필요합니다.
+  #
+  # ⚠️ 그래도 ruff 상향은 여전히 **두 개의 PR**로 도착합니다(pip 하나, pre-commit 하나).
+  #    `ruff-sync` 훅 때문에 먼저 도착한 쪽은 CI에서 실패합니다 — 이는 설계된 동작입니다.
+  #    한쪽 PR 브랜치에서 나머지 파일까지 함께 고쳐 하나로 합쳐 머지하세요.
+  #    (Dependabot의 크로스 생태계 그룹화는 지원되지 않습니다 — 확실한 사실.)
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      pre-commit-hooks:
+        patterns: ["*"]
+
+  # ── 프론트엔드: package.json이 없는 디렉토리를 등록하면 Dependabot이 매주 파싱 오류를
+  #    기록합니다. 스캐폴딩(P1, 이진호) 후 아래 블록의 주석을 해제하세요.
+  # - package-ecosystem: "npm"
+  #   directory: "/apps/frontend"
+  #   schedule:
+  #     interval: "weekly"
+  #     day: "monday"
+  #   open-pull-requests-limit: 3
+  #   commit-message:
+  #     prefix: "chore(deps)"
+  #   groups:
+  #     frontend-minor-patch:
+  #       update-types: ["minor", "patch"]

@@ -1,0 +1,56 @@
+# .github/workflows/contracts-check.yml
+name: Contracts Check
+# ⚠️ paths 필터가 걸린 워크플로이므로 required status check로 지정하지 마세요.
+#    (packages/contracts 변경이 없는 PR에서는 체크가 생성되지 않아 머지가 영구 블록됩니다.)
+#
+# 존재 이유: packages/contracts는 모듈 간 계약의 단일 원천이고 "구두 합의 금지"가 규약입니다
+# (ADR-0002 — 테크리드 참여 비중이 줄어든 뒤 팀이 독립적으로 움직이기 위한 장치).
+# 그런데 지금까지 그 강제 수단이 사람 리뷰뿐이었습니다 — 스펙이 문법적으로 깨져도 머지됩니다.
+#
+# 검사 범위는 "스펙 자체가 유효한가"까지입니다. 계약↔구현 드리프트(라우터가 스펙과 다른 응답을
+# 주는 경우)는 각 앱의 계약 준수 테스트로 잡아야 하며, 이 워크플로의 역할이 아닙니다.
+on:
+  pull_request:
+    paths:
+      - 'packages/contracts/**'
+      - '.github/workflows/contracts-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/contracts/**'
+
+concurrency:
+  group: contracts-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: OpenAPI spec 검증
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # ⚠️ 대상은 파일명 고정이 아니라 packages/contracts의 **모든 스펙**입니다.
+      #    지금은 openapi.yaml 하나지만, 파일명을 하드코딩해 두면 계약이 분리되는 순간
+      #    새 스펙이 조용히 검증 대상에서 빠집니다(그리고 그 사실은 아무도 모릅니다).
+      - name: Skip notice (스펙 없음)
+        if: hashFiles('packages/contracts/*.yaml', 'packages/contracts/*.yml') == ''
+        run: echo "packages/contracts에 OpenAPI 스펙이 없습니다 — 계약이 추가되면 자동으로 검증됩니다."
+
+      - uses: actions/setup-python@v7
+        if: hashFiles('packages/contracts/*.yaml', 'packages/contracts/*.yml') != ''
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # openapi-spec-validator는 OpenAPI 3.x 스키마 자체를 검증합니다(노드 툴체인 불필요 —
+      # 이 레포의 CI를 파이썬 단일 스택으로 유지하기 위한 선택).
+      - name: Validate spec
+        if: hashFiles('packages/contracts/*.yaml', 'packages/contracts/*.yml') != ''
+        run: |
+          pip install openapi-spec-validator
+          shopt -s nullglob
+          for spec in packages/contracts/*.yaml packages/contracts/*.yml; do
+            echo "==> $spec"
+            openapi-spec-validator "$spec"
+          done

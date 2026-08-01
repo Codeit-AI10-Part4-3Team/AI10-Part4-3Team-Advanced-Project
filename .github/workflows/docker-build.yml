@@ -1,0 +1,95 @@
+# .github/workflows/docker-build.yml
+name: Docker Build
+# ⚠️ paths 필터가 걸린 워크플로이므로 required status check로 지정하지 마세요.
+#    (해당 경로 변경이 없는 PR에서는 체크가 생성되지 않아 머지가 영구 블록됩니다.)
+#
+# 존재 이유: apps/ai-engine의 "독립 배포 가능한 모듈" 속성은 심사 대상 산출물입니다
+# (AGENTS.md 레포 구조 규약 · ADR-0001). Dockerfile이 깨진 채 머지되면 그 속성이
+# 조용히 사라지므로, 이미지 빌드 + 기동 + /health 응답까지를 회귀 검사합니다.
+#
+# ⚠️ 빌드 컨텍스트는 앱 디렉토리입니다. 컨텍스트를 레포 루트로 넓히면 ai-engine이
+#    backend 소스를 참조할 수 있게 되어 앱 간 독립성 규약이 무너집니다.
+on:
+  pull_request:
+    paths:
+      - 'apps/*/Dockerfile'
+      - 'apps/*/pyproject.toml'
+      - 'apps/*/src/**'
+      - 'infra/**'
+      - '.github/workflows/docker-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/*/Dockerfile'
+      - 'apps/*/src/**'
+      - 'infra/**'
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Image build & smoke (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: ai-engine
+            port: 8100
+          # backend는 아직 Dockerfile이 없어 전 단계가 건너뛰어집니다.
+          # Dockerfile을 추가하면 별도 설정 없이 자동으로 검사 대상이 됩니다.
+          - app: backend
+            port: 8000
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Skip notice (Dockerfile 없음)
+        if: hashFiles(format('apps/{0}/Dockerfile', matrix.app)) == ''
+        run: echo "apps/${{ matrix.app }}/Dockerfile이 아직 없습니다 — 건너뜁니다."
+
+      - name: Build image
+        if: hashFiles(format('apps/{0}/Dockerfile', matrix.app)) != ''
+        run: docker build -t "my-ai-project-${{ matrix.app }}:ci" "apps/${{ matrix.app }}"
+
+      # 빌드만으로는 "배포 가능"이 증명되지 않습니다 — 실제로 떠서 응답하는지까지 확인합니다.
+      - name: Smoke test (/health)
+        if: hashFiles(format('apps/{0}/Dockerfile', matrix.app)) != ''
+        run: |
+          docker run -d --name "smoke-${{ matrix.app }}" \
+            -p ${{ matrix.port }}:${{ matrix.port }} "my-ai-project-${{ matrix.app }}:ci"
+          # 기동 대기 — 최대 30초. 실패 시 컨테이너 로그를 남겨야 원인 파악이 가능하다.
+          for i in $(seq 1 30); do
+            if curl -sf "http://localhost:${{ matrix.port }}/health" > /dev/null; then
+              echo "healthy after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::/health 응답 실패 — 컨테이너 로그:"
+          docker logs "smoke-${{ matrix.app }}"
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f "smoke-${{ matrix.app }}" 2>/dev/null || true
+
+  # docker-compose는 infra/에 아직 없습니다(P1, 김도혁). 파일이 생기면 자동으로 활성화됩니다.
+  # S1-1 DoD "docker-compose up으로 빈 서비스 기동"의 최소 회귀 검사입니다.
+  compose:
+    name: docker-compose config 검증
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Skip notice (compose 파일 없음)
+        if: hashFiles('infra/docker-compose.yml') == ''
+        run: echo "infra/docker-compose.yml이 아직 없습니다 — 건너뜁니다."
+
+      # config -q 는 변수 치환·서비스 정의를 실제로 해석하므로 오타/미정의 참조를 잡습니다.
+      # 실제 기동(up)은 외부 API 키가 필요해 CI 범위 밖입니다.
+      - name: Validate compose file
+        if: hashFiles('infra/docker-compose.yml') != ''
+        run: |
+          cp infra/.env.example infra/.env 2>/dev/null || true
+          docker compose -f infra/docker-compose.yml config -q

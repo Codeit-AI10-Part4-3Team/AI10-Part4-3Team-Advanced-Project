@@ -1,0 +1,32 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "instructions": "한국어로 리뷰하세요. 이 레포는 apps/(backend, ai-engine, frontend) + packages/contracts 모노레포입니다. 앱 사이의 유일한 결합은 packages/contracts/openapi.yaml 의 HTTP 계약이므로, 한 앱이 다른 앱의 내부 모듈을 직접 import 하면 반드시 지적하세요. 요청/응답 스키마를 바꾸면서 openapi.yaml 을 함께 고치지 않은 PR도 지적하세요. LLM API 키/토큰이 코드나 테스트 픽스처에 하드코딩되면 최우선으로 지적하세요. 스타일/포맷은 ruff 와 reviewdog 가 결정론적으로 처리하므로 코멘트하지 마세요. 추측이 섞인 지적에는 '추정'이라고 밝히세요.",
+  "triggerOnDrafts": false,
+  "triggerOnUpdates": true,
+  "shouldUpdateDescription": false,
+  "statusCheck": false,
+  "statusCommentsEnabled": false,
+  "ignorePatterns": "notebooks/**\n**/*.ipynb\n**/package-lock.json\n**/*.egg-info/**\ngreptile.json\ndocs/역할_일정/**",
+  "ignoreKeywords": "chore\nlint\nformat\ntypo\n버전 상향\n오타",
+  "summarySection": { "included": true, "collapsible": true, "defaultOpen": true },
+  "issuesTableSection": { "included": true, "collapsible": false, "defaultOpen": true },
+  "confidenceScoreSection": { "included": true, "collapsible": true, "defaultOpen": false },
+  "sequenceDiagramSection": { "included": true, "collapsible": true, "defaultOpen": false },
+  "customContext": {
+    "rules": [
+      {
+        "scope": ["apps/backend/**/*.py", "apps/ai-engine/**/*.py"],
+        "rule": "예외 처리가 없는 외부 호출(HTTP, LLM API, 파일 IO)은 지적하세요. 의도적으로 생략했다면 그 이유가 주석에 있어야 합니다."
+      },
+      {
+        "scope": ["apps/ai-engine/**/*.py"],
+        "rule": "프롬프트/모델 이름/토큰 상한 같은 추론 파라미터가 함수 본문에 하드코딩되면 설정으로 빼도록 제안하세요."
+      },
+      {
+        "scope": ["**/*.yml", "**/*.yaml"],
+        "rule": ".github/workflows 변경은 required status check 이름(scripts/setup-github.sh 의 contexts)과의 정합성을 함께 확인하세요. 잡 이름을 바꾸면 두 곳을 같이 고쳐야 합니다."
+      }
+    ]
+  }
+}

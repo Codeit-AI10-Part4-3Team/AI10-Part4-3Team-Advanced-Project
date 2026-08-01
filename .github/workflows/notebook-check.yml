@@ -1,0 +1,26 @@
+# .github/workflows/notebook-check.yml
+name: Notebook Sanity Check
+# ⚠️ paths 필터가 걸린 워크플로이므로 required status check로 지정하지 마세요.
+#    (.ipynb 변경이 없는 PR에서는 체크가 생성되지 않아 머지가 블록됩니다.)
+#    로컬 방어선은 .gitattributes filter + pre-commit nbstripout이 담당합니다.
+on:
+  pull_request:
+    paths:
+      - '**.ipynb'
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check notebook outputs are stripped
+        run: |
+          pip install nbstripout
+          # ⚠️ 셸 glob(`**/*.ipynb`)을 쓰면 안 된다: Actions의 run 셸은 globstar가 꺼져 있어
+          #    `**`가 한 단계(`*/`)로만 확장되고, 매칭이 없으면 리터럴 문자열이 그대로
+          #    nbstripout에 넘어가 잡이 엉뚱하게 실패한다.
+          #    git ls-files는 깊이에 무관하게 추적 중인 노트북만 정확히 열거하고,
+          #    xargs -r가 "노트북 0개" 케이스를 no-op으로 처리한다.
+          git ls-files -z '*.ipynb' | xargs -0 -r nbstripout --verify

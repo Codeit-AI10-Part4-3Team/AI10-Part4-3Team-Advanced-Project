@@ -1,0 +1,68 @@
+# pyproject.toml (모노레포 루트) — ⚠️ 이 파일은 "설치 가능한 패키지"가 아닙니다.
+# [project]/[build-system]이 없으므로 루트에서 `pip install .`은 하지 마세요.
+# 존재 이유는 단 하나: ruff 설정을 레포 전체에 단일 원천으로 공급하기 위함입니다.
+#
+# ruff는 검사 대상 파일에서 상위로 올라가며 [tool.ruff] 섹션이 있는 첫 pyproject.toml을
+# 설정으로 채택합니다. apps/*/pyproject.toml에는 [tool.ruff]를 두지 않으므로
+# 모든 앱이 이 파일의 규칙을 공유합니다 — 앱별로 다른 규칙이 필요해지기 전까지 유지하세요.
+#
+# 패키징(=[project])·mypy·pytest 설정은 앱별로 다르므로 apps/<app>/pyproject.toml에 둡니다.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+# ⚠️ 모노레포 필수 설정: 각 앱의 src 디렉토리를 알려줘야 isort가 `api`/`backend_core`/
+#    `ai_engine`을 1st-party로 인식합니다. 이 줄이 없으면 앱 내부 import가 서드파티로
+#    분류돼 CI가 I001(import 정렬 오류)로 실패합니다 — 앱을 추가하면 여기도 추가하세요.
+src = ["apps/backend/src", "apps/ai-engine/src"]
+
+# ⚠️ select를 명시하는 이유: 비워두면 ruff의 **기본 규칙셋**을 상속하는데, ruff는 0.x라
+#    마이너 업그레이드에서 기본값이 넓어집니다(실측: 0.15 통과 → 0.16에서 신규 23건).
+#    즉 버전을 올릴 때마다 린트 정책이 우리 의사와 무관하게 바뀝니다. 아래 목록이 이제
+#    단일 원천이며, 규칙 추가/제거는 코드 리뷰를 거치는 명시적 변경이 됩니다.
+#    (버전 자체는 .pre-commit-config.yaml rev ↔ 앱 dev extra `ruff==` 로 고정 — 한 쌍입니다.)
+[tool.ruff.lint]
+select = [
+    # ── ruff 기본값 (pycodestyle 일부 + pyflakes). E501(줄 길이)은 formatter가
+    #    담당하므로 "E" 전체가 아닌 E4/E7/E9만 켭니다 — 둘을 같이 켜면 서로 싸웁니다.
+    "E4", "E7", "E9", "F",
+    "W",       # pycodestyle warnings (W605 잘못된 이스케이프 등)
+    "I",       # isort — 위 `src` 설정이 실제로 동작하게 만드는 규칙 (없으면 I001이 안 켜짐)
+    "N",       # pep8-naming
+    "UP",      # pyupgrade — target-version=py312 기준 관용구
+    "B",       # bugbear — 가변 기본인자 등 진짜 버그
+    "C4",      # comprehensions
+    "SIM",     # simplify
+    "PIE",
+    "PTH",     # os.path → pathlib
+    # DTZ: naive datetime 금지. 이 프로젝트는 도달속도 p95와 재난 이력 리플레이를
+    #      타임스탬프로 측정하므로, tz 없는 datetime은 KST/UTC 경계에서 지표를 조용히
+    #      망가뜨립니다. 실패가 눈에 안 보이는 종류라 린트로 막는 게 맞습니다.
+    "DTZ",
+    "ASYNC",   # FastAPI 비동기 함정 (async 안 blocking 호출 등)
+    "LOG", "G",  # 로깅 정확성 — 지연 측정이 로그 기반이라 포맷 사고가 곧 지표 손실
+    "S",       # bandit — 공개 저장소이므로 기본 탑재
+    "T20",     # print 금지 (앱 코드는 로깅을 써야 지연 측정에 잡힘)
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# scripts/는 사람이 직접 실행하는 CLI 도구 모음입니다.
+#   T20  — print가 곧 이 도구의 출력 수단입니다.
+#   S603 — 외부 명령 실행이 env doctor의 본업입니다 (입력은 코드에 하드코딩된 상수).
+#   UP036 — ⚠️ 지우지 마세요. dev_env.py는 "Python 3.12가 필요하다"고 알려주는 것이
+#           본업이라 3.8에서도 파싱돼야 합니다(파일 상단 docstring 참고). 전역
+#           target-version=py312 때문에 ruff가 그 버전 분기를 "낡았다"며 삭제하라고
+#           하는데, 따르면 진단 기능 자체가 사라집니다.
+"scripts/**" = ["T20", "S603", "UP036"]
+# 앱별 CLI 도구(예: apps/backend/scripts/collect_fixture.py)도 같은 범주입니다.
+# ⚠️ 위 "scripts/**" 는 루트 scripts/에만 매칭되므로 이 줄이 따로 필요합니다.
+#    UP036은 여기 없습니다 — 3.8 호환 제약은 루트 dev_env.py에만 있는 사정입니다.
+"apps/*/scripts/**" = ["T20", "S603"]
+# 테스트에서 assert는 pytest의 표준 표현 방식입니다.
+"apps/*/tests/**" = ["S101"]
+"e2e/**" = ["S101"]
+# eval/도 pytest 수집 대상입니다(지표 함수의 회귀 검사) — 같은 이유로 assert를 허용합니다.
+# ⚠️ 채점 실행 스크립트는 여기서 print를 쓰는 게 자연스러우므로 T20도 함께 풉니다.
+"apps/*/eval/**" = ["S101", "T20"]

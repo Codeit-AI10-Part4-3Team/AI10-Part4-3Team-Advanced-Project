@@ -1,0 +1,13 @@
+# e2e — ⚠️ 설치 가능한 패키지가 아닙니다([project]/[build-system] 없음).
+# 존재 이유는 pytest 설정을 이 디렉토리에 국한해 공급하기 위함입니다.
+# 의존성은 requirements.txt에 있습니다:  pip install -r e2e/requirements.txt
+#
+# ⚠️ pytest는 이 디렉토리를 cwd로 실행해야 아래 설정을 집습니다
+#    (레포 루트에서 `pytest e2e` 로 돌리면 testpaths/markers가 적용되지 않습니다 —
+#     apps/*와 동일한 모노레포 제약입니다).
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "flow: 정상 관통 시나리오 (요청 → 처리 → 생성 → 응답)",
+    "failure: 실패 모드 — 의존 서비스 장애·권한 거부·가드레일 이탈 시 안전장치 동작",
+]

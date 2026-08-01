@@ -1,0 +1,62 @@
+# .github/workflows/frontend-ci.yml
+name: Frontend CI
+# ⚠️ paths 필터가 걸린 워크플로이므로 required status check로 지정하지 마세요.
+#    (apps/frontend 변경이 없는 PR에서는 체크가 생성되지 않아 머지가 영구 블록됩니다 —
+#     docs/공통_가이드/저장소_운영.md §4의 알려진 함정. 파이썬 앱 CI만 required입니다.)
+#
+# 스캐폴딩 전 상태에서도 안전하게 통과합니다: apps/frontend/package.json이 생기기 전까지
+# 모든 단계가 건너뛰어집니다. 이진호(프론트엔드/UX)는 스캐폴딩 PR에서 아래를 확인만 하면 됩니다.
+#   - 패키지 매니저가 npm이 아니라면(pnpm/yarn) install 단계와 cache 설정을 교체
+#   - lint/build 스크립트 이름이 package.json에 존재하는지 (--if-present로 없으면 무시됨)
+on:
+  pull_request:
+    paths:
+      - 'apps/frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/frontend/**'
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Frontend build & lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Skip notice (스캐폴딩 전)
+        if: hashFiles('apps/frontend/package.json') == ''
+        run: echo "apps/frontend/package.json이 아직 없습니다 — 프론트엔드 스캐폴딩 전이므로 건너뜁니다."
+
+      - uses: actions/setup-node@v7
+        if: hashFiles('apps/frontend/package.json') != ''
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: apps/frontend/package-lock.json
+
+      # lockfile 기준 재현 설치 — npm install이 아니라 npm ci 를 씁니다.
+      - name: Install
+        if: hashFiles('apps/frontend/package-lock.json') != ''
+        run: npm ci
+
+      # 스크립트가 없으면 --if-present가 무시하므로, 스캐폴딩 단계별로 점진 도입 가능합니다.
+      - name: Lint
+        if: hashFiles('apps/frontend/package.json') != ''
+        run: npm run lint --if-present
+
+      - name: Type check
+        if: hashFiles('apps/frontend/package.json') != ''
+        run: npm run typecheck --if-present
+
+      - name: Build
+        if: hashFiles('apps/frontend/package.json') != ''
+        run: npm run build --if-present

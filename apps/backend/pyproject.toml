@@ -1,0 +1,73 @@
+# apps/backend — 사용자 요청을 받아 도메인 로직을 태우고 ai-engine을 호출하는 API 서버.
+# 설치: 레포 루트에서  pip install -e "./apps/backend[dev]"
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-ai-project-backend"
+version = "0.1.0"
+description = "백엔드 — 요청 수신, 도메인 처리, ai-engine 호출 오케스트레이션"
+requires-python = ">=3.12"
+
+# 런타임 의존성 — "어디서나 필요한 최소 집합"만 유지할 것.
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    # ai-engine 호출용 — 앱 간 결합이 HTTP 계약뿐이므로 HTTP 클라이언트가 런타임 필수입니다
+    # (dev extra의 httpx는 TestClient용이라 별개 목적입니다).
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    # SonarQube Cloud가 커버리지를 읽으려면 coverage.xml이 필요합니다
+    # (.github/workflows/sonarqube.yml). 로컬에서도 같은 명령을 재현할 수 있게 dev에 둡니다.
+    "pytest-cov>=5.0.0",
+    "httpx>=0.27.0",          # FastAPI TestClient 백엔드
+    # ⚠️ ruff는 .pre-commit-config.yaml의 rev와 **정확히 같은 버전**으로 고정합니다.
+    #    범위(>=)로 두면 CI의 lint 잡은 최신 ruff를, pre-commit 잡은 rev 버전을 쓰게 돼
+    #    같은 코드가 한쪽만 통과합니다. ruff는 0.x라 마이너 업그레이드에서 기본 규칙셋이
+    #    넓어집니다 — 올릴 때는 네 파일(여기·ai-engine·.pre-commit-config.yaml·
+    #    .github/workflows/reviewdog.yml의 RUFF_VERSION)을 같은 PR에서.
+    "ruff==0.16.0",
+    "mypy>=1.10.0",
+]
+# ── 무거운 의존성(DB 드라이버, 지오 연산 등)은 core에 넣지 말고 별도 extra로 분리할 것.
+#    CI/기본 설치를 가볍게 유지하는 장치입니다. 예: pip install -e "./apps/backend[db]"
+# db = ["sqlalchemy>=2.0.0", "psycopg[binary]>=3.1.0"]
+
+# src 레이아웃: src/ 하위 패키지(api, backend_core)를 최상위 import 이름으로 노출.
+# 코드는 `import backend_core` / `from api import ...` 형태 (⚠️ `src.` 접두어 없음).
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ⚠️ .py가 아닌 자산(픽스처·캐시 등)은 명시하지 않으면 wheel/컨테이너 이미지에서 빠집니다.
+#    editable 설치에서는 소스를 직접 가리켜 증상이 없다가 배포 이미지에서만 터집니다.
+[tool.setuptools.package-data]
+backend_core = ["fixtures/*.jsonl"]
+
+# Pylance/pyright 경로 — 없으면 IDE에서 내부 import가 unresolved로 표시됨.
+[tool.pyright]
+extraPaths = ["src"]
+
+# ⚠️ mypy는 이 디렉토리를 cwd로 실행해야 이 설정을 집습니다 (CI/scripts가 그렇게 호출).
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+mypy_path = ["src"]
+ignore_missing_imports = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+# 점진 도입: 계약(packages/contracts)이 확정된 뒤 아래 두 줄을 켜세요.
+# disallow_untyped_defs = true
+# disallow_incomplete_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

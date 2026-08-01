@@ -1,0 +1,92 @@
+# pre-commit hooks — 로컬에서 CI 위반을 미리 차단
+# 설치:  pip install pre-commit && pre-commit install && pre-commit install --hook-type pre-push
+#        (commit 훅 + push 훅 둘 다 등록해야 pytest 단계까지 동작)
+# 전체 수동 실행:  pre-commit run --all-files
+# 최신 버전으로 갱신:  pre-commit autoupdate
+repos:
+  # 노트북 출력 셀 제거 — .gitattributes의 nbstripout filter와 동일 목적의 안전망.
+  # 신규 팀원이 `nbstripout --install`을 빠뜨려도 여기서 차단된다.
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1
+    hooks:
+      - id: nbstripout
+
+  # 기본 위생 검사 (대용량 파일 커밋 방지, 충돌 마커, 비밀키 평문 등)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=5120"]
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      # ⚠️ --markdown-linebreak-ext=md 필수: 마크다운은 "줄 끝 공백 2칸"이 강제 줄바꿈
+      #    문법이다. 이 옵션이 없으면 훅이 문서의 의도된 줄바꿈을 전부 지워버린다
+      #    (docs/역할_가이드/*.md가 실제로 이 문법을 쓰고 있음).
+      - id: trailing-whitespace
+        args: ["--markdown-linebreak-ext=md"]
+      - id: detect-private-key   # LLM 키/비밀키 평문 커밋 방지
+
+  # gitleaks — API 키 평문 커밋 차단.
+  # 왜 필요한가: GitHub secret scanning은 "제휴 발급사 패턴"만 잡습니다. 이 프로젝트가 쓰는
+  # 카카오·HyperCLOVA X(NCP)·솔라피/알리고 키는 그 목록에 없을 가능성이 높고(추정),
+  # 범용 패턴 탐지(non-provider patterns)는 GitHub Advanced Security 구독이 있어야 켜집니다.
+  # 위 detect-private-key는 PEM 개인키만 잡으므로 API 키 문자열은 사각지대였습니다.
+  # ⚠️ 이 훅은 **staged 변경만** 검사합니다(entry가 `--staged` 고정). 따라서
+  #    `pre-commit run --all-files`(CI)에서는 아무것도 검사하지 않습니다 —
+  #    CI의 전체 트리 스캔은 .github/workflows/ci.yml의 별도 스텝이 담당합니다. 둘은 한 쌍입니다.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # ruff — CI의 lint/format 게이트와 동일 검사 (pyproject [tool.ruff] 설정 공유).
+  # ruff-check는 자동 수정(--fix), ruff-format은 자동 포맷.
+  # ⚠️ 아래 rev는 apps/backend·apps/ai-engine의 dev extra `ruff==` 와 **한 쌍**입니다
+  #    (gitleaks의 rev ↔ ci.yml GITLEAKS_VERSION 규약과 동일). 이 잡과 CI의 lint 잡은
+  #    서로 다른 경로로 ruff를 설치하므로, 한쪽만 올리면 같은 코드가 한쪽에서만 통과합니다.
+  #    ruff는 0.x라 마이너 업그레이드에서 기본 규칙셋 자체가 넓어집니다 — 버전 상향은
+  #    "린트 설정 변경"으로 취급해 네 파일(여기·apps/backend·apps/ai-engine·
+  #    .github/workflows/reviewdog.yml의 RUFF_VERSION)을 같은 PR에서 함께 올리세요.
+  #    ⚠️ 이 규약은 이제 주석이 아니라 아래 `ruff-sync` 훅이 강제합니다 — 어긋난 채로는
+  #       커밋도 CI도 통과하지 못합니다. Dependabot이 한 곳만 올린 PR이 실제로 이 드리프트를
+  #       만든 적이 있어(#2) 검사로 승격했습니다.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      # id는 `ruff-check`. 예전 이름 `ruff`는 legacy alias로 아직 동작하지만 실행할 때마다
+      # "(legacy alias)" 경고를 찍으므로, 버전 상향과 함께 정식 id로 정리합니다.
+      - id: ruff-check
+        args: ["--fix"]
+        files: ^(apps|packages|scripts|e2e)/.*\.py$
+      - id: ruff-format
+        files: ^(apps|packages|scripts|e2e)/.*\.py$
+
+  # ruff 버전 드리프트 차단 — 위 rev, 앱 dev extra의 `ruff==`, reviewdog 워크플로의
+  # RUFF_VERSION이 모두 같은 값인지 검사합니다. 이유는 scripts/check_ruff_sync.py 참고.
+  # ⚠️ 별도 CI 잡이 아니라 pre-commit 훅으로 둔 이유: CI의 `Pre-commit hooks` 잡이
+  #    `--all-files`로 이 훅까지 돌리므로, required status check 목록(setup-github.sh의
+  #    contexts)을 건드리지 않고도 커밋 시점과 CI 양쪽에서 강제됩니다.
+  # language: python 로 두면 pre-commit이 격리 venv를 만드는데, 이 스크립트는 표준 라이브러리만
+  #    쓰므로 system 인터프리터로 충분합니다(환경 생성 시간 절약).
+  - repo: local
+    hooks:
+      - id: ruff-sync
+        name: ruff 버전 동기화 검사
+        entry: python3 scripts/check_ruff_sync.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # pytest — push 직전에만 실행(커밋마다 돌리기엔 무거움). CI test job과 동일 역할.
+  # 모노레포이므로 앱별로 cwd를 바꿔 실행해야 한다 (각 앱의 pyproject 설정을 집기 위함) —
+  # 그 순회를 scripts/run-tests.sh가 담당하며 CI와 동일한 대상/순서를 유지한다.
+  # 로컬 env에 `pip install -e "./apps/backend[dev]" -e "./apps/ai-engine[dev]"`가 돼 있어야 한다.
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (pre-push, 전체 앱)
+        entry: bash scripts/run-tests.sh --tests
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

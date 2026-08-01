@@ -1,0 +1,201 @@
+# ==========================================
+# AI 팀 프로젝트 모노레포 .gitignore
+# Stack: Python(FastAPI/RAG) + Node(frontend) + Jupyter
+# ⚠️ 저장소를 public으로 둘 계획이라면 시크릿/개인정보 패턴을 임의로 완화하지 마세요.
+# ==========================================
+
+# --- 저장소 밖에서 관리하는 자산 ---
+# 개인정보가 담긴 서식, 내부 리서치, 계약 문서 등은 레포 밖(팀 드라이브)에 두세요.
+# 파일명 접두어 `내부_`는 필터링 실수를 줄이기 위한 규약입니다.
+내부_*.md
+docs/내부_자료/
+
+# --- Jupyter Notebook & Lab Outputs ---
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+checkpoint_*.ipynb
+.virtual_documents/
+.jupyter/
+.local/share/jupyter/
+
+# 주의: 노트북 출력 셀(실행 결과)이 diff를 오염시키고 저장소 용량을 키우는 문제는
+# .gitignore로 해결되지 않습니다. nbstripout이 .gitattributes filter + pre-commit hook으로
+# 구성되어 있으니 `pre-commit install`을 반드시 실행하세요.
+
+# --- JupyterHub Runtime State ---
+jupyterhub.sqlite
+jupyterhub_cookie_secret
+jupyterhub_config.py.bak
+.jupyterhub-runtime/
+jupyterhub-proxy.pid
+
+# --- Python Build & Runtime ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 커버리지 산출물 — SonarQube Cloud 워크플로가 레포 루트에 coverage-<app>.xml 을 만듭니다
+# (.github/workflows/sonarqube.yml). 로컬에서 같은 명령을 재현할 때도 커밋되면 안 됩니다.
+.coverage
+.coverage.*
+coverage-*.xml
+htmlcov/
+# sonar-scanner 작업 디렉토리
+.scannerwork/
+
+# ⚠️ lib/ · build/ · dist/ 는 **루트 기준으로만** 무시합니다.
+#    선행 슬래시가 없으면 모든 깊이에 매칭되어 프론트엔드 소스(SvelteKit/Next의
+#    apps/frontend/src/lib/)가 통째로 무시되는 사고가 납니다.
+/lib/
+/lib64/
+/build/
+/dist/
+
+# --- Virtual Environments ---
+.venv/
+venv/
+ENV/
+/env/
+third-party/
+
+# --- Conda ---
+.conda/
+envs/
+conda-meta/
+pkgs/
+*.tar.bz2
+
+# --- Node / Frontend (apps/frontend) ---
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.parcel-cache/
+.vite/
+coverage/
+*.tsbuildinfo
+# 빌드 산출물은 앱 단위로도 무시 (루트 앵커가 잡지 못하는 경로)
+apps/*/dist/
+apps/*/build/
+apps/*/.output/
+
+# --- Environment Variables & Cloud Secrets (Security) ---
+.env
+.env.*
+# ⚠️ 값이 아닌 "키 목록" 템플릿은 커밋해야 합니다 (infra/.env.example).
+!.env.example
+!.env.*.example
+.secrets
+*.pem
+*.p12
+*.pfx
+*.key
+*.pub
+id_rsa*
+id_ed25519*
+
+# Cloud Service Account / Credential Files
+# *.json 전체를 막지 않고 명명 패턴으로 한정합니다.
+*-key.json
+*-keyfile.json
+*-credentials.json
+*sa-key.json
+gcp-*.json
+service-account*.json
+secret_*.json
+credentials/
+
+# --- Data & Large Artifacts (Never commit heavy datasets) ---
+# ⚠️ 디렉토리는 루트 기준으로만 무시합니다. git은 "제외된 디렉토리" 내부의 예외를
+#    복원하지 못하므로, 커밋해야 하는 자산은 반드시 파일 패턴 예외로 두세요.
+/data/
+/datasets/
+/outputs/
+*.csv
+*.xlsx
+*.jsonl
+*.parquet
+*.h5
+*.pickle
+*.pkl
+*.npy
+*.npz
+*.sqlite
+*.db
+
+# 커밋해야 하는 소형 데이터 예외 (반드시 위 무시 규칙보다 아래에 위치해야 동작)
+# 평가 골든셋: 코드와 함께 리뷰·재현되어야 하는 자산입니다 (지표 채점의 기준 자체).
+!apps/ai-engine/eval/**/*.csv
+!apps/ai-engine/eval/**/*.jsonl
+# 오프라인 폴백용 사전 캐시·테스트 픽스처: 코드와 함께 배포/실행되어야 합니다.
+!apps/**/fixtures/*.csv
+!apps/**/fixtures/*.jsonl
+# E2E 시나리오 픽스처도 같은 이유로 커밋 대상입니다.
+!e2e/**/fixtures/*.csv
+!e2e/**/fixtures/*.jsonl
+
+# E2E 실행 산출물 (Playwright 리포트·트레이스·스크린샷 — 재생성 가능, 용량이 큼)
+/e2e/test-results/
+/e2e/playwright-report/
+/e2e/.pytest_cache/
+
+# --- Model Artifacts & Training Logs ---
+models/
+weights/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.gguf
+*.bin
+*.tflite
+runs/
+lightning_logs/
+wandb/
+mlruns/
+
+# --- Vector DB 로컬 영속화 ---
+.chroma/
+chroma_db/
+qdrant_storage/
+.lancedb/
+
+# --- Coding Agent ---
+# AGENTS.md / CLAUDE.md 는 팀 공유 자산으로 커밋합니다.
+# 개인별 지침은 홈 디렉토리(~/.claude/CLAUDE.md 등)에 두세요.
+.claude/settings.local.json
+
+# --- OS & IDE Specifics ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V10
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/

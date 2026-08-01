@@ -1,0 +1,115 @@
+name: CI (lint + test)
+
+# ⚠️ 이 워크플로의 잡들은 브랜치 보호의 required status check 대상입니다.
+#    required check는 "모든 PR에서 반드시 생성"되어야 하므로 paths 필터를 걸지 않습니다.
+#    (paths 필터 + required check 조합은 해당 경로 변경이 없는 PR에서 체크가 생성되지 않아
+#     머지가 영원히 "Expected" 상태로 블록되는 유명한 함정입니다.)
+#    프론트엔드 CI를 추가할 때는 별도 워크플로 + paths 필터로 두고 required로 지정하지 마세요.
+#
+# ⚠️ 잡 이름(name:)은 scripts/setup-github.sh의 required_status_checks.contexts와
+#    문자열이 정확히 일치해야 합니다. 매트릭스 항목을 늘리면 두 곳을 함께 수정하세요.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 같은 ref에 새 push가 오면 진행 중인 이전 실행을 취소 — 중복 실행 방지.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # pre-commit 훅을 CI에서도 강제 — 훅을 설치하지 않은 팀원의 PR을 막는 유일한 지점입니다.
+  # 특히 detect-private-key / check-added-large-files 는 로컬에만 두면 방어선이 아니라
+  # 권고에 불과합니다 (이 레포는 public이라 키 유출이 되돌릴 수 없는 사고입니다).
+  # pytest 훅은 stages: [pre-push]라 --all-files 실행 대상이 아니므로 test 잡과 중복되지 않습니다.
+  pre-commit:
+    name: Pre-commit hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # 훅 환경(ruff·nbstripout 등) 재설치를 피해 잡 시간을 단축.
+      # 설정 파일이 바뀌면 키가 달라져 자동으로 새 환경을 만든다.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit run --all-files --show-diff-on-failure
+
+      # ⚠️ 위 --all-files 실행은 gitleaks를 사실상 건너뜁니다 — gitleaks 훅의 entry가
+      #    `--staged` 고정이라 CI에는 staged 변경이 없기 때문입니다. 그래서 여기서
+      #    전체 트리를 따로 스캔합니다. 이 스텝을 지우면 로컬 훅을 설치하지 않은 사람의
+      #    API 키 커밋을 아무도 막지 못합니다 (GitHub secret scanning은 제휴 발급사
+      #    패턴만 보므로 카카오/HyperCLOVA X 키는 사각지대 — 추정).
+      # 버전은 .pre-commit-config.yaml의 rev와 맞춰 함께 올리세요.
+      - name: gitleaks 전체 트리 스캔
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          # --redact: 탐지된 값이 공개 CI 로그에 그대로 남는 2차 유출을 막는다.
+          gitleaks dir . --redact --verbose
+
+  lint:
+    name: Lint & Type Check (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # 한 앱이 깨져도 다른 앱 결과를 함께 보기 위함
+      matrix:
+        app: [backend, ai-engine]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'   # apps/*/pyproject.toml의 requires-python과 싱크 유지
+          cache: 'pip'
+
+      # mypy가 core 의존성(fastapi/pydantic)의 타입을 해석하려면 패키지가 설치돼 있어야 한다.
+      # 무거운 extra는 설치하지 않아 CI를 가볍게 유지 — 그쪽 모듈은 [tool.mypy] overrides로 처리.
+      - name: Install app + static analysis tools
+        run: pip install -e "./apps/${{ matrix.app }}[dev]"
+
+      # ruff 설정은 루트 pyproject.toml의 [tool.ruff] 단일 원천 (상위 탐색으로 자동 채택).
+      - name: ruff lint
+        run: ruff check "apps/${{ matrix.app }}"
+
+      - name: ruff format check
+        run: ruff format --check "apps/${{ matrix.app }}"
+
+      # ⚠️ mypy는 앱 디렉토리를 cwd로 실행해야 해당 앱의 [tool.mypy] 설정을 집는다.
+      - name: Type check (mypy)
+        working-directory: apps/${{ matrix.app }}
+        run: mypy
+
+  test:
+    name: Unit tests (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    needs: lint   # lint 통과 후에만 실행 (자원 절약)
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [backend, ai-engine]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - run: pip install -e "./apps/${{ matrix.app }}[dev]"
+
+      - working-directory: apps/${{ matrix.app }}
+        run: pytest -v

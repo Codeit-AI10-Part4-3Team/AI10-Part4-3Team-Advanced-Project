@@ -1,0 +1,3 @@
+{"id": "placeholder-guide-001", "title": "[더미] 서비스 이용 안내 — 환불", "text": "환불은 결제일로부터 7일 이내에 고객센터로 신청하면 처리됩니다. 신청 후 영업일 기준 3일 안에 결제 수단으로 돌려드립니다.", "tags": ["refund", "payment"], "url": null}
+{"id": "placeholder-guide-002", "title": "[더미] 서비스 이용 안내 — 배송", "text": "배송은 결제 확인 후 2~3일 이내에 시작되며, 진행 상황은 주문 내역 화면에서 조회합니다.", "tags": ["delivery"], "url": null}
+{"id": "placeholder-guide-003", "title": "[더미] 서비스 이용 안내 — 계정", "text": "비밀번호를 잊었다면 로그인 화면의 비밀번호 찾기를 눌러 등록된 이메일로 재설정 링크를 받습니다.", "tags": ["account"], "url": null}

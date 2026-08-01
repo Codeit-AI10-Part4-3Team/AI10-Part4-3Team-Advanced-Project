@@ -1,0 +1,166 @@
+openapi: 3.1.0
+
+# 모듈 간 계약의 단일 원천입니다. 구현보다 먼저 여기에 존재해야 하고, 구두 합의는 계약이
+# 아닙니다. 스펙 문법은 CI(.github/workflows/contracts-check.yml)가 검증하지만,
+# 계약↔구현 드리프트는 각 앱의 계약 준수 테스트가 잡습니다 — 둘 다 필요합니다.
+#
+# 필드는 camelCase(파이썬 코드는 snake_case, pydantic alias로 매핑).
+# 태그로 소유를 구분합니다:
+#   ask        — 프론트엔드가 호출하는 backend의 공개 경로
+#   generation — backend가 호출하는 ai-engine의 내부 경로 (⚠️ 외부 노출 금지)
+
+info:
+  title: my-ai-project API contract
+  version: 0.1.0
+  description: |
+    backend(공개) + ai-engine(내부) 계약. 서버가 둘이므로 `servers`는 대표값만 두고,
+    각 경로의 태그로 어느 서비스의 것인지 구분합니다.
+
+servers:
+  - url: http://localhost:8000
+    description: backend (public)
+  - url: http://localhost:8100
+    description: ai-engine (internal only)
+
+tags:
+  - name: ask
+    description: 프론트엔드 → backend
+  - name: generation
+    description: backend → ai-engine (인증 없음 — 외부에 열지 말 것)
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      description: |
+        의존 서비스 상태를 확인하지 않습니다. 의존성 헬스를 liveness에 접으면
+        멀쩡히 살아 있는 프로세스를 오케스트레이터가 재시작합니다.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                required: [status]
+
+  /v1/ask:
+    post:
+      tags: [ask]
+      summary: 질문에 답한다 (근거 없으면 폴백)
+      description: |
+        항상 200입니다. 근거 생성에 실패하거나 ai-engine이 죽어 있으면
+        `messageMode: official_fallback`으로 사전 승인 문안을 돌려줍니다 —
+        열화 경로는 오류가 아니라 설계된 응답입니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AskRequest" }
+      responses:
+        "200":
+          description: 답변 또는 폴백
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Answer" }
+        "422":
+          description: 요청 형식 오류 (알 수 없는 필드 포함 — 조용히 무시하지 않습니다)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/generate:
+    post:
+      tags: [generation]
+      summary: 근거 기반 생성 (ai-engine 내부 경로)
+      description: |
+        `answer: null`은 **정상 거절**이며 200입니다 — 지어내지 않고 물러선 상태입니다.
+        키를 생략하면 호출자가 "거절"과 "응답 누락"을 구분할 수 없으므로 항상 포함합니다.
+        503은 모델/벡터DB가 사용 불가인 경우이며, 호출자는 타임아웃과 동일하게 취급합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerateRequest" }
+      responses:
+        "200":
+          description: 생성 결과 또는 거절
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenerateResponse" }
+        "503":
+          description: 모델/인덱스 사용 불가 (호출자는 폴백으로 전환)
+
+components:
+  schemas:
+    AskRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        question: { type: string, minLength: 1, maxLength: 500 }
+        locale: { type: string, default: ko }
+      required: [question]
+
+    Answer:
+      type: object
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        messageMode:
+          type: string
+          enum: [grounded, official_fallback]
+          description: grounded=근거 기반 생성, official_fallback=사전 승인 문안
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/Source" }
+      required: [text, messageMode, sources]
+
+    GenerateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        question: { type: string, minLength: 1, maxLength: 500 }
+        locale: { type: string, default: ko }
+      required: [question]
+
+    GenerateResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        answer:
+          type: [string, "null"]
+          description: null = 근거 부족/가드레일 위반으로 인한 정상 거절
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/Source" }
+        refusalReason:
+          type: [string, "null"]
+          enum: [no_evidence, guardrail, null]
+        guardrailApplied:
+          type: boolean
+          description: |
+            false는 가드레일 **대조군** 실행을 뜻합니다. 검증된 출력과 구분되어야 하므로
+            응답에 항상 표기합니다.
+      required: [answer, sources, refusalReason, guardrailApplied]
+
+    Source:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string }
+        quote: { type: string }
+        url: { type: [string, "null"] }
+      required: [title, quote, url]
+
+    Error:
+      type: object
+      additionalProperties: false
+      description: FastAPI 기본 `{detail}`이 아니라 `{code, message}` — 클라이언트가 code로 분기합니다.
+      properties:
+        code:
+          type: string
+          enum: [INVALID_REQUEST, NOT_FOUND, RATE_LIMITED, UPSTREAM_UNAVAILABLE, INTERNAL]
+        message: { type: string }
+      required: [code, message]

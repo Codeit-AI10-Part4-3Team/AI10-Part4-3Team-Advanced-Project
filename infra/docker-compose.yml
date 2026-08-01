@@ -1,0 +1,64 @@
+# infra/docker-compose.yml — 전체 스택을 한 명령으로 기동합니다.
+#
+#   cp infra/.env.example infra/.env      # 값 채우기 (커밋 금지)
+#   docker compose -f infra/docker-compose.yml up --build
+#   curl -X POST localhost:8000/v1/ask -H 'content-type: application/json' \
+#        -d '{"question":"환불은 어떻게 하나요?"}'
+#
+# 로컬과 배포가 **같은 파일**을 쓰는 것이 목적입니다 — 로컬 전용 편의를 여기 넣지 말고
+# 필요하면 compose override 파일로 분리하세요.
+
+name: my-ai-project
+
+services:
+  ai-engine:
+    # 독립 배포 단위 — 자체 Dockerfile로 빌드합니다(AGENTS.md 레포 구조 규약).
+    # ⚠️ context를 레포 루트로 넓히지 마세요. 그 순간 이 앱이 backend 소스를 참조할 수
+    #    있게 되어 "독립 배포 가능" 성질이 사라집니다.
+    build:
+      context: ../apps/ai-engine
+    image: my-ai-project-ai-engine:dev
+    environment:
+      # 값이 없으면 스텁으로 동작합니다. 실제 키가 들어오면 모델 클라이언트가 읽습니다.
+      MYAPP_MODEL_API_KEY: ${MYAPP_MODEL_API_KEY:-}
+    ports:
+      # ⚠️ 배포에서는 이 포트를 외부에 열지 마세요. 내부 계약 경로(/v1/generate)는 인증이
+      #    없습니다. 로컬 디버깅 편의로만 노출합니다.
+      - "127.0.0.1:8100:8100"
+    healthcheck:
+      # 이미지에 curl이 없으므로(slim) 파이썬 표준 라이브러리로 검사합니다.
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../apps/backend
+    image: my-ai-project-backend:dev
+    environment:
+      # 컨테이너 간 통신은 서비스명으로 합니다(localhost가 아님).
+      MYAPP_AI_ENGINE_URL: http://ai-engine:8100
+      MYAPP_AI_ENGINE_TIMEOUT_S: ${MYAPP_AI_ENGINE_TIMEOUT_S:-8.0}
+    ports:
+      - "8000:8000"
+    depends_on:
+      # ⚠️ 일부러 `condition: service_healthy`를 쓰지 않습니다.
+      #    backend는 ai-engine이 죽어 있어도 떠서 폴백으로 응답해야 합니다. 기동을 묶으면
+      #    "엔진이 죽으면 서비스도 안 뜬다"는 정반대 성질이 생깁니다.
+      - ai-engine
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+# ── 아직 없는 서비스 ────────────────────────────────────────────────────────────
+# vector-db — 지금 검색은 번들 픽스처 기반이라 붙일 대상이 없습니다. 아무도 말을 걸지 않는
+#             컨테이너를 띄우면 "돌아간다"는 착각만 만듭니다. 실제 인덱스가 들어올 때
+#             서비스 + 영속 볼륨을 함께 추가하세요.
+# frontend  — apps/frontend가 아직 스캐폴딩 전입니다.

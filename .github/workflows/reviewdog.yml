@@ -1,0 +1,173 @@
+# .github/workflows/reviewdog.yml
+name: reviewdog
+
+# 이 워크플로는 "보조 리뷰어"입니다 — 머지를 막는 게이트가 아닙니다.
+# 하드 게이트는 ci.yml(ruff / mypy / pytest)이 담당하고, 여기서는 같은 도구의 결과를
+# PR 변경 줄에 인라인 코멘트로 붙여 리뷰어가 파일을 오가지 않게 합니다.
+#
+# ⚠️ required status check로 지정하지 마세요.
+#    (1) 아래 fork 가드 때문에 외부 기여자 PR에서는 잡이 스킵되어 체크가 생성되지 않습니다.
+#    (2) 조언 성격이라 실패해도 머지를 막을 이유가 없습니다.
+#    scripts/setup-github.sh의 contexts에 넣지 않는 이유가 이것입니다.
+#
+# ⚠️ fork PR에서 GITHUB_TOKEN은 read-only라 코멘트 작성이 401로 실패합니다.
+#    pull_request_target으로 우회하는 방법이 있으나 fork의 코드를 write 권한 컨텍스트에서
+#    실행하게 되어(=임의 코드 실행) public 레포에서는 쓰지 않습니다. 대신 스킵합니다.
+on:
+  pull_request:
+
+concurrency:
+  group: reviewdog-${{ github.ref }}
+  cancel-in-progress: true
+
+# 인라인 코멘트 작성에 필요한 최소 권한.
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  # ⚠️ .pre-commit-config.yaml의 ruff rev, apps/*/pyproject.toml의 `ruff==` 와 **한 쌍**입니다.
+  #    (gitleaks의 rev ↔ ci.yml GITLEAKS_VERSION 과 같은 규약) 한쪽만 올리면 CI 게이트와
+  #    reviewdog가 서로 다른 규칙셋으로 같은 코드를 판정합니다.
+  #    이 값은 pre-commit의 `ruff-sync` 훅(scripts/check_ruff_sync.py)이 검사 대상으로 읽습니다 —
+  #    변수 이름을 바꾸면 그 스크립트도 함께 고쳐야 합니다.
+  RUFF_VERSION: 0.16.0
+  # ruff/pre-commit이 대상으로 삼는 파이썬 경로와 동일하게 유지하세요.
+  PY_PATHS: apps packages scripts e2e
+
+jobs:
+  ruff:
+    name: reviewdog / ruff
+    runs-on: ubuntu-latest
+    # fork PR 스킵 (위 주석 참고). 같은 레포의 브랜치 PR에서만 동작합니다.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - run: pip install "ruff==${RUFF_VERSION}"
+
+      - uses: reviewdog/action-setup@v1
+        with:
+          reviewdog_version: latest
+
+      # ruff는 rdjson(reviewdog 네이티브 포맷)을 직접 출력합니다 — efm 파싱이 필요 없어
+      # 규칙 코드/URL/자동수정 정보가 그대로 코멘트에 실립니다.
+      # ⚠️ 위반이 있으면 ruff의 종료 코드가 1이므로 `|| true`가 없으면 리포트 전에 잡이 죽습니다.
+      - name: ruff check -> reviewdog
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ruff check --output-format=rdjson ${PY_PATHS} > ruff.rdjson || true
+          # filter-mode=added: PR이 실제로 건드린 줄만 코멘트 — 레거시 위반으로 리뷰를 덮지 않기 위함.
+          # level=warning: reviewdog는 기본(fail-level=none)으로 잡을 실패시키지 않습니다.
+          reviewdog -f=rdjson -name=ruff -reporter=github-pr-review \
+            -filter-mode=added -level=warning < ruff.rdjson
+
+      # 포맷 차이는 "지적"보다 "적용 가능한 제안"이 유용합니다 — GitHub suggestion으로 올려
+      # 리뷰어/작성자가 웹에서 바로 커밋할 수 있게 합니다.
+      # ⚠️ ruff check --fix 는 여기서 돌리지 않습니다. 위 rdjson 코멘트와 같은 위반이
+      #    두 번 달려 노이즈가 됩니다 (수정안은 rdjson의 diagnostic에 이미 포함).
+      - name: ruff format
+        run: ruff format ${PY_PATHS}
+
+      - uses: reviewdog/action-suggester@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tool_name: ruff-format
+          level: warning
+          filter_mode: added
+
+  mypy:
+    name: reviewdog / mypy (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [backend, ai-engine]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - run: pip install -e "./apps/${{ matrix.app }}[dev]"
+
+      - uses: reviewdog/action-setup@v1
+        with:
+          reviewdog_version: latest
+
+      # ⚠️ 두 가지 경로 문제를 동시에 처리합니다.
+      #    (1) mypy는 앱 디렉토리를 cwd로 실행해야 그 앱의 [tool.mypy] 설정을 집습니다.
+      #    (2) 그러면 출력 경로가 `src/...` 로 앱 기준 상대경로가 되는데, reviewdog는
+      #        레포 루트 기준 경로를 요구합니다 -> sed로 접두어를 붙여 보정합니다.
+      #    --no-error-summary: "Found N errors" 요약줄은 efm에 걸리지 않아 노이즈만 만듭니다.
+      - name: mypy -> reviewdog
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP: ${{ matrix.app }}
+        run: |
+          (cd "apps/${APP}" && mypy --show-column-numbers --no-error-summary --no-pretty) \
+            | sed "s|^|apps/${APP}/|" > mypy.txt || true
+          reviewdog -efm="%f:%l:%c: %t%*[^:]: %m" \
+            -name="mypy (${APP})" -reporter=github-pr-review \
+            -filter-mode=added -level=warning < mypy.txt
+
+  actionlint:
+    name: reviewdog / actionlint
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+
+      # 워크플로 YAML의 문법 오류/잘못된 컨텍스트 참조/shellcheck를 한 번에 잡습니다.
+      # 워크플로 파일은 "머지해서 main에서 돌려봐야" 깨진 걸 아는 특성이 있어 특히 값이 큽니다.
+      - uses: reviewdog/action-actionlint@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          filter_mode: added
+          level: warning
+
+  eslint:
+    name: reviewdog / eslint
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+
+      # frontend-ci.yml과 같은 규약: apps/frontend 스캐폴딩 전에는 모든 스텝이 건너뛰어집니다.
+      - name: Skip notice (스캐폴딩 전)
+        if: hashFiles('apps/frontend/package.json') == ''
+        run: echo "apps/frontend/package.json이 아직 없습니다 - 프론트엔드 스캐폴딩 전이므로 건너뜁니다."
+
+      - uses: actions/setup-node@v7
+        if: hashFiles('apps/frontend/package-lock.json') != ''
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: apps/frontend/package-lock.json
+
+      - name: Install
+        if: hashFiles('apps/frontend/package-lock.json') != ''
+        working-directory: apps/frontend
+        run: npm ci
+
+      # ⚠️ 이 액션은 eslint가 devDependencies에 설치돼 있어야 동작합니다.
+      #    패키지 매니저를 pnpm/yarn으로 바꾸면 위 install 스텝과 함께 교체하세요.
+      - uses: reviewdog/action-eslint@v1
+        if: hashFiles('apps/frontend/package-lock.json') != ''
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          filter_mode: added
+          level: warning
+          workdir: apps/frontend

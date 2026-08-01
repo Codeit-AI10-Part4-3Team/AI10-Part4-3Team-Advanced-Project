@@ -103,5 +103,5 @@ else
   echo "완료(부분): 머지 전략 + 라벨만 적용됨 — 브랜치 보호는 미적용."
   echo "  (GitHub Pro 전환 또는 public 전환 후 이 스크립트를 다시 실행하면 적용됩니다.)"
 fi
-# 웹 UI 수동 설정(Secret scanning·Discussions·CollaborationLog 등)은 모두 적용 완료.
-# 저장소를 새로 만들 때 필요한 절차는 docs/공통_가이드/저장소_운영.md §3에 남아 있습니다.
+# ⚠️ 이 스크립트가 못 하는 설정이 남아 있습니다 (Discussions 카테고리 `CollaborationLog` 등).
+#    남은 항목: docs/공통_가이드/착수_체크리스트.md §4 / 배경: docs/공통_가이드/저장소_운영.md §3

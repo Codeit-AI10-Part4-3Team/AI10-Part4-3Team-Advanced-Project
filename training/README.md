@@ -14,8 +14,26 @@
 
 ## 서빙과의 이음매 (여기가 유일한 연결점)
 
-```
-training/  ──(어댑터 가중치 + adapter_card.json)──>  apps/ai-engine/
+```mermaid
+flowchart LR
+    subgraph TR["training/ - 오프라인"]
+        DATA[("data/ 데이터셋 폴더<br/>이미지 + 캡션<br/>커밋 금지")]
+        CFG["configs/ 학습 설정 yaml<br/>커밋 대상<br/>재현의 단일 원천"]
+        PREP["prepare<br/>정규화 · 개인정보 제거"]
+        TRAIN["train<br/>LoRA"]
+        EXPORT["export<br/>adapter_card.json 생성"]
+        RUNS[("runs/ 실행별 폴더<br/>가중치 + 카드<br/>커밋 금지")]
+    end
+    AE["apps/ai-engine<br/>추론 서빙"]
+
+    DATA --> PREP
+    CFG --> PREP
+    CFG --> TRAIN
+    PREP --> TRAIN --> EXPORT --> RUNS
+    RUNS ==>|"파일 전달<br/>양방향 import 금지"| AE
+
+    classDef gitignored fill:#eef2f7,stroke:#5a6b7d,stroke-dasharray:4 3
+    class DATA,RUNS gitignored
 ```
 
 - 학습 코드는 `apps/` 아래 어떤 패키지도 **import하지 않습니다**(역도 동일). 두 방향 모두

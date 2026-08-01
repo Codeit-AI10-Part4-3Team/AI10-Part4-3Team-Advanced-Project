@@ -144,6 +144,11 @@
 한글 쪽의 합의된 영어 예외: `CLAUDE.md`, `AGENTS.md`, `README`, `docs/adr/`(ADR 파일명),
 `docs/pr-checklist.md`.
 
+**다이어그램은 mermaid로.** ASCII 아트나 이미지 파일이 아니라 ` ```mermaid ` 코드 블록을 씁니다
+(GitHub이 네이티브 렌더). 이유는 **diff에 보이기 때문**입니다 — 이미지는 구조가 바뀌어도
+리뷰에서 변경을 확인할 수 없고, ASCII 아트는 노드가 하나 늘 때마다 전체를 다시 그려야 해서
+결국 갱신되지 않은 채 남습니다. 디렉토리 트리처럼 mermaid가 더 나쁜 경우는 코드 블록 유지.
+
 | 폴더 | 담는 것 |
 |---|---|
 | `docs/공통_가이드/` | 전원이 읽는 설계 문서 — `개발자_가이드.md`, `환경_세팅_가이드.md`, `저장소_운영.md`, `아키텍처.md`, `리스크.md`, `구현_범위.md`, `착수_체크리스트.md` |
@@ -228,10 +233,23 @@ bash scripts/run-tests.sh --tests  # pytest만 (pre-push 훅이 쓰는 모드)
 
 ## 아키텍처 규칙 (위반은 스타일이 아니라 설계 결함)
 
-```
-apps/backend/src/api  ──의존──>  apps/backend/src/backend_core
-apps/backend          ──HTTP만──> apps/ai-engine     (계약: packages/contracts)
-training/             ──파일만──> apps/ai-engine     (어댑터 가중치 + adapter_card.json)
+```mermaid
+flowchart LR
+    subgraph BEAPP["apps/backend"]
+        API["src/api<br/>얇은 라우터"]
+        CORE["src/backend_core<br/>도메인 · FastAPI 무의존"]
+    end
+    AE["apps/ai-engine"]
+    TR["training/"]
+
+    API -->|"의존"| CORE
+    BEAPP -->|"HTTP만 - packages/contracts"| AE
+    TR ==>|"파일만 - 어댑터 + adapter_card.json"| AE
+
+    CORE -. "import 금지" .-> API
+    AE -. "import 금지" .-> BEAPP
+
+    linkStyle 3,4 stroke:#c0392b,stroke-width:2px
 ```
 
 - **`training/`과 `apps/`는 서로를 import하지 않습니다(양방향 금지).** 학습은 배포 단위가 아니고

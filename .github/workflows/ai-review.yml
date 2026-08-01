@@ -29,11 +29,15 @@ concurrency:
   group: ai-review-${{ github.ref }}
   cancel-in-progress: true
 
-# 인라인 코멘트 작성에 필요한 최소 권한. contents는 read면 충분합니다
-# (이 워크플로는 리뷰만 하고 코드를 고치지 않습니다).
+# 리뷰에 필요한 최소 권한. 공식 예시에서 `contents: write` / `issues: write`를 뺀 이유는
+# 이 워크플로가 **리뷰만** 하고 코드를 고치거나 이슈를 만들지 않기 때문입니다.
+# ⚠️ `id-token: write`는 빼면 안 됩니다 — 액션이 OIDC 토큰을 발급받지 못해
+#    "Could not fetch an OIDC token" 으로 실패합니다(실측: 이 권한 없이 exit code 1).
 permissions:
   contents: read
   pull-requests: write
+  id-token: write # OIDC 토큰 발급 — 없으면 액션이 시작조차 못 합니다
+  actions: read # PR의 CI 결과를 읽어 리뷰 맥락에 반영
 
 jobs:
   review:

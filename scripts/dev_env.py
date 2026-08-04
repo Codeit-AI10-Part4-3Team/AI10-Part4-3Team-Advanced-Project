@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -284,11 +285,58 @@ def fix_isolation(ctx):
 # --- E04 editable installs ----------------------------------------
 
 
+APP_MODULES = ("api", "backend_core", "ai_engine")
+
+# Resolve each module in the *target* interpreter and report where it actually came from.
+# Importing (rather than find_spec) is deliberate: it reproduces what pytest does, so a package
+# that resolves but explodes on import is reported as missing rather than silently passing.
+_LOCATE = (
+    "import json,sys\n"
+    "out={}\n"
+    "for n in sys.argv[1:]:\n"
+    "    try:\n"
+    "        out[n]=getattr(__import__(n),'__file__','') or ''\n"
+    "    except Exception:\n"
+    "        out[n]=''\n"
+    "print(json.dumps(out))\n"
+)
+
+
+def module_origins(names):
+    raw = out([sys.executable, "-c", _LOCATE, *names])
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def under(root: Path, candidate: str) -> bool:
+    # Path.is_relative_to() is 3.9+; this file must stay parseable on 3.8.
+    try:
+        Path(candidate).resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
 def probe_editable(ctx):
-    missing = [m for m in ("api", "backend_core", "ai_engine") if not has_module(m)]
+    origins = module_origins(APP_MODULES)
+    missing = [m for m in APP_MODULES if not origins.get(m)]
     if missing:
         return MISSING, "import 실패: {}".format(", ".join(missing))
-    return OK, "api / backend_core / ai_engine"
+    if ctx.mode == "container":
+        # The image owns the environment and installs non-editable, so landing in site-packages
+        # is by design here -- "outside the checkout" carries no signal.
+        return OK, " / ".join(APP_MODULES)
+    # Importable is not enough. Another checkout of this template installed editable into the
+    # same interpreter satisfies `import ai_engine` while serving a foreign source tree, and the
+    # resulting ImportError/ValidationError reads like a defect in this repo.
+    foreign = [m for m in APP_MODULES if not under(ctx.root, origins[m])]
+    if foreign:
+        detail = ", ".join(f"{m} -> {origins[m]}" for m in foreign)
+        return BROKEN, "이 체크아웃 밖을 import 중: " + detail
+    return OK, " / ".join(APP_MODULES)
 
 
 def fix_editable(ctx):

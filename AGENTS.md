@@ -223,6 +223,25 @@ bash scripts/run-tests.sh          # 품질 게이트: ruff + mypy + pytest 전 
 bash scripts/run-tests.sh --tests  # pytest만 (pre-push 훅이 쓰는 모드)
 ```
 
+### 개별 테스트 실행
+
+전체 게이트는 `run-tests.sh`가 앱을 순회하지만, 고치는 중에는 하나만 돌리게 됩니다.
+⚠️ **레포 루트에서 `pytest`를 실행하지 마세요** — 두 앱이 한 세션에 섞여 수집 단계에서 깨집니다.
+앱 디렉토리를 cwd로 두어야 그 앱의 `[tool.pytest.ini_options]`·`[tool.mypy]`를 집습니다.
+
+```bash
+cd apps/ai-engine && pytest -q                                  # 앱 전체
+cd apps/ai-engine && pytest tests/test_guardrail.py -q           # 파일 하나
+cd apps/ai-engine && pytest tests/test_guardrail.py::test_x -q   # 테스트 하나
+cd apps/ai-engine && pytest -k guardrail -q                      # 이름 매칭
+cd apps/ai-engine && mypy                                        # 타입 검사만
+cd e2e && pytest                                                 # 관통 테스트 (스택 기동 필요)
+```
+
+⚠️ `apps/ai-engine`은 `testpaths = ["tests", "eval"]`이라 **`eval/`도 수집 대상**입니다.
+`eval/` 안에서 `test_*.py` 이름은 순수 지표 함수 단위 테스트에만 쓰세요 — 실제 채점 하네스
+실행 스크립트는 `run_*.py`로 이름 지어야 CI가 외부 API를 호출하지 않습니다(비용·비결정성).
+
 - import는 **`from api import ...` / `import backend_core` / `from ai_engine import ...`** —
   ⚠️ `src.` 접두어 금지. src 레이아웃에서 `from src.x`는 런타임에 깨지는데 린트가 못 잡습니다.
 - **무거운 의존성(LangChain·벡터 DB·지오 라이브러리)은 앱의 optional extra로.** core에 넣으면
@@ -296,6 +315,13 @@ flowchart LR
 - **테스트를 통과시키려고 가드레일을 목으로 대체하지 마세요.** on/off 델타는 보고 지표이며,
   우회한 가드레일은 테스트를 고치는 게 아니라 측정을 무효로 만듭니다.
 - **테스트의 외부 API 호출은 반드시 목으로.** 실제 호출은 비용이 들고 CI를 비결정적으로 만듭니다.
+- **ruff 버전은 네 곳이 한 쌍입니다.** `.pre-commit-config.yaml`의 rev, `apps/backend`·
+  `apps/ai-engine`의 dev extra `ruff==`, `.github/workflows/reviewdog.yml`의 `RUFF_VERSION`.
+  같은 ruff를 서로 다른 경로로 설치하는데 ruff는 0.x라 마이너 상향에서 기본 규칙셋이 넓어집니다 —
+  한 곳만 올라가면 "로컬 훅은 통과했는데 CI는 실패"가 재현되고, 그 상태가 반복되면 팀이 훅을
+  무시하기 시작합니다. 실제로 Dependabot이 pyproject만 올려 드리프트를 냈고(#2), 그래서 주석이
+  아니라 검사(`scripts/check_ruff_sync.py`, pre-commit local 훅)로 승격했습니다.
+  버전 상향은 "린트 설정 변경"으로 취급해 **네 파일을 같은 PR에서** 올리세요.
 - **required status check는 매트릭스 잡입니다.** 이름(`Lint & Type Check (backend)`,
   `Unit tests (ai-engine)` …)이 `scripts/setup-github.sh`와 정확히 일치해야 합니다. 잡 이름만 바꾸면
   모든 PR이 영원히 생성되지 않는 체크를 기다립니다.

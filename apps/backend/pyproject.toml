@@ -34,7 +34,7 @@ dev = [
     #    같은 코드가 한쪽만 통과합니다. ruff는 0.x라 마이너 업그레이드에서 기본 규칙셋이
     #    넓어집니다 — 올릴 때는 네 파일(여기·ai-engine·.pre-commit-config.yaml·
     #    .github/workflows/reviewdog.yml의 RUFF_VERSION)을 같은 PR에서.
-    "ruff==0.16.0",
+    "ruff==0.16.1",
     "mypy>=1.10.0",
 ]
 # ── 무거운 의존성(DB 드라이버, 지오 연산 등)은 core에 넣지 말고 별도 extra로 분리할 것.

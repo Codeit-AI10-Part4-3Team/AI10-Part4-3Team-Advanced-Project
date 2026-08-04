@@ -281,6 +281,19 @@ flowchart LR
 
 ## 프로젝트 함정 (이유 없는 규칙은 무시당하므로 이유를 함께)
 
+- **파이썬 환경은 이 저장소 전용이어야 합니다 - 공용 env는 격리가 아닙니다.** 이 저장소는
+  템플릿에서 파생됐고, 같은 템플릿에서 나온 다른 프로젝트도 `api` · `backend_core` · `ai_engine`
+  이라는 **같은 최상위 모듈명**을 씁니다. 한 인터프리터에 둘을 editable로 설치하면 나중에
+  설치한 쪽이 이름을 가져가고, 이 저장소의 테스트가 **남의 소스를 import한 채** 돕니다.
+  증상이 `ModuleNotFoundError`가 아니라 `ImportError` · `ValidationError`라서 환경 문제가 아니라
+  코드 결함으로 오진하기 쉽습니다 - 실제로 pre-push 훅이 이것 때문에 막힌 적이 있습니다.
+  `setup-dev.sh`의 E04가 모듈의 실제 경로까지 검사해 잡습니다. 진단과 해결:
+  [환경_세팅_가이드.md#e04](docs/공통_가이드/환경_세팅_가이드.md#e04).
+
+  ```bash
+  python3 -c "import ai_engine; print(ai_engine.__file__)"   # 이 저장소 경로여야 정상
+  ```
+
 - **시크릿은 일방통행 문.** 커밋된 키는 푸시되는 순간 공개된 것이며, 해결은 revert가 아니라
   폐기·재발급입니다. 키는 `infra/.env`(ignored)에, 커밋되는 것은 `infra/.env.example`(키 이름만).
   방어선 셋이 모두 필요한 이유는 각각 구멍이 있기 때문입니다: GitHub Push protection은

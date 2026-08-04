@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+**Claude Code**(claude.ai/code)가 이 저장소에서 작업할 때 참고하는 파일입니다.
 
 프로젝트 맥락(무엇을 만드는가, 아키텍처, 기술 스택, 하드 제약, 품질 기준, 팀 소유, 모노레포 구조)은
 도구 중립 브리프에 있습니다. 모든 에이전트 — Claude Code, Codex, Antigravity — 가 같은 원천을

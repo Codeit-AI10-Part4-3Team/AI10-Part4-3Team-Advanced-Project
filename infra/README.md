@@ -26,6 +26,7 @@ docker compose -f infra/docker-compose.yml up --build
    CI의 전체 트리 스캔이 **한 쌍**입니다. 훅 entry가 `--staged` 고정이라
    `pre-commit run --all-files`로는 아무것도 검사하지 않으므로, CI 스텝을 지우면 훅을
    설치하지 않은 사람의 키를 아무도 막지 못합니다.
+   버전을 올릴 때는 `.pre-commit-config.yaml`의 rev만 고치면 됩니다 - CI가 그 값을 읽어 씁니다.
 
 ## 새 환경변수를 추가할 때
 

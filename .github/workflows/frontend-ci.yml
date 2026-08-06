@@ -5,9 +5,13 @@ name: Frontend CI
 #     docs/공통_가이드/저장소_운영.md §4의 알려진 함정. 파이썬 앱 CI만 required입니다.)
 #
 # 스캐폴딩 전 상태에서도 안전하게 통과합니다: apps/frontend/package.json이 생기기 전까지
-# 모든 단계가 건너뛰어집니다. 이진호(프론트엔드/UX)는 스캐폴딩 PR에서 아래를 확인만 하면 됩니다.
+# 모든 단계가 건너뛰어집니다. 프론트엔드 담당자(06)는 스캐폴딩 PR에서 아래를 확인하세요.
 #   - 패키지 매니저가 npm이 아니라면(pnpm/yarn) install 단계와 cache 설정을 교체
 #   - lint/build 스크립트 이름이 package.json에 존재하는지 (--if-present로 없으면 무시됨)
+#
+# ⚠️ 스캐폴딩이 끝나면 아래의 `if: hashFiles(...)` 조건과 `--if-present`를 **지우세요**.
+#    그대로 두면 스크립트가 사라지거나 이름이 바뀐 뒤에도 잡이 조용히 초록으로 통과합니다 —
+#    "아직 없어서 건너뜀"과 "없어져서 검사 안 됨"이 CI에서 구분되지 않기 때문입니다.
 on:
   pull_request:
     paths:

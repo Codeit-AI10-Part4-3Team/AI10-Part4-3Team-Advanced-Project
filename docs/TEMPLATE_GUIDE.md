@@ -83,11 +83,22 @@ bash scripts/setup-github.sh <owner>/<repo> --solo   # 1인: 승인 요구 제�
   `setup-github.sh`의 `contexts`를 **같은 PR에서** 함께 늘리세요. 매트릭스라 이름이 전개됩니다.
 - **앱을 추가할 때 고쳐야 하는 네 곳**: 루트 `pyproject.toml`의 ruff `src`(빠뜨리면 isort가 앱 내부
   import를 서드파티로 보고 CI가 I001로 실패), `ci.yml` matrix, `setup-github.sh` contexts, `CODEOWNERS`.
-- **ruff 버전은 세 곳이 한 쌍.** `.pre-commit-config.yaml`의 rev ↔ 두 앱의 dev extra `ruff==`.
+- **ruff 버전은 네 곳이 한 쌍.** `.pre-commit-config.yaml`의 rev ↔ 두 앱의 dev extra `ruff==`
+  ↔ `reviewdog.yml`의 `RUFF_VERSION`.
   ruff는 0.x라 마이너 업그레이드에서 기본 규칙셋이 넓어지므로, 한쪽만 올리면 같은 코드가 한쪽에서만
-  통과합니다. 버전 상향은 "린트 설정 변경"으로 취급해 세 파일을 같은 PR에서 올리세요.
+  통과합니다. 버전 상향은 "린트 설정 변경"으로 취급해 네 파일을 같은 PR에서 올리세요.
+  어긋난 채로는 `ruff-sync` 훅이 커밋도 CI도 막습니다.
+- **ruff 상향은 Dependabot PR 세 개로 도착합니다 — 하나로 합쳐서 머지하세요.**
+  Dependabot은 생태계 단위로만 PR을 나누므로 pre-commit rev 하나, 두 앱의 pip 하나씩이 따로 옵니다.
+  `reviewdog.yml`의 `RUFF_VERSION`은 어느 생태계에도 속하지 않아 **아무도 올려주지 않습니다.**
+  따라서 셋 중 무엇도 단독으로는 `ruff-sync`를 통과할 수 없습니다 — 실패는 설계된 동작입니다.
+  크로스 생태계 그룹화는 Dependabot이 지원하지 않으므로(확실한 사실), 한 PR의 브랜치에서
+  나머지 세 곳을 함께 올리고 남은 PR들은 닫으세요.
+  이 저장소에서 네 곳을 한 PR로 합쳐 올린 실제 사례는 #8(ruff 0.16.0 -> 0.16.1)입니다.
 - **gitleaks는 훅 + CI 두 개가 한 쌍.** 훅의 entry가 `--staged` 고정이라 `pre-commit run --all-files`는
   아무것도 검사하지 않습니다. CI의 전체 트리 스캔 스텝을 지우면 훅 미설치자의 키를 막을 수단이 없습니다.
+  단 **버전 핀은 `.pre-commit-config.yaml`의 rev 한 곳**입니다 — CI가 그 값을 읽어 씁니다.
+  워크플로에 버전을 다시 적지 마세요(ruff에서 실제로 생겼던 드리프트를 여기서는 구조적으로 없앴습니다).
 - **mypy·pytest는 앱 디렉토리를 cwd로** 실행해야 설정을 집습니다. 루트에서 `pytest apps/backend`로
   돌리면 testpaths·마커가 적용되지 않습니다.
 - **`from src.xxx` import 금지.** src 레이아웃에서 `src.` 접두어는 설치 환경에서 깨지는데 린트가

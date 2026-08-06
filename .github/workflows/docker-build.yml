@@ -74,8 +74,8 @@ jobs:
         if: always()
         run: docker rm -f "smoke-${{ matrix.app }}" 2>/dev/null || true
 
-  # docker-compose는 infra/에 아직 없습니다(P1, 김도혁). 파일이 생기면 자동으로 활성화됩니다.
-  # S1-1 DoD "docker-compose up으로 빈 서비스 기동"의 최소 회귀 검사입니다.
+  # infra/docker-compose.yml이 없는 단계에서도 안전하게 통과하고, 파일이 생기면 자동 활성화됩니다.
+  # "docker-compose up으로 서비스가 뜬다"의 최소 회귀 검사입니다.
   compose:
     name: docker-compose config 검증
     runs-on: ubuntu-latest

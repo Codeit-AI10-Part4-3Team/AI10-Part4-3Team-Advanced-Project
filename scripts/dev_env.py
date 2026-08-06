@@ -508,19 +508,47 @@ def fix_env_file(ctx):
 # --- E12 line endings ---------------------------------------------
 
 
-SHELL_FILES = ("scripts/run-tests.sh", "scripts/setup-dev.sh", "scripts/setup-github.sh")
+# Discovered, not listed. A hardcoded tuple silently stops covering a script the moment
+# someone adds one — it had already drifted past scripts/apply-labels.sh. Every .sh in the
+# repo lives under scripts/, so a single glob is enough and costs no subprocess or tree walk.
+SHELL_DIR = "scripts"
 
 
-def _crlf_files(ctx: Ctx):
-    bad = []
-    for rel in SHELL_FILES:
-        path = ctx.path(*rel.split("/"))
+def _shell_files(ctx: Ctx):
+    # The glob only discovers names; each path is then re-derived from the literal root and
+    # required to resolve back into it. fix_line_endings rewrites bytes in place, so without
+    # this a symlink dropped into scripts/ would have it edit a file anywhere on disk -- a
+    # risk the previous hardcoded tuple did not carry. (Sonar flags the same shape as S2083.)
+    root = ctx.path(SHELL_DIR)
+    try:
+        resolved_root = root.resolve()
+        names = sorted(p.name for p in root.glob("*.sh"))
+    except OSError:
+        return []
+    files = []
+    for name in names:
+        path = root / name
         try:
-            if path.exists() and b"\r\n" in path.read_bytes():
-                bad.append(rel)
+            if path.resolve().parent == resolved_root and path.is_file():
+                files.append(path)
+        except OSError:
+            continue
+    return files
+
+
+def _crlf_paths(ctx: Ctx):
+    bad = []
+    for path in _shell_files(ctx):
+        try:
+            if b"\r\n" in path.read_bytes():
+                bad.append(path)
         except OSError:
             continue
     return bad
+
+
+def _crlf_files(ctx: Ctx):
+    return [p.relative_to(ctx.root).as_posix() for p in _crlf_paths(ctx)]
 
 
 def probe_line_endings(ctx):
@@ -533,8 +561,10 @@ def probe_line_endings(ctx):
 def fix_line_endings(ctx):
     # autocrlf=input keeps LF in the working tree while still normalising on commit.
     ok(["git", "config", "core.autocrlf", "input"], cwd=ctx.root)
-    for rel in _crlf_files(ctx):
-        path = ctx.path(*rel.split("/"))
+    # The bytes are rewritten directly rather than via git checkout on purpose: the blobs
+    # in the repo are already LF, so git sees no difference to restore and leaves a CRLF
+    # working copy untouched (`git status` stays clean while bash keeps failing).
+    for path in _crlf_paths(ctx):
         try:
             path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
         except OSError:

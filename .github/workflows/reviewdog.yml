@@ -28,8 +28,9 @@ permissions:
 
 env:
   # ⚠️ .pre-commit-config.yaml의 ruff rev, apps/*/pyproject.toml의 `ruff==` 와 **한 쌍**입니다.
-  #    (gitleaks의 rev ↔ ci.yml GITLEAKS_VERSION 과 같은 규약) 한쪽만 올리면 CI 게이트와
-  #    reviewdog가 서로 다른 규칙셋으로 같은 코드를 판정합니다.
+  #    한쪽만 올리면 CI 게이트와 reviewdog가 서로 다른 규칙셋으로 같은 코드를 판정합니다.
+  #    (gitleaks는 .pre-commit-config.yaml의 rev가 유일한 핀이라 이런 짝이 없습니다 —
+  #     ruff는 pip 설치 버전을 pyproject에 문자열로 박아야 해서 핀을 하나로 줄일 수 없습니다.)
   #    이 값은 pre-commit의 `ruff-sync` 훅(scripts/check_ruff_sync.py)이 검사 대상으로 읽습니다 —
   #    변수 이름을 바꾸면 그 스크립트도 함께 고쳐야 합니다.
   RUFF_VERSION: 0.16.1
@@ -145,6 +146,8 @@ jobs:
       - uses: actions/checkout@v7
 
       # frontend-ci.yml과 같은 규약: apps/frontend 스캐폴딩 전에는 모든 스텝이 건너뛰어집니다.
+      # ⚠️ 스캐폴딩이 끝나면 frontend-ci.yml과 **함께** 이 조건들을 지우세요. 그대로 두면
+      #    package-lock.json이 사라진 뒤에도 잡이 조용히 초록으로 통과합니다.
       - name: Skip notice (스캐폴딩 전)
         if: hashFiles('apps/frontend/package.json') == ''
         run: echo "apps/frontend/package.json이 아직 없습니다 - 프론트엔드 스캐폴딩 전이므로 건너뜁니다."

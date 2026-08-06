@@ -19,7 +19,7 @@ SCRIPT_DIR="$(dirname "$0")"
 # ⚠️ paths 필터가 걸린 워크플로(notebook-check 등)는 required로 지정하지 말 것 —
 #    해당 경로 변경이 없는 PR에서는 체크가 생성되지 않아 머지가 영원히 블록된다.
 # ⚠️ 보조 리뷰 도구(reviewdog / SonarQube Cloud / AI 리뷰)도 같은 이유로 여기 넣지 않는다 —
-#    fork PR, SONAR_TOKEN·ANTHROPIC_API_KEY 미설정, 크레딧 소진, 외부 서비스 장애에서
+#    fork PR, SONAR_TOKEN·ANTHROPIC_API_KEY 미설정, 외부 서비스 장애에서
 #    체크가 생성되지 않거나 실패한다.
 #    상세: docs/공통_가이드/저장소_운영.md §8.
 if [[ "$MODE" == "--solo" ]]; then

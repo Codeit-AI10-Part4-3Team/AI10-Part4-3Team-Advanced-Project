@@ -12,11 +12,10 @@ name: AI review
 # reviewdog(결정론적 린트)·SonarQube(정적 분석)와 같은 계층의 **보조 리뷰어**이고,
 # 하드 게이트는 ci.yml(ruff / mypy / pytest)이 담당합니다.
 #
-# ⚠️ required status check로 지정하지 마세요. 세 가지 상황에서 체크가 아예 생성되지 않고,
+# ⚠️ required status check로 지정하지 마세요. 아래 두 상황에서 체크가 아예 생성되지 않고,
 #    그 순간 모든 PR이 영구히 "Expected" 상태로 머지 블록됩니다:
 #      (1) 아래 fork 가드로 외부 기여자 PR에서는 잡이 스킵됩니다
 #      (2) ANTHROPIC_API_KEY 미등록 시 스킵됩니다
-#      (3) API 크레딧 소진·외부 서비스 장애 시 실패합니다
 #    scripts/setup-github.sh의 contexts에 넣지 않는 이유가 이것입니다
 #    (reviewdog / SonarQube와 동일한 결정 — docs/공통_가이드/저장소_운영.md §8).
 #
@@ -75,8 +74,16 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # ⚠️ continue-on-error: 리뷰 실패가 잡을 빨갛게 만들지 않습니다. 이유는 편의가 아니라
+      #    이 저장소의 설계 원칙(열화 폴백)과 같습니다 — AI 리뷰는 보조 리뷰어이고 하드 게이트는
+      #    ci.yml이므로, 크레딧 소진·API 장애로 보조 리뷰어가 죽었을 때 PR이 멈출 이유가 없습니다.
+      #    반대로 **매 PR마다 붙는 빨간 X는 팀이 체크를 무시하게 만드는 쪽으로 작동**합니다.
+      #    단, 조용히 실패하면 안 되므로 실패 사유는 아래 스텝이 ::warning:: 으로 남깁니다
+      #    (열화한 사실이 드러나야 한다 = messageMode와 같은 성질).
       - name: Claude 리뷰
+        id: review
         if: steps.guard.outputs.enabled == 'true'
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -152,3 +159,21 @@ jobs:
             게시되지 않은 리뷰는 없는 것과 같습니다.
 
             추측이 섞인 지적에는 '추정'이라고 밝히세요.
+
+      # 위 스텝이 continue-on-error라 실패해도 잡은 초록입니다. 그 상태로 두면 "리뷰가 왜 안
+      # 붙었는지" 아무도 모르게 되므로, 여기서 이유를 눈에 보이게 남깁니다.
+      # ⚠️ outcome을 봐야 합니다 — continue-on-error가 걸린 스텝의 conclusion은 항상 success 입니다.
+      # 가장 흔한 원인이 크레딧 소진(HTTP 400 credit_balance_too_low)이고, 그 다음이
+      # Claude GitHub App 미설치입니다. 둘 다 코드 문제가 아니라 계정 문제라 재실행으로 낫지 않습니다.
+      - name: 리뷰 실패 사유 표기
+        if: steps.review.outcome == 'failure'
+        run: |
+          echo "::warning title=AI 리뷰 실패 (머지는 막지 않음)::AI 리뷰가 실패해 이 PR에는 리뷰 코멘트가 없습니다. 머지 판단은 required 체크(ci.yml)와 사람 리뷰로 하세요. 흔한 원인: (1) API 크레딧 소진 — 콘솔에서 잔액 확인 후 수동 충전, (2) Claude GitHub App 미설치, (3) 외부 서비스 장애. 상세 로그는 위 'Claude 리뷰' 스텝을 펼쳐 보세요."
+          {
+            echo "### AI 리뷰 실패"
+            echo
+            echo "보조 리뷰어이므로 머지는 막지 않습니다(하드 게이트는 \`ci.yml\`)."
+            echo "확인 순서: API 크레딧 잔액 -> Claude GitHub App 설치 여부 -> Anthropic 서비스 상태."
+            echo
+            echo "근거: \`docs/공통_가이드/저장소_운영.md\` §8."
+          } >> "$GITHUB_STEP_SUMMARY"

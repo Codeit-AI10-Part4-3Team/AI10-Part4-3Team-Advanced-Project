@@ -27,13 +27,15 @@ repos:
       - id: detect-private-key   # LLM 키/비밀키 평문 커밋 방지
 
   # gitleaks — API 키 평문 커밋 차단.
-  # 왜 필요한가: GitHub secret scanning은 "제휴 발급사 패턴"만 잡습니다. 이 프로젝트가 쓰는
-  # 카카오·HyperCLOVA X(NCP)·솔라피/알리고 키는 그 목록에 없을 가능성이 높고(추정),
+  # 왜 필요한가: GitHub secret scanning은 "제휴 발급사 패턴"만 잡습니다. 국내 SaaS나
+  # 자체 발급 API 키는 그 목록에 없을 가능성이 높고(추정),
   # 범용 패턴 탐지(non-provider patterns)는 GitHub Advanced Security 구독이 있어야 켜집니다.
   # 위 detect-private-key는 PEM 개인키만 잡으므로 API 키 문자열은 사각지대였습니다.
   # ⚠️ 이 훅은 **staged 변경만** 검사합니다(entry가 `--staged` 고정). 따라서
   #    `pre-commit run --all-files`(CI)에서는 아무것도 검사하지 않습니다 —
   #    CI의 전체 트리 스캔은 .github/workflows/ci.yml의 별도 스텝이 담당합니다. 둘은 한 쌍입니다.
+  # 아래 rev는 gitleaks 버전의 **유일한 핀**입니다 — CI 스캔 스텝이 이 값을 읽어 씁니다.
+  # 따라서 rev만 올리면 CI도 함께 따라옵니다(다른 파일을 같이 고칠 필요 없음).
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
@@ -42,7 +44,8 @@ repos:
   # ruff — CI의 lint/format 게이트와 동일 검사 (pyproject [tool.ruff] 설정 공유).
   # ruff-check는 자동 수정(--fix), ruff-format은 자동 포맷.
   # ⚠️ 아래 rev는 apps/backend·apps/ai-engine의 dev extra `ruff==` 와 **한 쌍**입니다
-  #    (gitleaks의 rev ↔ ci.yml GITLEAKS_VERSION 규약과 동일). 이 잡과 CI의 lint 잡은
+  #    (gitleaks와 달리 이쪽은 CI가 rev를 읽어갈 수 없습니다 — pip가 설치 시점에 버전을 고정해야
+  #    하므로 핀이 pyproject 안에 문자열로 있어야 합니다). 이 잡과 CI의 lint 잡은
   #    서로 다른 경로로 ruff를 설치하므로, 한쪽만 올리면 같은 코드가 한쪽에서만 통과합니다.
   #    ruff는 0.x라 마이너 업그레이드에서 기본 규칙셋 자체가 넓어집니다 — 버전 상향은
   #    "린트 설정 변경"으로 취급해 네 파일(여기·apps/backend·apps/ai-engine·

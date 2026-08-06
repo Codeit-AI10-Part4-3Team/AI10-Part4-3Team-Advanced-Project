@@ -53,10 +53,16 @@ updates:
   # 아무도 그 사실을 알 수 없었습니다. 이제는 pre-commit의 `ruff-sync` 훅이 드리프트를
   # 막지만, 그건 "실패시키는" 장치일 뿐이라 rev를 실제로 올려줄 주체가 따로 필요합니다.
   #
-  # ⚠️ 그래도 ruff 상향은 여전히 **두 개의 PR**로 도착합니다(pip 하나, pre-commit 하나).
-  #    `ruff-sync` 훅 때문에 먼저 도착한 쪽은 CI에서 실패합니다 — 이는 설계된 동작입니다.
-  #    한쪽 PR 브랜치에서 나머지 파일까지 함께 고쳐 하나로 합쳐 머지하세요.
+  # ⚠️ 그래도 ruff 상향은 여전히 **세 개의 PR**로 도착합니다(pip 두 개 = 앱별 디렉토리,
+  #    pre-commit 하나). `ruff-sync` 훅 때문에 셋 중 무엇도 단독으로는 CI를 통과하지 못합니다 —
+  #    이는 설계된 동작입니다. 게다가 reviewdog.yml의 RUFF_VERSION은 어느 생태계에도 속하지
+  #    않아 아무도 올려주지 않으므로, 어차피 손으로 한 번은 합쳐야 합니다.
+  #    한쪽 PR 브랜치에서 나머지 파일까지 함께 고쳐 하나로 합쳐 머지하세요(실제 사례: #8).
+  #    절차는 docs/TEMPLATE_GUIDE.md의 함정 목록 참고.
   #    (Dependabot의 크로스 생태계 그룹화는 지원되지 않습니다 — 확실한 사실.)
+  #    ruff 외의 훅은 이 블록이 여는 PR **하나로 완결**됩니다. gitleaks도 예외였으나
+  #    (ci.yml이 버전을 따로 적어두고 있었음) ci.yml이 rev를 읽어가도록 바꿔 짝을 없앴습니다.
+  # 확실한 사실: 이 생태계는 version updates만 지원하고 security updates는 지원하지 않습니다.
   - package-ecosystem: "pre-commit"
     directory: "/"
     schedule:
@@ -70,7 +76,8 @@ updates:
         patterns: ["*"]
 
   # ── 프론트엔드: package.json이 없는 디렉토리를 등록하면 Dependabot이 매주 파싱 오류를
-  #    기록합니다. 스캐폴딩(P1, 이진호) 후 아래 블록의 주석을 해제하세요.
+  #    기록합니다. 프론트엔드 스캐폴딩이 끝난 뒤 아래 블록의 주석을 해제하세요.
+  #    ⚠️ 켜는 시점은 프론트엔드 오너(06)의 판단입니다 — 스프린트 중에는 PR 소음과의 트레이드오프입니다.
   # - package-ecosystem: "npm"
   #   directory: "/apps/frontend"
   #   schedule:

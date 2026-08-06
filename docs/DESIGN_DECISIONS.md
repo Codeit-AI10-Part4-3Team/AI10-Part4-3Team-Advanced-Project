@@ -76,14 +76,25 @@ compose가 생기는 순간 별도 설정 없이 활성화됩니다.
 `pre-commit run --all-files`(CI)로는 아무것도 검사하지 않기 때문입니다. 둘 중 하나만 남기면
 방어선이 사라집니다.
 
+다만 **버전 핀은 한 쌍이 아니라 한 곳**입니다. CI 스텝은 `.pre-commit-config.yaml`의 gitleaks
+`rev`를 읽어 그 버전을 내려받습니다. 워크플로에 버전을 다시 적어두면 훅과 CI가 서로 다른 gitleaks로
+같은 저장소를 판정하는 드리프트가 생기는데, ruff에서 실제로 그 일이 있었습니다.
+ruff는 pip가 설치 시점에 버전을 고정해야 해서 핀을 하나로 줄일 수 없고 — 그래서 `ruff-sync` 훅으로
+검사합니다 — gitleaks는 줄일 수 있어서 줄였습니다.
+
 ## 8. 왜 ruff `select`를 명시했나
 
 비워 두면 ruff의 기본 규칙셋을 상속하는데, ruff는 0.x라 마이너 업그레이드에서 기본값이 넓어집니다
 (실측: 0.15 통과 → 0.16에서 신규 검출 다수). 즉 버전을 올릴 때마다 린트 정책이 팀 의사와 무관하게
 바뀝니다. 명시하면 규칙 변경이 코드 리뷰를 거치는 **명시적 diff**가 됩니다.
 
-같은 이유로 ruff 버전은 세 곳(`.pre-commit-config.yaml` rev + 두 앱의 dev extra)에 **고정**돼 있고,
-그 셋은 항상 함께 올려야 합니다.
+같은 이유로 ruff 버전은 네 곳(`.pre-commit-config.yaml` rev + 두 앱의 dev extra +
+`reviewdog.yml`의 `RUFF_VERSION`)에 **고정**돼 있고, 그 넷은 항상 함께 올려야 합니다.
+지키라고 적어두는 것으로는 부족해서 `ruff-sync` 훅(`scripts/check_ruff_sync.py`)이 강제합니다 —
+Dependabot이 한 곳만 올린 PR이 실제로 드리프트를 만든 적이 있습니다.
+
+⚠️ 그 결과 **ruff 상향은 Dependabot PR 세 개로 도착하고, 셋 다 각각으로는 실패합니다.**
+합치는 절차는 [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md)의 함정 목록에 있습니다.
 
 ## 9. 왜 문서 폴더만 한글인가
 

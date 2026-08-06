@@ -23,7 +23,9 @@ src = ["apps/backend/src", "apps/ai-engine/src", "training/src"]
 #    마이너 업그레이드에서 기본값이 넓어집니다(실측: 0.15 통과 → 0.16에서 신규 23건).
 #    즉 버전을 올릴 때마다 린트 정책이 우리 의사와 무관하게 바뀝니다. 아래 목록이 이제
 #    단일 원천이며, 규칙 추가/제거는 코드 리뷰를 거치는 명시적 변경이 됩니다.
-#    (버전 자체는 .pre-commit-config.yaml rev ↔ 앱 dev extra `ruff==` 로 고정 — 한 쌍입니다.)
+#    (버전 자체는 .pre-commit-config.yaml rev ↔ 두 앱의 dev extra `ruff==` ↔
+#     .github/workflows/reviewdog.yml의 RUFF_VERSION — 네 곳이 항상 같아야 하며,
+#     어긋나면 `ruff-sync` 훅이 막습니다. scripts/check_ruff_sync.py 참고.)
 [tool.ruff.lint]
 select = [
     # ── ruff 기본값 (pycodestyle 일부 + pyflakes). E501(줄 길이)은 formatter가

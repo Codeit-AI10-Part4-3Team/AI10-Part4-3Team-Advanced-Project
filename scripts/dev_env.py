@@ -508,16 +508,25 @@ def fix_env_file(ctx):
 # --- E12 line endings ---------------------------------------------
 
 
-SHELL_FILES = ("scripts/run-tests.sh", "scripts/setup-dev.sh", "scripts/setup-github.sh")
+# Discovered, not listed. A hardcoded tuple silently stops covering a script the moment
+# someone adds one — it had already drifted past scripts/apply-labels.sh. Every .sh in the
+# repo lives under scripts/, so a single glob is enough and costs no subprocess or tree walk.
+SHELL_DIR = "scripts"
+
+
+def _shell_files(ctx: Ctx):
+    try:
+        return sorted(p for p in ctx.path(SHELL_DIR).glob("*.sh") if p.is_file())
+    except OSError:
+        return []
 
 
 def _crlf_files(ctx: Ctx):
     bad = []
-    for rel in SHELL_FILES:
-        path = ctx.path(*rel.split("/"))
+    for path in _shell_files(ctx):
         try:
-            if path.exists() and b"\r\n" in path.read_bytes():
-                bad.append(rel)
+            if b"\r\n" in path.read_bytes():
+                bad.append(path.relative_to(ctx.root).as_posix())
         except OSError:
             continue
     return bad
@@ -533,10 +542,14 @@ def probe_line_endings(ctx):
 def fix_line_endings(ctx):
     # autocrlf=input keeps LF in the working tree while still normalising on commit.
     ok(["git", "config", "core.autocrlf", "input"], cwd=ctx.root)
-    for rel in _crlf_files(ctx):
-        path = ctx.path(*rel.split("/"))
+    # The bytes are rewritten directly rather than via git checkout on purpose: the blobs
+    # in the repo are already LF, so git sees no difference to restore and leaves a CRLF
+    # working copy untouched (`git status` stays clean while bash keeps failing).
+    for path in _shell_files(ctx):
         try:
-            path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+            data = path.read_bytes()
+            if b"\r\n" in data:
+                path.write_bytes(data.replace(b"\r\n", b"\n"))
         except OSError:
             return False
     return True

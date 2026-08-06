@@ -515,21 +515,40 @@ SHELL_DIR = "scripts"
 
 
 def _shell_files(ctx: Ctx):
+    # The glob only discovers names; each path is then re-derived from the literal root and
+    # required to resolve back into it. fix_line_endings rewrites bytes in place, so without
+    # this a symlink dropped into scripts/ would have it edit a file anywhere on disk -- a
+    # risk the previous hardcoded tuple did not carry. (Sonar flags the same shape as S2083.)
+    root = ctx.path(SHELL_DIR)
     try:
-        return sorted(p for p in ctx.path(SHELL_DIR).glob("*.sh") if p.is_file())
+        resolved_root = root.resolve()
+        names = sorted(p.name for p in root.glob("*.sh"))
     except OSError:
         return []
+    files = []
+    for name in names:
+        path = root / name
+        try:
+            if path.resolve().parent == resolved_root and path.is_file():
+                files.append(path)
+        except OSError:
+            continue
+    return files
 
 
-def _crlf_files(ctx: Ctx):
+def _crlf_paths(ctx: Ctx):
     bad = []
     for path in _shell_files(ctx):
         try:
             if b"\r\n" in path.read_bytes():
-                bad.append(path.relative_to(ctx.root).as_posix())
+                bad.append(path)
         except OSError:
             continue
     return bad
+
+
+def _crlf_files(ctx: Ctx):
+    return [p.relative_to(ctx.root).as_posix() for p in _crlf_paths(ctx)]
 
 
 def probe_line_endings(ctx):
@@ -545,11 +564,9 @@ def fix_line_endings(ctx):
     # The bytes are rewritten directly rather than via git checkout on purpose: the blobs
     # in the repo are already LF, so git sees no difference to restore and leaves a CRLF
     # working copy untouched (`git status` stays clean while bash keeps failing).
-    for path in _shell_files(ctx):
+    for path in _crlf_paths(ctx):
         try:
-            data = path.read_bytes()
-            if b"\r\n" in data:
-                path.write_bytes(data.replace(b"\r\n", b"\n"))
+            path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
         except OSError:
             return False
     return True

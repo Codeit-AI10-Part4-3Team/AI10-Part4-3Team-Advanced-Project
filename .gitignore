@@ -10,6 +10,12 @@
 내부_*.md
 docs/내부_자료/
 
+# --- 문서 산출물 (정본이 아님) ---
+# 기획서의 정본은 docs/기획서/기획서.md 입니다. PDF 는 바이너리라 diff 가 나오지 않고
+# 개정마다 파일 전체가 이력에 쌓이므로 커밋하지 않고 GitHub Release 자산으로 첨부합니다.
+# 절차: docs/기획서/README.md
+docs/기획서/*.pdf
+
 # --- Jupyter Notebook & Lab Outputs ---
 .ipynb_checkpoints/
 */.ipynb_checkpoints/

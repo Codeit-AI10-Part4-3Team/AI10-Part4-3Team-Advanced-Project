@@ -60,7 +60,7 @@ bash scripts/setup-github.sh <owner>/<repo> --solo   # 1인: 승인 요구 제�
 - [ ] **`.github/dependabot.yml`** — 프론트엔드 스캐폴딩 후 npm 블록 주석 해제
 - [ ] **`infra/.env.example`** — 실제 키 이름으로 (값은 절대 넣지 말 것)
 - [ ] **`LICENSE`** — 저작권자를 프로젝트 소유자로 (GitHub의 라이선스 자동 인식이 이 줄을 봅니다)
-- [ ] **`docs/adr/0001-monorepo.md`** — 날짜·결정자 기입 (구조를 그대로 쓴다면 그대로 Accepted)
+- [ ] **`docs/adr/0001-모노레포_채택.md`** — 날짜·결정자 기입 (구조를 그대로 쓴다면 그대로 Accepted)
 - [ ] `docs/TEMPLATE_GUIDE.md`·`docs/DESIGN_DECISIONS.md` 삭제 (템플릿 전용 문서)
 
 ## 4. 수동 설정 체크리스트 (스크립트가 못 하는 것)

@@ -141,8 +141,11 @@
   Docker/CI 설정·셸 스크립트가 소비하며, 비ASCII 경로 세그먼트는 인코딩·이식성 사고를 냅니다.
   `apps/`·`packages/`·`infra/`·`.github/` 아래의 한글 폴더명은 판단 대상이 아니라 **고쳐야 할 결함**입니다.
 
-한글 쪽의 합의된 영어 예외: `CLAUDE.md`, `AGENTS.md`, `README`, `docs/adr/`(ADR 파일명),
-`docs/pr-checklist.md`.
+한글 쪽의 합의된 영어 예외: `CLAUDE.md`, `AGENTS.md`, `README`, `docs/pr-checklist.md`.
+
+`docs/adr/`는 예외가 아닙니다. 파일명은 `NNNN-한글_제목.md`이며(`docs/역할_가이드/`와 같은 꼴),
+연번 접두어만 유지합니다. ADR을 읽는 사람은 폴더를 파일명으로 훑기 때문에, 여기서 영어를 쓰면
+정작 가장 뒤집기 비싼 결정이 가장 안 읽힙니다.
 
 **다이어그램은 mermaid로.** ASCII 아트나 이미지 파일이 아니라 ` ```mermaid ` 코드 블록을 씁니다
 (GitHub이 네이티브 렌더). 이유는 **diff에 보이기 때문**입니다 — 이미지는 구조가 바뀌어도
@@ -162,7 +165,7 @@
 레포 구조 조사의 **실질**은 "레포를 쪼개라"(형식)가 아니라 **"AI를 인라인 호출이 아니라 독립 배포
 가능한 엔진/모듈로 두고 배포·운영을 README에 문서화하라"**(실질)입니다. 소규모·단기 팀에서
 멀티레포의 조율 비용은 이득보다 크므로, **단일 모노레포**를 쓰되 AI를 그 안의 독립 배포 단위로
-유지합니다 ([ADR-0001](docs/adr/0001-monorepo.md)).
+유지합니다 ([ADR-0001](docs/adr/0001-모노레포_채택.md)).
 
 ```
 AI10-Part4-3Team-Advanced-Project/
@@ -193,7 +196,7 @@ AI10-Part4-3Team-Advanced-Project/
 두 배치는 의도입니다: `eval/`은 채점 대상과 함께 버전이 움직여야 하므로 **ai-engine 안**에 있고,
 `CODEOWNERS`는 GitHub이 루트/`.github`/`docs` 중 **한 곳만** 읽으므로 루트에 있습니다.
 
-최상위 디렉토리를 옮기면 [ADR-0001](docs/adr/0001-monorepo.md)·
+최상위 디렉토리를 옮기면 [ADR-0001](docs/adr/0001-모노레포_채택.md)·
 [개발자_가이드.md](docs/공통_가이드/개발자_가이드.md) 6절·[아키텍처.md](docs/공통_가이드/아키텍처.md)를
 **같은 PR에서** 함께 고치세요.
 

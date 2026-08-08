@@ -213,3 +213,6 @@ ehthumbs.db
 Thumbs.db
 .vscode/
 .idea/
+
+# Windows 탐색기가 복사할 때 붙이는 대체 데이터 스트림 잔재
+*:Zone.Identifier

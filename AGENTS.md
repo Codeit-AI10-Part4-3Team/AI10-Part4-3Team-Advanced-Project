@@ -6,7 +6,7 @@
 
 > ⚠️ **아래 경로의 파일을 수정하기 전에 그 디렉토리의 `AGENTS.md`를 먼저 읽으세요**
 > (중첩 파일을 자동으로 읽지 않는 도구를 위한 명시 규칙입니다):
-> `apps/backend/` · `apps/ai-engine/` · `training/` · `e2e/`
+> `apps/backend/` · `apps/ai-engine/` · `apps/frontend/` · `training/` · `e2e/`
 
 ## 프로젝트 개요
 
@@ -97,7 +97,7 @@
 - `eval/`은 `apps/ai-engine/` 안 — 채점 대상과 함께 버전이 움직여야 함
 - `CODEOWNERS`는 레포 루트 한 곳만 — GitHub이 한 곳만 읽으므로 사본 금지
 - 루트 `pyproject.toml`은 툴링 전용(ruff) — 루트에서 `pip install .`은 실수
-- `apps/frontend/`는 미스캐폴딩 — 시작 전 그 README 필독(루트 `.gitignore` 함정)
+- `apps/frontend/`는 미스캐폴딩 — 시작 전 그 `AGENTS.md`와 README 필독(루트 `.gitignore` 함정)
 
 ## 빌드 / 실행 / 테스트
 

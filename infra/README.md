@@ -52,8 +52,9 @@ docker compose -f infra/docker-compose.yml up --build
 | 머신 타입 | `g2-standard-4` (vCPU 4, 호스트 RAM 16GB) — **RAM만 늘릴 수 없습니다** |
 | GPU | NVIDIA L4 1장. **가용 VRAM 23,034MiB (약 22.5GB)** — 공칭 24GB가 아닙니다 (2026-08-10 실측) |
 | 부팅 디스크 | 100GB. **확장에 권한이 필요하므로 상한으로 취급합니다** |
-| OS | `Deep Learning VM with CUDA M132` (Ubuntu 24.04, CUDA 12.9, Python 3.12) — **PyTorch 미포함 판을 고름** |
-| 스냅샷 일정 | UTC 18:00 ~ 19:00 (KST 03:00 ~ 04:00). 보존 기간은 아래 주의 참고 |
+| OS | `common-cu129-ubuntu-2404-nvidia-580-stage` (콘솔 표기 `Deep Learning VM with CUDA M132`) — Ubuntu 24.04, CUDA 12.9, Python 3.12. **PyTorch 미포함 판** |
+| 스냅샷 일정 | 정책 `adcraft-daily-snap`. UTC 18:00 (KST 03:00), **보존 7일**, `apply-retention-policy` |
+| SSH | **22번을 `0.0.0.0/0`에 열어 둡니다(의도된 상태).** 아래 "SSH 접근 경로" 참고 |
 | 외부 노출 포트 | backend `8000`만. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
 
 ### 권한 경계 (실측 기록)
@@ -72,7 +73,9 @@ IAM 역할은 커스텀 역할 `sprinter_vm_role_v1` **하나뿐**이고, **그 
 | 2026-08-10 | `iam.disableServiceAccountKeyCreation` | **적용(enforced)** — 아래 "배포 자동화" 참고 |
 | 2026-08-10 | `sprinter_vm_role_v1` 포함 권한 | **조회 불가**(`iam.roles.get` 거부). 아래는 실측 프로브 결과 |
 | 2026-08-10 | 읽기: API 목록 · 인스턴스 · 방화벽 · 스냅샷 · DLVM 이미지 | 전부 **가능** |
-| 2026-08-10 | 쓰기: API 활성화 · 고정 IP 예약 · 방화벽 규칙 생성 · 스냅샷 스케줄 생성 | 전부 **가능** |
+| 2026-08-10 | 쓰기: API 활성화 · 고정 IP 예약 · 방화벽 규칙 생성/수정 · 스냅샷 스케줄 생성 | 전부 **가능** |
+| 2026-08-10 | `compute.instances.setMetadata` · `compute.disks.addResourcePolicies` | 있음 |
+| 2026-08-10 | **`iap.tunnelInstances.accessViaIAP`** | **없음** (`4033: not authorized`). API를 켜도 동일 |
 
 **결론: 컴퓨트 계열에는 제약이 없고, 유일한 제약은 SA 키 발급 금지입니다.**
 따라서 아래가 전부 가능합니다 — 권한이 없을 때를 가정한 우회 구성을 만들지 마세요.
@@ -123,7 +126,7 @@ IAM 역할은 커스텀 역할 `sprinter_vm_role_v1` **하나뿐**이고, **그 
 
 | 항목 | 값 |
 |---|---|
-| 디스크 | 96G 중 17G 사용, **80G 여유** (이미지가 가볍습니다) |
+| 디스크 | 이미지만 올린 직후 96G 중 17G 사용. **세팅 완료 후 36% 사용, 약 61G 여유** (swap 16G + Ops Agent 0.6G + Docker 이미지 포함). **base 모델 예산은 61G 기준** |
 | 호스트 RAM | 15Gi. **swap 0** -> 16G 생성함 |
 | 드라이버 | 580.173.02 (CUDA 13.0 지원). 컨테이너의 CUDA 12.x는 하위 호환으로 동작 |
 | `nvidia-container-toolkit` | **1.17.8 사전 설치, `hold` 상태.** 드라이버와 버전이 어긋나지 않도록 고정된 것이니 풀지 마세요 |
@@ -204,8 +207,76 @@ gcloud compute instances describe $VM --zone=$ZONE \
 | `onHostMaintenance` | `TERMINATE` | GPU라서 강제 고정. 바꿀 수 없고 정상입니다 |
 | `provisioningModel` | `STANDARD` | Spot이면 예고 없이 회수됩니다 |
 
+**스냅샷 스케줄** (2026-08-10 설정)
+
+```bash
+gcloud compute resource-policies create snapshot-schedule adcraft-daily-snap \
+  --region=us-central1 --daily-schedule --start-time=18:00 \
+  --max-retention-days=7 --on-source-disk-delete=apply-retention-policy \
+  --storage-location=us-central1
+
+gcloud compute disks add-resource-policies <디스크명> --zone=us-central1-c \
+  --resource-policies=adcraft-daily-snap
+
+# 붙었는지 반드시 확인 - 스케줄만 만들고 안 붙이면 아무 일도 일어나지 않습니다
+gcloud compute disks describe <디스크명> --zone=us-central1-c \
+  --format="yaml(resourcePolicies)"
+```
+
+- `--start-time`은 **UTC**입니다. 18:00 UTC = KST 03:00.
+- 보존 7일은 [세션_보관_정책.md](../docs/기술문서/세션_보관_정책.md) 2절과 맞춘 값입니다.
+  `keep-auto-snapshots`로 두면 디스크를 지워도 스냅샷이 영구히 남아 **업로드 사진의 보존 기간
+  규정과 정면으로 어긋납니다.**
+- ⚠️ 콘솔의 데이터 보호 섹션에서 이미 스케줄을 만들었다면 **정책이 두 개 붙습니다.** 스냅샷이
+  하루 두 번 생기고 저장 비용도 두 배가 됩니다. `resourcePolicies`에 하나만 남는지 확인하세요.
+
+**Ops Agent** (2026-08-10 설치, `2.70.0`)
+
+```bash
+curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+sudo bash add-google-cloud-ops-agent-repo.sh --also-install
+systemctl is-active google-cloud-ops-agent-fluent-bit \
+                   google-cloud-ops-agent-opentelemetry-collector
+```
+
+기본 액세스 범위에 `logging.write`와 `monitoring.write`가 있어 추가 권한 없이 동작합니다.
+`nvidia-smi`가 있으면 GPU 메트릭도 수집합니다 -> 리스크 1번의 탐지 신호가 여기서 생깁니다.
+디스크 약 560MB를 씁니다. **알림 정책은 별개입니다** — 에이전트는 수집만 하고,
+"디스크 85% 초과" 같은 알림은 Cloud Monitoring에서 따로 만들어야 합니다.
+
 `apt-get update`에서 Google 저장소 두 곳에 대한 `Key is stored in legacy trusted.gpg keyring`
 경고가 뜨는 것은 이미지가 원래 그렇게 만들어진 것입니다. 정상 동작하며 고치지 마세요.
+
+### SSH 접근 경로 (22번을 잠그지 마세요)
+
+**`default-allow-ssh`의 `sourceRanges`는 `0.0.0.0/0`이고, 이건 의도된 상태입니다.**
+좁히는 것이 낫다고 판단해 실제로 시도했다가 되돌린 결과입니다. 근거 없이 다시 잠그면
+**접속 수단을 잃습니다.**
+
+경위 (2026-08-10):
+
+1. 22번을 IAP TCP forwarding 대역(`35.235.240.0/20`)으로 제한
+2. `gcloud compute ssh --tunnel-through-iap`가 **`4033: not authorized`로 실패**
+3. `iap.googleapis.com`을 활성화하고 재시도했으나 **동일하게 실패** ->
+   원인은 API가 아니라 **커스텀 역할에 `iap.tunnelInstances.accessViaIAP`가 없는 것**
+4. 그 권한은 우리가 부여할 수 없으므로 `0.0.0.0/0`으로 되돌림
+
+**받아들일 만한 이유**
+
+- GCP 리눅스 이미지는 **비밀번호 인증이 꺼져 있습니다.** 키 없이는 들어올 수 없고, 열린 22번에
+  오는 무차별 대입은 애초에 성립하지 않습니다. 거의 모든 GCE VM의 기본 상태입니다.
+- **접근 경로를 잃는 위험이 노출 위험보다 큽니다.** 22번을 잠그면 남는 복구 수단은 직렬 콘솔
+  하나뿐이고, 실작업 22일에서 그 도박은 값을 하지 않습니다.
+
+**잠갔다가 막혔을 때의 복구 경로** (`compute.instances.setMetadata` 권한 확인됨)
+
+```bash
+gcloud compute instances add-metadata <VM> --zone=<영역> \
+  --metadata=serial-port-enable=TRUE     # 직렬 콘솔로 진입해 방화벽 원복
+```
+
+주의: 보안 화면의 **"프로젝트 차원 SSH 키 차단"을 켜지 마세요.** `gcloud compute ssh`는 키를
+프로젝트 메타데이터에 등록합니다(실측 확인). 차단하면 그 키가 무시되어 접속이 막힙니다.
 
 ### 이 환경에서 특히 주의할 것
 

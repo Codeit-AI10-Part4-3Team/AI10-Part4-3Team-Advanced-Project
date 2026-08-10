@@ -155,7 +155,15 @@ sudo usermod -aG docker $USER         # 적용하려면 재로그인
 sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile
 sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 4) swappiness - 기본값 60은 RAM에 여유가 있어도 미리 페이지를 밀어내 학습 중 지연을 만듭니다.
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf
+sudo sysctl -p /etc/sysctl.d/99-swappiness.conf
 ```
+
+**swap은 메모리 증설이 아니라 안전망입니다.** 가중치를 CPU에 올렸다 GPU로 옮기는 구간의 뾰족한
+피크를 넘기는 용도이고, 상시로 RAM을 초과하면 thrashing으로 학습이 사실상 멈춥니다. 그때는
+worker 수를 줄여야 합니다. **VRAM에는 swap이 없으므로 리스크 1번은 이것으로 해결되지 않습니다.**
 
 **검증** (이 두 줄이 통과해야 프로비저닝 완료입니다)
 
@@ -166,6 +174,19 @@ docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi   # L4
 
 호스트의 `nvidia-smi`가 아니라 **컨테이너 안에서 GPU가 보이는지**가 기준입니다. 배포가 compose
 스택이기 때문입니다.
+
+**재부팅 1회 실검증** (2026-08-10 통과). 스택이 비어 있을 때 미리 해두면 배포 후에 놀랄 일이 없습니다.
+
+```bash
+sudo reboot
+# 재접속 후
+free -h                                              # Swap 15Gi 유지
+systemctl is-enabled docker && systemctl is-active docker   # enabled / active
+cat /proc/sys/vm/swappiness                          # 10
+```
+
+⚠️ 여기까지는 **docker 데몬 수준**입니다. `restart: unless-stopped`가 붙은 compose 스택이 실제로
+살아 돌아오는지는 **배포 후 한 번 더 재부팅**해서 확인해야 리스크 10번이 닫힙니다.
 
 `apt-get update`에서 Google 저장소 두 곳에 대한 `Key is stored in legacy trusted.gpg keyring`
 경고가 뜨는 것은 이미지가 원래 그렇게 만들어진 것입니다. 정상 동작하며 고치지 마세요.

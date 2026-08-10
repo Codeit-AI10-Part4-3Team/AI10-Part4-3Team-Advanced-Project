@@ -14,19 +14,24 @@
 
 ## 역할 목록
 
-> ⚠️ **담당자는 2026-08-04 착수 회의에서 배정합니다.** 배정 후 이 표 · `CODEOWNERS` ·
-> [AGENTS.md](../../AGENTS.md)의 팀 표 · [개발자_가이드.md](../공통_가이드/개발자_가이드.md) 5절을
-> **같은 PR에서** 함께 채우세요. 넷 중 하나만 채우면 리뷰 자동 배정이 조용히 어긋납니다.
+배정이 바뀌면 이 표 · `CODEOWNERS` · 각 역할 파일 제목 ·
+[개발자_가이드.md](../공통_가이드/개발자_가이드.md) 5절을 **같은 PR에서** 함께 고치세요.
+넷 중 하나만 고치면 리뷰 자동 배정이 조용히 어긋납니다.
 
 | # | 역할 | 담당자 | GitHub ID | 주요 소유 경로 |
 |---|---|---|---|---|
-| 01 | [기획/총괄 (PM)](01-기획_총괄.md) | TBD | TBD | `docs/` |
-| 02 | [테크리드](02-테크리드.md) | TBD | TBD | `packages/contracts/`, `docs/adr/`, `.github/`, `scripts/` |
-| 03 | [AI 엔지니어 (생성·서빙)](03-AI_생성_서빙.md) | TBD | TBD | `apps/ai-engine/` |
-| 04 | [AI 엔지니어 (학습·데이터)](04-AI_학습_데이터.md) | TBD | TBD | `training/` |
-| 05 | [백엔드/인프라](05-백엔드_인프라.md) | TBD | TBD | `apps/backend/`, `infra/` |
-| 06 | [프론트엔드](06-프론트엔드.md) | TBD | TBD | `apps/frontend/` |
-| 07 | [QA/보안](07-QA_보안.md) | TBD | TBD | `e2e/`, `apps/ai-engine/eval/` |
+| 01 | [기획/총괄 (PM)](01-기획_총괄.md) | 정승호 | `@wjdtmdgh87-lgtm` | `docs/` |
+| 02 | [테크리드](02-테크리드.md) | 신호정 | `@Yopkigom` | `packages/contracts/`, `docs/adr/`, `.github/`, `scripts/` |
+| 03 | [AI 엔지니어 (생성·서빙)](03-AI_생성_서빙.md) | 임유빈 | `@dlqhfl1129-blip` | `apps/ai-engine/` |
+| 04 | [AI 엔지니어 (학습·데이터)](04-AI_학습_데이터.md) | 임유빈 | `@dlqhfl1129-blip` | `training/` |
+| 05 | [백엔드/인프라](05-백엔드_인프라.md) | 임동규 | `@Eastar0102` | `apps/backend/`, `infra/` |
+| 06 | [프론트엔드](06-프론트엔드.md) | 송기하 | `@wenttoofar` | `apps/frontend/` |
+| 07 | [QA/보안](07-QA_보안.md) | 정승호 | `@wjdtmdgh87-lgtm` | `e2e/`, `apps/ai-engine/eval/` |
+
+**겸임은 둘입니다**: 임유빈이 03 + 04, 정승호가 01 + 07. 아래 금지 조합에 걸리지 않습니다.
+다만 겸임 때문에 `CODEOWNERS`에서 템플릿 기본값을 그대로 쓸 수 없는 경로가 셋 생겼습니다
+(`/training/`, `/e2e/`, 그리고 그 파생). 같은 사람이 한 경로의 두 오너가 되면 실질 단독 소유가
+되어 그 사람의 PR이 영구히 막히므로, 해당 줄은 TL로 대체하고 이유를 파일에 적어 두었습니다.
 
 ## 5명이 7역할을 맡는 방법
 

@@ -50,9 +50,9 @@ docker compose -f infra/docker-compose.yml up --build
 | 프로젝트 | 학원 배정 (콘솔에서 확인 — 공개 저장소이므로 ID를 적지 않습니다) |
 | 리전 | `us-central1` |
 | 머신 타입 | `g2-standard-4` (vCPU 4, 호스트 RAM 16GB) — **RAM만 늘릴 수 없습니다** |
-| GPU | NVIDIA L4 1장 (VRAM 24GB) |
+| GPU | NVIDIA L4 1장. **가용 VRAM 23,034MiB (약 22.5GB)** — 공칭 24GB가 아닙니다 (2026-08-10 실측) |
 | 부팅 디스크 | 100GB. **확장에 권한이 필요하므로 상한으로 취급합니다** |
-| OS | TBD — **우리 선택**. 드라이버·CUDA·Docker GPU 런타임 사전 설치 이미지 우선 (착수 §5-a) |
+| OS | `Deep Learning VM with CUDA M132` (Ubuntu 24.04, CUDA 12.9, Python 3.12) — **PyTorch 미포함 판을 고름** |
 | 스냅샷 일정 | UTC 18:00 ~ 19:00 (KST 03:00 ~ 04:00). 보존 기간은 아래 주의 참고 |
 | 외부 노출 포트 | backend `8000`만. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
 
@@ -102,6 +102,73 @@ IAM 역할은 커스텀 역할 `sprinter_vm_role_v1` **하나뿐**이고, **그 
 
 - `PERMISSION_DENIED: Required '...' permission` -> 내 IAM 역할 문제. 역할 추가로 해결됩니다.
 - `Constraint constraints/... violated` -> 조직 정책. 역할을 줘도 안 되며 정책 예외 요청이 필요합니다.
+
+### 프로비저닝 재현 절차 (2026-08-10 수행)
+
+**콘솔 생성 시 기본값에서 바꾼 것** — 나머지는 전부 기본값입니다.
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| 부팅 디스크 삭제 규칙 | **유지** | VM을 지워도 데이터가 남아야 합니다 ([ADR-0010](../docs/adr/0010-상태_저장소와_파일_보관_위치.md)) |
+| 외부 IP | **고정** (`ai10-part4-team3-ip`) | GPU VM은 호스트 유지보수 때 강제 종료 후 재시작되며, 그때 임시 IP가 바뀝니다 |
+| 부하 분산기 상태 점검 | **끔** | LB를 쓰지 않습니다. 유령 설정이 인수인계를 어렵게 합니다 |
+| 보안 부트 | **끔** | 서명되지 않은 NVIDIA 커널 모듈이 로드되지 않아 GPU가 통째로 죽습니다 |
+| OS Login | **끔** | 필요한 IAM 역할을 우리가 부여할 수 없어, 켜면 SSH에서 잠깁니다 |
+| 삭제 보호 | **켬** | ADR-0010의 "복구 경로 없음" 제약 |
+| 액세스 범위 | 기본 유지 | "전체 액세스"는 금물. 기본 범위에 `logging.write`/`monitoring.write`가 이미 포함됩니다 |
+
+주의: **IP 주소 값은 저장소에 적지 않습니다.** 리소스 이름으로 콘솔에서 조회하세요.
+
+**첫 부팅 실측값**
+
+| 항목 | 값 |
+|---|---|
+| 디스크 | 96G 중 17G 사용, **80G 여유** (이미지가 가볍습니다) |
+| 호스트 RAM | 15Gi. **swap 0** -> 16G 생성함 |
+| 드라이버 | 580.173.02 (CUDA 13.0 지원). 컨테이너의 CUDA 12.x는 하위 호환으로 동작 |
+| `nvidia-container-toolkit` | **1.17.8 사전 설치, `hold` 상태.** 드라이버와 버전이 어긋나지 않도록 고정된 것이니 풀지 마세요 |
+
+**이미지에 Docker가 없습니다.** PyTorch 포함 판에는 있지만 CUDA 전용 판에는 없습니다. 수동 설치하며,
+`apt install docker.io`는 **쓰지 마세요** — compose v2 플러그인이 딸려오지 않습니다.
+
+```bash
+# 1) Docker CE (공식 저장소)
+sudo apt-get update && sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+
+# 2) GPU 런타임 연결 - 툴킷은 이미 있으므로 저장소 등록·설치는 건너뜁니다.
+#    키 파일이 이미 있다는 프롬프트가 뜨면 덮어쓰지 마세요(N).
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+sudo systemctl enable docker          # 재부팅 시 스택 복구의 전제 조건
+sudo usermod -aG docker $USER         # 적용하려면 재로그인
+
+# 3) swap - 호스트 RAM 16GB 고정이라 필수. fstab 줄을 빠뜨리면 재부팅 후 사라집니다.
+sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+**검증** (이 두 줄이 통과해야 프로비저닝 완료입니다)
+
+```bash
+docker compose version
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi   # L4가 보여야 함
+```
+
+호스트의 `nvidia-smi`가 아니라 **컨테이너 안에서 GPU가 보이는지**가 기준입니다. 배포가 compose
+스택이기 때문입니다.
+
+`apt-get update`에서 Google 저장소 두 곳에 대한 `Key is stored in legacy trusted.gpg keyring`
+경고가 뜨는 것은 이미지가 원래 그렇게 만들어진 것입니다. 정상 동작하며 고치지 마세요.
 
 ### 이 환경에서 특히 주의할 것
 

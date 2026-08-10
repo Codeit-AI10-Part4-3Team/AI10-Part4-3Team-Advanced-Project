@@ -48,7 +48,7 @@ docker compose -f infra/docker-compose.yml up --build
 | 항목 | 값 |
 |---|---|
 | 프로젝트 | 학원 배정 (콘솔에서 확인 — 공개 저장소이므로 ID를 적지 않습니다) |
-| 리전 | `us-central1` |
+| 리전 / 영역 | `us-central1` / `us-central1-c` — **L4 재고는 영역마다 다릅니다.** 생성이 실패하면 다른 영역을 시도하세요 |
 | 머신 타입 | `g2-standard-4` (vCPU 4, 호스트 RAM 16GB) — **RAM만 늘릴 수 없습니다** |
 | GPU | NVIDIA L4 1장. **가용 VRAM 23,034MiB (약 22.5GB)** — 공칭 24GB가 아닙니다 (2026-08-10 실측) |
 | 부팅 디스크 | 100GB. **확장에 권한이 필요하므로 상한으로 취급합니다** |
@@ -187,6 +187,22 @@ cat /proc/sys/vm/swappiness                          # 10
 
 ⚠️ 여기까지는 **docker 데몬 수준**입니다. `restart: unless-stopped`가 붙은 compose 스택이 실제로
 살아 돌아오는지는 **배포 후 한 번 더 재부팅**해서 확인해야 리스크 10번이 닫힙니다.
+
+**가용성 정책 확인** (2026-08-10 통과). 콘솔에서 놓치기 쉬운 자리라 값으로 확인합니다.
+
+```bash
+VM=<인스턴스명>
+ZONE=$(gcloud compute instances list --filter="name=$VM" --format="value(zone)")
+gcloud compute instances describe $VM --zone=$ZONE \
+  --format="yaml(scheduling, deletionProtection)"
+```
+
+| 키 | 기대값 | 왜 |
+|---|---|---|
+| `deletionProtection` | `true` | [ADR-0010](../docs/adr/0010-상태_저장소와_파일_보관_위치.md)의 "복구 경로 없음" |
+| `automaticRestart` | `true` | **false면 GCP 유지보수가 곧 조용한 다운타임입니다** (리스크 10번) |
+| `onHostMaintenance` | `TERMINATE` | GPU라서 강제 고정. 바꿀 수 없고 정상입니다 |
+| `provisioningModel` | `STANDARD` | Spot이면 예고 없이 회수됩니다 |
 
 `apt-get update`에서 Google 저장소 두 곳에 대한 `Key is stored in legacy trusted.gpg keyring`
 경고가 뜨는 것은 이미지가 원래 그렇게 만들어진 것입니다. 정상 동작하며 고치지 마세요.

@@ -45,6 +45,10 @@
 # 결정 기록 — TL이 쓰고 PM이 승인
 /docs/adr/                   @Yopkigom @wjdtmdgh87-lgtm
 
+# 기술문서 — TL이 쓰지만 구현하는 사람이 봐야 합니다.
+# API_계약.md 는 백엔드가 그대로 구현할 문서라, `*` 규칙(PM)만으로는 구현자가 리뷰에서 빠집니다.
+/docs/기술문서/              @Yopkigom @Eastar0102
+
 # 평가 하네스는 ai-engine 소속이지만 채점 기준은 QA와 공동 소유 (자기채점 편향 방지).
 # 07 QA가 PM이므로, 임유빈의 채점 기준 변경에는 반드시 정승호의 승인이 걸립니다.
 /apps/ai-engine/eval/        @wjdtmdgh87-lgtm @dlqhfl1129-blip

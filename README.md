@@ -71,6 +71,7 @@ docs/              # 설계 문서, ADR, 역할 가이드/일정
 | 역할 정의·겸임 조합 | [docs/역할_가이드/README.md](docs/역할_가이드/README.md) |
 | 학습 파이프라인 | [training/README.md](training/README.md) |
 | 환경 세팅 문제 해결 | [docs/공통_가이드/환경_세팅_가이드.md](docs/공통_가이드/환경_세팅_가이드.md) |
+| GCP VM 접속·사용법 | [docs/공통_가이드/GCP_VM_사용_가이드.md](docs/공통_가이드/GCP_VM_사용_가이드.md) |
 | PR 절차 | [docs/pr-checklist.md](docs/pr-checklist.md) |
 | 리뷰 코멘트 작성법 | [docs/공통_가이드/코드_리뷰_가이드.md](docs/공통_가이드/코드_리뷰_가이드.md) |
 | 제출물 문체·문자 규칙 | [docs/공통_가이드/문서_작성_규약.md](docs/공통_가이드/문서_작성_규약.md) |

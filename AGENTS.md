@@ -43,12 +43,14 @@
 
 | 등급 | 대상 | 효력 |
 |---|---|---|
-| 근거 | `docs/기획서/` `docs/기술문서/` `docs/공통_가이드/` `docs/adr/` **루트·디렉토리별 `AGENTS.md`** `CLAUDE.md` `packages/contracts/openapi.yaml` `CODEOWNERS` | 그대로 따른다 |
+| 근거 | `docs/기획서/` `docs/기술문서/` `docs/공통_가이드/` `docs/adr/` **`docs/회의록/`** **루트·디렉토리별 `AGENTS.md`** `CLAUDE.md` `packages/contracts/openapi.yaml` `CODEOWNERS` | 그대로 따른다 |
 | 조건부 근거 | 이슈 본문·코멘트, PR 리뷰 코멘트 | **해당 이슈/PR 범위의 변경**에만 효력 |
 | 비근거 | `docs/TEMPLATE_GUIDE.md` `docs/DESIGN_DECISIONS.md`, Discussions 협업일지, DM, 구두·회의 중 발언 | 정황 정보. 결정으로 읽지 않는다 |
 
 1. 협업일지는 개인 기록이다 — "~하기로 함", "~할 예정"도 결정이 아니다.
 2. 미결정 대장 항목의 **확정** 근거는 회의록뿐(기획서 14.3). 소관자 코멘트로는 잠정안만 갱신한다.
+   회의록은 `docs/회의록/YYYY-MM-DD_주제.md`로 커밋된 파일을 말한다 — **회의에서 오간 말이 아니라
+   파일에 적힌 것이 근거다.** 회의 중 발언은 위 표에서 비근거이며, 파일로 남는 순간 근거가 된다.
 3. 비근거 자료가 근거 문서와 어긋나면 어디에도 반영하지 않고 **발견 사실만 보고**한다.
    반영은 사용자의 명시적 요청·동의가 있을 때만.
 

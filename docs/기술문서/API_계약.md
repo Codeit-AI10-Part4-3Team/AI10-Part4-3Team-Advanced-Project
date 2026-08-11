@@ -87,7 +87,7 @@ sequenceDiagram
 | 실패 지점 | 응답 | 세션 상태 | 다시 할 수 있는가 |
 |---|---|---|---|
 | `POST /v1/sessions` (브리프 채우기) | 422 `INSUFFICIENT_INPUT` 또는 `needsInput` | `brief_filling` | 예. 입력을 채우고 재시도 |
-| `brief:fill` 의존 장애 | 200 + `messageMode: degraded` | `brief_ready` | 열화로 진행 (ADR-0005) |
+| `brief:fill` 의존 장애 | 201 + `messageMode: degraded` | `brief_filling` | 예. 사용자가 `category`와 `target`을 직접 채우면 `brief_ready` (ADR-0005) |
 | **`POST /v1/sessions/{id}/draft` (시안 생성)** | **503 `UPSTREAM_UNAVAILABLE` 등** | **`brief_ready` 로 되돌아감. 브리프 잠금도 함께 풀림** | **예. 브리프를 고쳐서 다시 요청 가능** ([ADR-0012](../adr/0012-시안_생성_실패_시_브리프_잠금_해제.md)) |
 | `PATCH .../draft` (부분 교체) | 4xx / 5xx | `draft_ready` 유지 | 예. 기존 시안이 남아 있음 |
 | 렌더 잡 | 잡의 `status: failed` + `error.code` | `failed` | **미정** (기획서 18.2 #13). ADR-0012는 다루지 않습니다 |
@@ -284,6 +284,10 @@ Content-Type: application/json
 카테고리 추론이 불확실하면 그대로 진행하지 않고 자유 메모를 요구합니다. 이것은 오류가 아니라
 **대화의 한 단계**이므로, 실패 응답이 아니라 세션 상태로 표현합니다.
 
+**여기는 추론이 돌았는데 판단이 서지 않은 경우입니다.** 추론 자체가 돌지 못한 의존 장애는
+`messageMode: degraded`로 표현하며 `needsInput`을 쓰지 않습니다 (4.1절). 상태는 둘 다
+`brief_filling`이라, 화면이 두 경우를 구분하는 근거는 `needsInput` 키의 유무입니다.
+
 ```
 POST /v1/sessions  ->  201  { "state": "brief_filling", "needsInput": { "field": "note", "reason": "..." } }
 ```
@@ -311,8 +315,19 @@ POST /v1/sessions  ->  201  { "state": "brief_filling", "needsInput": { "field":
 시안 생성과 부분 교체와 렌더에는 폴백이 없습니다.
 
 ```
-GET /v1/sessions/{id}  ->  200  { "state": "brief_ready", "messageMode": "degraded", ... }
+POST /v1/sessions      ->  201  { "state": "brief_filling", "messageMode": "degraded", ... }
+     PATCH .../brief   ->  200  { "state": "brief_ready",   "messageMode": "degraded", ... }
+GET  /v1/sessions/{id} ->  200  { "state": "brief_ready",   "messageMode": "degraded", ... }
 ```
+
+**세션은 `brief_filling`에 머뭅니다.** 추론이 돌지 않았으므로 `category`와 `target`이 빈 채로
+남고, 사용자가 직접 골라 채워야 `brief_ready`로 넘어갑니다. 곧바로 `brief_ready`로 보내면 두
+필드가 비어 있는 채로 시안 생성이 가능해집니다.
+
+**이 경로에서는 `needsInput`을 쓰지 않습니다.** `needsInput`은 추론이 돌았는데 판단이 서지
+않은 경우(4절)를 위한 것이고 필드 하나를 담는 단수 객체입니다. 의존 장애로 못 채운 필드는 둘이라
+담기지 않으며, 원인이 다른 두 상황을 같은 필드로 표현하면 화면이 둘을 구분해 안내할 수 없습니다.
+열화 사실은 `messageMode` 하나로 드러냅니다.
 
 | 항목 | 내용 |
 |---|---|

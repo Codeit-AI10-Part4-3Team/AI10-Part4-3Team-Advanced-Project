@@ -86,8 +86,9 @@ sequenceDiagram
 
 | 실패 지점 | 응답 | 세션 상태 | 다시 할 수 있는가 |
 |---|---|---|---|
-| `POST /v1/sessions` (브리프 채우기) | 422 `INSUFFICIENT_INPUT` 또는 `needsInput` | `brief_filling` | 예. 입력을 채우고 재시도 |
-| `brief:fill` 의존 장애 | 200 + `messageMode: degraded` | `brief_ready` | 열화로 진행 (ADR-0005) |
+| `POST /v1/sessions` 추론 불확실 (기획서 9.3) | **201** + `needsInput`. 오류가 아닙니다 | `brief_filling` | 예. `PATCH .../brief`로 자유 메모를 채우면 다시 추론합니다 |
+| `PATCH .../brief` 재입력 후에도 불확실 | 422 `INSUFFICIENT_INPUT` | `failed` | 아니요. 새 세션입니다. **잠정안**이며 확정은 18.2 #11 |
+| `brief:fill` 의존 장애 | 201 + `messageMode: degraded` | `brief_filling` | 예. 사용자가 `category`와 `target`을 직접 채우면 `brief_ready` (ADR-0005) |
 | **`POST /v1/sessions/{id}/draft` (시안 생성)** | **503 `UPSTREAM_UNAVAILABLE` 등** | **`brief_ready` 로 되돌아감. 브리프 잠금도 함께 풀림** | **예. 브리프를 고쳐서 다시 요청 가능** ([ADR-0012](../adr/0012-시안_생성_실패_시_브리프_잠금_해제.md)) |
 | `PATCH .../draft` (부분 교체) | 4xx / 5xx | `draft_ready` 유지 | 예. 기존 시안이 남아 있음 |
 | 렌더 잡 | 잡의 `status: failed` + `error.code` | `failed` | **미정** (기획서 18.2 #13). ADR-0012는 다루지 않습니다 |
@@ -284,6 +285,10 @@ Content-Type: application/json
 카테고리 추론이 불확실하면 그대로 진행하지 않고 자유 메모를 요구합니다. 이것은 오류가 아니라
 **대화의 한 단계**이므로, 실패 응답이 아니라 세션 상태로 표현합니다.
 
+**여기는 추론이 돌았는데 판단이 서지 않은 경우입니다.** 추론 자체가 돌지 못한 의존 장애는
+`messageMode: degraded`로 표현하며 `needsInput`을 쓰지 않습니다 (4.1절). 상태는 둘 다
+`brief_filling`이라, 화면이 두 경우를 구분하는 근거는 `needsInput` 키의 유무입니다.
+
 ```
 POST /v1/sessions  ->  201  { "state": "brief_filling", "needsInput": { "field": "note", "reason": "..." } }
 ```
@@ -291,6 +296,18 @@ POST /v1/sessions  ->  201  { "state": "brief_filling", "needsInput": { "field":
 - 사용자가 `PATCH /v1/sessions/{id}/brief`로 `note`를 채우면 서버가 추론을 다시 시도합니다.
 - 재입력 후에도 판단이 서지 않을 때의 처리는 미정입니다 (기획서 18.2 #11). 그때까지는
   `INSUFFICIENT_INPUT` 오류로 끊는 것을 잠정안으로 둡니다.
+
+**두 시점의 응답이 다릅니다.** 첫 요청은 오류가 아니라 201이고, 422가 나오는 것은 재입력 후에도
+실패한 두 번째 시점뿐입니다.
+
+| 시점 | 요청 | 응답 | 세션 상태 |
+|---|---|---|---|
+| 처음 | `POST /v1/sessions` | **201** + `needsInput` | `brief_filling` |
+| 재입력 후 | `PATCH .../brief` | **422** `INSUFFICIENT_INPUT` | `failed` (잠정안) |
+
+`failed`는 [용어_사전.md](용어_사전.md) 3.1절 상태도의 `brief_filling -> failed` 간선입니다.
+**되돌아오는 간선이 없으므로 그 세션은 끝나고 새 세션을 만들어야 합니다.** 18.2 #11이 다르게
+정해지면 이 표와 상태도를 함께 고쳐야 합니다.
 
 **`needsInput`은 응답 전용이 아니라 세션에 저장합니다**
 ([도메인_모델.md](도메인_모델.md) 2.2절). 응답할 때마다 다시 계산하면 `reason` 문구가 조회할
@@ -311,8 +328,19 @@ POST /v1/sessions  ->  201  { "state": "brief_filling", "needsInput": { "field":
 시안 생성과 부분 교체와 렌더에는 폴백이 없습니다.
 
 ```
-GET /v1/sessions/{id}  ->  200  { "state": "brief_ready", "messageMode": "degraded", ... }
+POST /v1/sessions      ->  201  { "state": "brief_filling", "messageMode": "degraded", ... }
+     PATCH .../brief   ->  200  { "state": "brief_ready",   "messageMode": "degraded", ... }
+GET  /v1/sessions/{id} ->  200  { "state": "brief_ready",   "messageMode": "degraded", ... }
 ```
+
+**세션은 `brief_filling`에 머뭅니다.** 추론이 돌지 않았으므로 `category`와 `target`이 빈 채로
+남고, 사용자가 직접 골라 채워야 `brief_ready`로 넘어갑니다. 곧바로 `brief_ready`로 보내면 두
+필드가 비어 있는 채로 시안 생성이 가능해집니다.
+
+**이 경로에서는 `needsInput`을 쓰지 않습니다.** `needsInput`은 추론이 돌았는데 판단이 서지
+않은 경우(4절)를 위한 것이고 필드 하나를 담는 단수 객체입니다. 의존 장애로 못 채운 필드는 둘이라
+담기지 않으며, 원인이 다른 두 상황을 같은 필드로 표현하면 화면이 둘을 구분해 안내할 수 없습니다.
+열화 사실은 `messageMode` 하나로 드러냅니다.
 
 | 항목 | 내용 |
 |---|---|
@@ -357,7 +385,7 @@ FastAPI 기본 `{detail}`이 아니라 `{code, message}`입니다. 클라이언�
 | `RATE_LIMITED` | 429 | **--** (사용량 제한이 1차 범위 밖) | -- | 시간 후 가능 |
 | `UPSTREAM_UNAVAILABLE` | 503 | O | 호출 실패 | 가능 |
 | `INTERNAL` | 500 | O | -- | 가능 |
-| `INSUFFICIENT_INPUT` | 422 | O | 입력 정보 부족 | 자유 메모 입력 후 가능 |
+| `INSUFFICIENT_INPUT` | 422 | O | 입력 정보 부족 | 불가. 세션이 `failed`이므로 새 세션 (2절) |
 | `INVALID_IMAGE` | 422 | O | 규격 오류 | 다른 이미지로 가능 |
 | `CONTENT_POLICY_REJECTED` | 200 (잡) / 422 | O | 콘텐츠 정책 거절 | 입력 수정 후 가능 |
 | `GENERATION_TIMEOUT` | 200 (잡) / 504 | O | 생성 시간 초과 | 가능 |

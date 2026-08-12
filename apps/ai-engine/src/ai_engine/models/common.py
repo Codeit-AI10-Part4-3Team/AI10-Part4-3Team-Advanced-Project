@@ -1,0 +1,114 @@
+"""Contract commons — what every other schema module in this package builds on.
+
+Contract: packages/contracts/openapi.yaml. Four rules from its header shape this module:
+
+1. camelCase on the wire, snake_case in code  -> `Base.model_config` alias generator
+2. lowercase snake_case enum values           -> the `Literal`s below
+3. unknown fields rejected                    -> `extra="forbid"`
+4. **no `null` anywhere**                     -> `Omittable` + `Base._omit_absent`
+
+Only the fourth needs work. pydantic treats `X | None` as "accepts null", but the contract
+says absence is a missing key and emptiness is `""` — a `null` on the wire is a 422 in
+either direction. The two halves of that rule live here so no schema module can forget one.
+
+⚠️ These definitions are deliberately duplicated in apps/backend. The two apps must not
+import each other (AGENTS.md), so drift is caught by the contract-conformance tests rather
+than by sharing code. This app carries only what the internal `generation` paths use —
+sessions, jobs, auth and catalog are the caller's concern and are absent on purpose.
+"""
+
+from typing import Annotated, Any, Literal, TypeVar
+
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
+from pydantic.alias_generators import to_camel
+
+T = TypeVar("T")
+
+
+def _reject_null(value: object) -> object:
+    """Reject an explicit `null` before pydantic can accept it as `None`.
+
+    Without this, `Omittable[str]` would happily take `{"note": null}` — and the caller
+    that meant "clear this field" would silently get "field not present" instead. The two
+    are different requests in this contract (API_계약.md 3절).
+    """
+    if value is None:
+        raise ValueError('null is not allowed by the contract; omit the key or send ""')
+    return value
+
+
+# A field the contract allows to be absent. Absent means "not applicable to this output
+# type" or "not there yet" — never null. Use `""` for "present but empty".
+Omittable = Annotated[T | None, BeforeValidator(_reject_null)]
+
+
+class Base(BaseModel):
+    """Wire model base: camelCase aliases, unknown fields rejected, `None` never emitted.
+
+    `extra="forbid"` is deliberate: a typo'd field that is silently ignored makes the
+    caller believe it was sent and the server behave as if it never existed.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Drop absent fields instead of serializing them as `null`.
+
+        Done here rather than per-route `response_model_exclude_none` because that flag is
+        opt-in per endpoint: one route added without it puts `null` on the wire, and the
+        rule is only worth having if it holds everywhere.
+        """
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+
+ErrorCode = Literal[
+    "INVALID_REQUEST",
+    "NOT_FOUND",
+    "UNAUTHORIZED",
+    "INVALID_CREDENTIALS",
+    "DUPLICATE_ACCOUNT",
+    "NOT_IMPLEMENTED",
+    "RATE_LIMITED",
+    "UPSTREAM_UNAVAILABLE",
+    "INTERNAL",
+    "INSUFFICIENT_INPUT",
+    "INVALID_IMAGE",
+    "CONTENT_POLICY_REJECTED",
+    "GENERATION_TIMEOUT",
+    "REVISION_CONFLICT",
+    "STATE_CONFLICT",
+]
+"""All 15 codes in the contract, not just the four this app emits.
+
+This service only ever raises `INVALID_REQUEST`, `CONTENT_POLICY_REJECTED`,
+`UPSTREAM_UNAVAILABLE` and `GENERATION_TIMEOUT`. The enum is still whole because it is one
+schema in the contract, and a narrowed copy would report drift on every code the caller
+adds.
+"""
+
+
+class Error(Base):
+    """`{code, message}` — not FastAPI's default `{"detail": ...}`.
+
+    ⚠️ Nothing returns this yet: the service still raises bare `HTTPException`, which
+    renders `{"detail": ...}`. Wiring it up belongs to the route replacement, not to the
+    schema layer.
+    """
+
+    code: ErrorCode
+    message: str
+
+
+OutputType = Literal["comic", "single_ad"]
+"""Chosen by the caller and sent on every generation request.
+
+The engine never decides it. Nothing here may branch on anything else to tell a comic from
+a single ad — the drafts have no discriminator field of their own.
+"""

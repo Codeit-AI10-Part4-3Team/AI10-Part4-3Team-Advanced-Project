@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Protocol
 
-from ai_engine.models import Passage
+from ai_engine.models.legacy_qa import Passage
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "corpus.jsonl"
 

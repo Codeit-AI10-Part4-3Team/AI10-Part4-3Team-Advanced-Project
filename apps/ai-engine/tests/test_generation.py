@@ -8,7 +8,7 @@ from ai_engine.generation import (
     StubGenerator,
     generate_answer,
 )
-from ai_engine.models import GenerateRequest
+from ai_engine.models.legacy_qa import GenerateRequest
 from ai_engine.retrieval import FixtureRetriever
 
 

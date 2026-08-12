@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from ai_engine import guardrail
-from ai_engine.models import GenerateRequest, GenerateResponse, Passage, Source
+from ai_engine.models.legacy_qa import GenerateRequest, GenerateResponse, Passage, Source
 from ai_engine.retrieval import Retriever
 
 TOP_K = 3

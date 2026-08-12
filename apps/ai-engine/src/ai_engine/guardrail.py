@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ai_engine.models import GuardrailReport, Passage, Source, Violation
+from ai_engine.models.legacy_qa import GuardrailReport, Passage, Source, Violation
 
 GUARDRAIL_PROMPT_V0 = """당신은 아래 <근거>만 사용해 답변하는 작성자입니다.
 

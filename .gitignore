@@ -177,8 +177,14 @@ credentials/
 /e2e/.pytest_cache/
 
 # --- Model Artifacts & Training Logs ---
-models/
-weights/
+# ⚠️ 앵커 없는 `models/` 를 되돌리지 마세요. gitignore 의 디렉토리 패턴은 깊이를 가리지
+#    않으므로 `apps/*/src/*/models/` 같은 평범한 파이썬 패키지가 통째로 무시됩니다.
+#    add 가 조용히 무시되고 CI 에서 ModuleNotFoundError 로만 드러납니다 (실측 사고).
+#    가중치 파일 자체는 아래 확장자 규칙이 위치와 무관하게 막으므로 보호는 약해지지 않습니다.
+/models/
+/weights/
+/training/models/
+/training/weights/
 *.pt
 *.pth
 *.ckpt

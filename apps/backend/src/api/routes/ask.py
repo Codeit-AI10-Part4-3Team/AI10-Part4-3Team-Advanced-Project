@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 
 from api.deps import ai_client
 from backend_core.ai_client import AiEngineClient
-from backend_core.models import Answer, AskRequest
+from backend_core.models.legacy_qa import Answer, AskRequest
 from backend_core.pipeline import answer_question
 
 router = APIRouter(prefix="/v1", tags=["ask"])

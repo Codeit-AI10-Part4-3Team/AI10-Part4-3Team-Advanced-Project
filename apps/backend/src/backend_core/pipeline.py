@@ -12,7 +12,7 @@ than being disguised as a live result.
 from __future__ import annotations
 
 from backend_core.ai_client import AiEngineClient, AiEngineUnavailableError
-from backend_core.models import Answer
+from backend_core.models.legacy_qa import Answer
 
 # Pre-approved text used whenever we cannot ground an answer. Replace with your domain's
 # officially approved copy; keep it short and actionable.

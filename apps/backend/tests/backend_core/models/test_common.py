@@ -8,6 +8,8 @@ tests are on a throwaway model rather than a real schema on purpose: the rules b
 from typing import Any, get_args
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
 from backend_core.models import Base, Error, ErrorCode, MessageMode, Omittable, OutputType
@@ -94,6 +96,34 @@ def test_empty_string_is_a_value_and_survives() -> None:
         "productName": "핸드크림",
         "note": "",
     }
+
+
+def test_serialization_schema_survives_the_serializer() -> None:
+    """The response schema must still describe the model, not a bare object.
+
+    ⚠️ Regression guard, not a nicety. pydantic derives the serialization JSON schema from
+    `Base._omit_absent`'s return annotation, so adding `-> dict[str, Any]` to it collapses
+    every model's schema to `{"type": "object", "additionalProperties": true}`. FastAPI
+    publishes that in `/openapi.json`, so the contract would vanish from the generated spec
+    while the wire bytes stayed correct — invisible in every other test here.
+    """
+    schema = Sample.model_json_schema(mode="serialization")
+    assert set(schema.get("properties", {})) == {"productName", "note"}
+    assert schema.get("additionalProperties") is not True
+
+
+def test_fastapi_publishes_the_model_schema_for_responses() -> None:
+    """End of the same rope: what a client actually reads out of `/openapi.json`."""
+    app = FastAPI()
+
+    @app.get("/sample", response_model=Sample)
+    def _sample() -> Sample:  # pragma: no cover - never called, only introspected
+        return Sample(product_name="핸드크림")
+
+    spec = TestClient(app).get("/openapi.json").json()
+    ref = spec["paths"]["/sample"]["get"]["responses"]["200"]["content"]["application/json"]
+    name = ref["schema"]["$ref"].rsplit("/", 1)[-1]
+    assert set(spec["components"]["schemas"][name]["properties"]) == {"productName", "note"}
 
 
 # ---- 계약 준수: 이 PR 이 들여온 열거형과 Error --------------------------------------

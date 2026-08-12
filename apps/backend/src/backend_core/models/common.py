@@ -16,7 +16,7 @@ import each other (AGENTS.md), so drift is caught by the contract-conformance te
 than by sharing code.
 """
 
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -57,12 +57,20 @@ class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     @model_serializer(mode="wrap")
-    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler):
         """Drop absent fields instead of serializing them as `null`.
 
         Done here rather than per-route `response_model_exclude_none` because that flag is
         opt-in per endpoint: one route added without it puts `null` on the wire, and the
         rule is only worth having if it holds everywhere.
+
+        ⚠️ **Do not annotate the return type.** pydantic builds the *serialization* JSON
+        schema from a model serializer's return annotation, so `-> dict[str, Any]` replaces
+        every model's response schema with a bare `{"type": "object",
+        "additionalProperties": true}`. FastAPI then publishes that in `/openapi.json` and
+        the contract disappears from the generated spec — silently, because the wire bytes
+        stay correct. Left unannotated, pydantic keeps the real schema.
+        `test_serialization_schema_survives_the_serializer` locks this down.
         """
         return {key: value for key, value in handler(self).items() if value is not None}
 

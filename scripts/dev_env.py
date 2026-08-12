@@ -397,6 +397,34 @@ def _hook_installed(ctx: Ctx, name: str) -> bool:
         return False
 
 
+def _hook_stale_interpreter(ctx: Ctx, name: str) -> str:
+    """Return the pinned interpreter path when the hook can no longer run, else "".
+
+    `pre-commit install` bakes INSTALL_PYTHON (an absolute path) into the hook and falls back
+    to `pre-commit` on PATH when that path is gone. Recreating the environment therefore leaves
+    a hook that is *present* but only works if PATH happens to carry pre-commit -- otherwise
+    every commit dies with `pre-commit: command not found`, and E07/E08 would still report OK.
+    E09 already guards the same failure for the nbstripout filter; this keeps the pair honest.
+    """
+    hook = ctx.path(".git", "hooks", name)
+    try:
+        lines = hook.read_text(errors="ignore").splitlines()
+    except OSError:
+        return ""
+    pinned = ""
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.startswith("INSTALL_PYTHON="):
+            pinned = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+            break
+    if not pinned or Path(pinned).exists():
+        return ""
+    # The hook's fallback is literally `exec pre-commit`, so PATH -- not this interpreter's
+    # module -- decides whether it still runs. Checking the module here would hand back a
+    # false OK for the exact case this probe exists to catch.
+    return "" if shutil.which("pre-commit") else pinned
+
+
 def _install_hook(ctx: Ctx, hook_type: str) -> bool:
     cmd = tool_cmd("pre_commit", "pre-commit")
     if cmd is None:
@@ -412,9 +440,12 @@ def _install_hook(ctx: Ctx, hook_type: str) -> bool:
 
 
 def probe_commit_hook(ctx):
-    return (
-        (OK, ".git/hooks/pre-commit") if _hook_installed(ctx, "pre-commit") else (MISSING, "미등록")
-    )
+    if not _hook_installed(ctx, "pre-commit"):
+        return MISSING, "미등록"
+    stale = _hook_stale_interpreter(ctx, "pre-commit")
+    if stale:
+        return BROKEN, f"훅이 사라진 인터프리터를 가리킴: {stale}"
+    return OK, ".git/hooks/pre-commit"
 
 
 def fix_commit_hook(ctx):
@@ -422,9 +453,12 @@ def fix_commit_hook(ctx):
 
 
 def probe_push_hook(ctx):
-    if _hook_installed(ctx, "pre-push"):
-        return OK, ".git/hooks/pre-push (pytest 게이트)"
-    return MISSING, "미등록 — pytest 게이트가 로컬에서 동작하지 않음"
+    if not _hook_installed(ctx, "pre-push"):
+        return MISSING, "미등록 — pytest 게이트가 로컬에서 동작하지 않음"
+    stale = _hook_stale_interpreter(ctx, "pre-push")
+    if stale:
+        return BROKEN, f"훅이 사라진 인터프리터를 가리킴: {stale}"
+    return OK, ".git/hooks/pre-push (pytest 게이트)"
 
 
 def fix_push_hook(ctx):

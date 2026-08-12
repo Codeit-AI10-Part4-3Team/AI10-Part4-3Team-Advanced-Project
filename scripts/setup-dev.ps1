@@ -3,7 +3,9 @@
 #
 # ⚠️ 검사 로직은 여기 두지 마세요. 레지스트리는 scripts/dev_env.py 한 곳에만 있습니다.
 #
-# 사용: powershell -ExecutionPolicy Bypass -File scripts\setup-dev.ps1 [--check|--yes|--skip-tests]
+# 사용: powershell -ExecutionPolicy Bypass -File scripts\setup-dev.ps1
+#         [--check|--yes|--skip-tests|--mode host|docker|container]
+#       (인자는 @args 로 전량 전달되므로 dev_env.py 가 받는 옵션은 모두 여기서도 씁니다)
 #       (실행 정책 때문에 막히면 위처럼 -ExecutionPolicy Bypass 를 붙이세요 → 가이드 #w06)
 
 #Requires -Version 5.1

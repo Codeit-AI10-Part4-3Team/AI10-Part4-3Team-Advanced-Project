@@ -37,6 +37,54 @@ docker compose -f infra/docker-compose.yml up --build
 
 빠뜨리기 쉬운 것은 4번입니다. 로컬에서만 되는 변수는 배포에서 조용히 기본값으로 동작합니다.
 
+### 환경변수 값에 `$`가 들어갈 때 (2026-08-12 실측, 임동규)
+
+위 2번을 **그대로 따르면 값이 깨집니다.** compose는 `${VAR}` 치환을 한 뒤 그 결과를 다시 읽는
+것이 아니라, `.env` 값 안의 `$`를 **변수 참조로 해석**합니다. argon2 · bcrypt 해시가 전부
+`$argon2id$v=19$...` 꼴이라 이 항목에 정면으로 걸립니다.
+
+```
+.env 입력  : password_hash":"$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaA"
+컨테이너   : password_hash":"=19=65536,t=3,p=4"
+```
+
+`docker compose config` 로그에 `The "argon2id" variable is not set` 경고가 함께 찍힙니다.
+`environment:` 목록형(`- ADGEN_ACCOUNTS`, 값 없이 이름만)도 **같은 방식으로 깨집니다.**
+
+위 값은 `docker compose config` 의 렌더 결과가 아니라 **컨테이너 안에서 `printenv` 로 읽은
+것**입니다. `config` 출력은 `$` 를 `$$` 로 다시 이스케이프해 보여주므로 그것만으로는 판정할 수
+없습니다. 재현:
+
+```bash
+docker compose run --rm -T <서비스> printenv ADGEN_ACCOUNTS
+```
+
+네 가지를 컨테이너 안에서 확인한 결과입니다.
+
+| 방법 | 컨테이너가 받는 값 | 채택 |
+|---|---|---|
+| `environment:` + `${VAR}` (규칙 2번 그대로) | 깨짐 | X |
+| `environment:` 목록형 (`- VAR`) | 깨짐 | X |
+| `.env`에서 `$` 를 `$$` 로 이스케이프 | **`$` 하나로 온전히 도착** | **O** |
+| `env_file:` + `format: raw` | 온전히 도착 | X (아래 이유) |
+
+**`.env`에서 `$$` 로 이스케이프하는 쪽을 씁니다.**
+
+```bash
+# .env - $ 를 두 번 씁니다
+ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3,p=4$$..."}]
+```
+
+`env_file` 을 쓰지 않는 이유는 **파일 단위로만 지정되기 때문**입니다. backend 에 `.env` 를
+통째로 물리면 ai-engine 전용인 `ADGEN_MODEL_API_KEY` 까지 backend 컨테이너에 들어갑니다.
+외부에 열리는 것은 8000(backend) 쪽이므로, 유료 키를 그쪽에 함께 두지 않는 현재의 분리를
+유지합니다. 시크릿 전용 `.env` 를 하나 더 두는 안은 `cp .env.example .env` 한 줄로 끝나는
+세팅 절차가 둘로 갈라져 쓰지 않았습니다.
+
+이스케이프를 빠뜨리면 값이 조용히 뭉개지고 증상은 "로그인만 안 됨"으로 나옵니다. 그래서
+**backend 가 기동 시점에 해시 모양을 검사해 거부**합니다 - 사람이 규칙을 기억하는 것에만
+기대지 않기 위해서입니다.
+
 ## 배포
 
 **대상: GCP VM 1대 (GPU 포함), 모노레포 전체를 이 VM 위 compose 스택으로 운영.**

@@ -42,6 +42,17 @@ services:
       # 컨테이너 간 통신은 서비스명으로 합니다(localhost가 아님).
       ADGEN_AI_ENGINE_URL: http://ai-engine:8100
       ADGEN_AI_ENGINE_TIMEOUT_S: ${ADGEN_AI_ENGINE_TIMEOUT_S:-8.0}
+      # ── 인증 (S0) ─────────────────────────────────────────────────────────
+      # ⚠️ ADGEN_ACCOUNTS 의 argon2 해시에는 `$`가 들어갑니다. compose 는 .env 값 안의
+      #    `$`를 **변수 참조로 해석**하므로 `.env` 에서 `$$` 로 이스케이프해야 합니다.
+      #    안 하면 해시가 조용히 뭉개진 채 전달되고 증상은 "로그인만 안 됨"으로 나옵니다
+      #    (실측: README "환경변수 값에 `$`가 들어갈 때"). 뭉개진 값은 backend 가 기동
+      #    시점에 거부하므로 조용히 넘어가지는 않습니다.
+      # ⚠️ 모델 API 키는 여기 넣지 마세요. ai-engine 전용이며, 8000 을 외부에 여는 쪽에
+      #    유료 키를 함께 두지 않는 것이 이 분리의 목적입니다.
+      ADGEN_SESSION_SECRET: ${ADGEN_SESSION_SECRET:-}
+      ADGEN_SESSION_MAX_AGE_S: ${ADGEN_SESSION_MAX_AGE_S:-86400}
+      ADGEN_ACCOUNTS: ${ADGEN_ACCOUNTS:-}
     ports:
       - "8000:8000"
     depends_on:

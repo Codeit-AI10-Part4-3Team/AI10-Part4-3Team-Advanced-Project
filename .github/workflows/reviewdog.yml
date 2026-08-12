@@ -35,7 +35,11 @@ env:
   #    변수 이름을 바꾸면 그 스크립트도 함께 고쳐야 합니다.
   RUFF_VERSION: 0.16.1
   # ruff/pre-commit이 대상으로 삼는 파이썬 경로와 동일하게 유지하세요.
-  PY_PATHS: apps packages scripts e2e
+  # ⚠️ .pre-commit-config.yaml 의 ruff 훅 `files:` 정규식과 같은 집합입니다
+  #    (apps|packages|scripts|e2e|training). training 이 빠져 있던 적이 있는데, 그 폴더에 아직
+  #    .py 가 없어 아무도 눈치채지 못했습니다 — 학습 코드가 들어오는 순간 인라인 코멘트만
+  #    조용히 사라지는 종류의 드리프트입니다.
+  PY_PATHS: apps packages scripts e2e training
 
 jobs:
   ruff:

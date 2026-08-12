@@ -20,7 +20,7 @@
 
 | # | 역할 | 담당자 | GitHub ID | 주요 소유 경로 |
 |---|---|---|---|---|
-| 01 | [기획/총괄 (PM)](01-기획_총괄.md) | 정승호 | `@wjdtmdgh87-lgtm` | `docs/` |
+| 01 | [기획/총괄 (PM)](01-기획_총괄.md) | 정승호 | `@wjdtmdgh87-lgtm` | `*`(기본값, TL과 공동), `docs/adr/` |
 | 02 | [테크리드](02-테크리드.md) | 신호정 | `@Yopkigom` | `packages/contracts/`, `docs/adr/`, `.github/`, `scripts/` |
 | 03 | [AI 엔지니어 (생성·서빙)](03-AI_생성_서빙.md) | 임유빈 | `@dlqhfl1129-blip` | `apps/ai-engine/` |
 | 04 | [AI 엔지니어 (학습·데이터)](04-AI_학습_데이터.md) | 임유빈 | `@dlqhfl1129-blip` | `training/` |
@@ -72,9 +72,10 @@
 - [x] 배정된 GitHub ID가 **실제 존재하고 이 저장소에 write 권한**이 있는가 - PR 리뷰가 실제로
       배정되는 것으로 확인 (없는 계정은 오류 없이 조용히 무시됩니다)
 - [x] 각 역할 파일의 "인수인계 시 넘겨야 하는 것" 절이 비어 있지 않은가 - 7개 파일 모두 채워짐
-- [ ] 배정 확정 후 `bash scripts/setup-github.sh Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project` **재실행**
-      (자리표시자 상태에서는 코드오너 리뷰 요구가 자동으로 꺼져 있습니다)
+- [x] 배정 확정 후 `bash scripts/setup-github.sh Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project` **재실행**
+      (자리표시자 상태에서는 코드오너 리뷰 요구가 자동으로 꺼져 있습니다) - **확인 2026-08-12**:
+      `gh api repos/:owner/:repo/branches/main/protection` 에서 `require_code_owner_reviews: true`
 
-**마지막 항목은 실행 여부가 확인되지 않았습니다.** 재실행하지 않으면 CODEOWNERS를 채워 두고도
-코드오너 리뷰가 required가 아닌 상태로 남습니다. 확인 방법은
-[저장소_운영.md](../공통_가이드/저장소_운영.md)를 보세요.
+넷 모두 충족된 상태입니다. 배정을 바꾸면 같은 순서로 다시 확인하세요 — 특히 마지막 항목은
+CODEOWNERS를 채워 두고도 재실행을 빠뜨리면 코드오너 리뷰가 required가 아닌 상태로 남습니다.
+확인 방법은 [저장소_운영.md](../공통_가이드/저장소_운영.md)를 보세요.

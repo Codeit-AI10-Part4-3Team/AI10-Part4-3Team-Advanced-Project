@@ -2,19 +2,32 @@ openapi: 3.1.0
 
 # 모듈 간 계약의 단일 원천입니다. 구현보다 먼저 여기에 존재해야 하고, 구두 합의는 계약이
 # 아닙니다. 스펙 문법은 CI(.github/workflows/contracts-check.yml)가 검증하지만,
-# 계약↔구현 드리프트는 각 앱의 계약 준수 테스트가 잡습니다 — 둘 다 필요합니다.
+# 계약과 구현의 드리프트는 각 앱의 계약 준수 테스트가 잡습니다 - 둘 다 필요합니다.
 #
-# 필드는 camelCase(파이썬 코드는 snake_case, pydantic alias로 매핑).
+# 의도의 정본은 docs/기술문서/API_계약.md, 뜻의 정본은 docs/기술문서/도메인_모델.md,
+# 이름의 정본은 docs/기술문서/용어_사전.md 입니다. 이 파일은 그 셋을 HTTP로 투영한 것이며
+# 여기서 새 이름을 짓지 않습니다.
+#
+# 규약 넷 (README.md 와 API_계약.md 3절):
+#   1. 필드는 camelCase (파이썬 코드는 snake_case, pydantic alias 로 매핑)
+#   2. 열거값은 소문자 snake_case, 오류 코드는 대문자 SNAKE_CASE
+#   3. 알 수 없는 필드는 거부 (additionalProperties: false)
+#   4. null 은 계약 전체에서 금지. "비어 있음"은 빈 문자열 "", "없음"은 키 생략
+#
 # 태그로 소유를 구분합니다:
-#   ask        — 프론트엔드가 호출하는 backend의 공개 경로
-#   generation — backend가 호출하는 ai-engine의 내부 경로 (⚠️ 외부 노출 금지)
+#   auth catalog sessions jobs - 프론트엔드가 호출하는 backend 의 공개 경로
+#   generation                 - backend 가 호출하는 ai-engine 의 내부 경로 (외부 노출 금지)
 
 info:
   title: adgen API contract
-  version: 0.1.0
+  version: 0.2.0
   description: |
     backend(공개) + ai-engine(내부) 계약. 서버가 둘이므로 `servers`는 대표값만 두고,
     각 경로의 태그로 어느 서비스의 것인지 구분합니다.
+
+    되돌릴 수 없는 문이 둘 있습니다. `POST /v1/sessions/{id}/draft`에서 브리프가 잠기고
+    (INV-7), `POST /v1/sessions/{id}/finalize`에서 시안이 잠깁니다 (INV-2).
+    다만 시안 생성이 실패하면 브리프 잠금은 풀립니다 (ADR-0012).
 
 servers:
   - url: http://localhost:8000
@@ -23,15 +36,27 @@ servers:
     description: ai-engine (internal only)
 
 tags:
-  - name: ask
-    description: 프론트엔드 → backend
+  - name: auth
+    description: 로그인과 계정 (frontend -> backend)
+  - name: catalog
+    description: 출력 유형과 화풍 후보 (frontend -> backend)
+  - name: sessions
+    description: 제작 1건의 수명 전체 (frontend -> backend)
+  - name: jobs
+    description: 렌더 잡 조회 (frontend -> backend)
   - name: generation
-    description: backend → ai-engine (인증 없음 — 외부에 열지 말 것)
+    description: backend -> ai-engine (인증 없음 - 외부에 열지 말 것)
+
+# 보호 범위는 /health 와 /v1/auth/* 를 뺀 모든 /v1 경로입니다 (API_계약.md 6절).
+# 내부 경로(generation)는 이 인증을 쓰지 않으며, 외부에 열지 않는 것이 그쪽의 방어선입니다.
+security:
+  - sessionCookie: []
 
 paths:
   /health:
     get:
       summary: Liveness probe
+      security: []
       description: |
         의존 서비스 상태를 확인하지 않습니다. 의존성 헬스를 liveness에 접으면
         멀쩡히 살아 있는 프로세스를 오케스트레이터가 재시작합니다.
@@ -42,125 +67,1244 @@ paths:
             application/json:
               schema:
                 type: object
+                additionalProperties: false
                 properties:
                   status: { type: string, enum: [ok] }
                 required: [status]
 
-  /v1/ask:
+  # ---- auth ------------------------------------------------------------------
+
+  /v1/auth/login:
     post:
-      tags: [ask]
-      summary: 질문에 답한다 (근거 없으면 폴백)
+      tags: [auth]
+      summary: 로그인
+      security: []
       description: |
-        항상 200입니다. 근거 생성에 실패하거나 ai-engine이 죽어 있으면
-        `messageMode: official_fallback`으로 사전 승인 문안을 돌려줍니다 —
-        열화 경로는 오류가 아니라 설계된 응답입니다.
+        성공하면 `HttpOnly` 쿠키로 토큰을 내려보냅니다. 수명은 24시간 고정이고 갱신 경로를
+        두지 않습니다 (세션_보관_정책.md 1.4절).
+
+        아이디 오류와 비밀번호 오류를 구분하지 않습니다. 구분하면 아이디 존재 여부가
+        새어 나갑니다 - 둘 다 `INVALID_CREDENTIALS`입니다.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/AskRequest" }
+            schema: { $ref: "#/components/schemas/LoginRequest" }
       responses:
         "200":
-          description: 답변 또는 폴백
+          description: 로그인 성공
+          headers:
+            Set-Cookie:
+              description: "`session_token=<token>; HttpOnly; Secure; SameSite=Lax; Max-Age=86400`"
+              schema: { type: string }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Answer" }
+              schema: { $ref: "#/components/schemas/Me" }
+        "401":
+          $ref: "#/components/responses/InvalidCredentials"
         "422":
-          description: 요청 형식 오류 (알 수 없는 필드 포함 — 조용히 무시하지 않습니다)
+          $ref: "#/components/responses/InvalidRequest"
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: 로그아웃
+      responses:
+        "204":
+          description: 로그아웃됨. 쿠키를 만료시킵니다
+          headers:
+            Set-Cookie:
+              description: "`session_token=; Max-Age=0`"
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/auth/signup:
+    post:
+      tags: [auth]
+      summary: 계정 생성 (구현하지 않음)
+      security: []
+      description: |
+        계약에만 두고 구현하지 않습니다 (ADR-0008). 워킹 스켈레톤은 미리 만들어 둔 고정 계정
+        둘로 조회와 대조만 합니다.
+
+        404가 아니라 501인 이유는 **404로 두면 오타와 구분되지 않기** 때문입니다.
+        200으로 두면 되지 않은 일이 된 것처럼 보입니다.
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  /v1/me:
+    get:
+      tags: [auth]
+      summary: 로그인한 사용자 확인
+      description: |
+        주의: 같은 경로라도 메서드마다 다릅니다. **조회는 구현하고**, 지우거나 고치는
+        메서드만 501입니다.
+      responses:
+        "200":
+          description: 현재 사용자
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [auth]
+      summary: 탈퇴 (구현하지 않음)
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  /v1/me/password:
+    patch:
+      tags: [auth]
+      summary: 비밀번호 변경 (구현하지 않음)
+      description: |
+        재설정도 1차 범위 밖입니다. 메일 발송 경로가 없기 때문이며, 잊으면 계정을 다시
+        만듭니다 (세션_보관_정책.md 1.2절).
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  # ---- catalog ---------------------------------------------------------------
+
+  /v1/templates:
+    get:
+      tags: [catalog]
+      summary: 출력 유형 목록 + 예시 이미지
+      description: |
+        화면 문구는 "템플릿"이지만 고르는 대상은 만화형 / 단일 광고형입니다. 코드에서
+        `template`은 프롬프트 템플릿과 충돌하므로 도메인 식별자로 쓰지 않습니다
+        (용어_사전.md 1.2절).
+      responses:
+        "200":
+          description: 출력 유형 2종
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Template" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/art-styles:
+    get:
+      tags: [catalog]
+      summary: 화풍 후보 + 예시 이미지
+      description: |
+        제시 방식은 레퍼런스 이미지 동반으로 확정되었습니다 (2026-08-11 회의).
+
+        주의: **후보 목록 자체는 아직 미확정입니다** (기획서 18.1 #3, 미결정 대장 A절 3번).
+        이 경로의 응답 모양은 확정이고, 그 안에 실릴 값이 아직 없습니다. 목록이 정해질 때
+        바뀌는 것은 데이터뿐이며 이 스키마는 그대로입니다.
+      responses:
+        "200":
+          description: 화풍 후보 목록
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ArtStyle" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---- sessions --------------------------------------------------------------
+
+  /v1/sessions:
+    get:
+      tags: [sessions]
+      summary: 내 세션 목록
+      description: |
+        1차에서 계정이 하는 일은 여기까지입니다 - 내 세션 목록을 되찾는 것
+        (세션_보관_정책.md 1.3절). 목록에는 시안 본문을 싣지 않습니다.
+      responses:
+        "200":
+          description: 세션 요약 목록. 최신순
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SessionSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [sessions]
+      summary: 입력 접수 + 브리프 채우기
+      description: |
+        사진과 제품 정보를 **한 번에** 받습니다. 업로드를 별도 경로로 분리하지 않는 이유는
+        왕복이 둘로 늘고 "어느 세션에도 속하지 않은 이미지"라는 상태가 새로 생기기 때문입니다
+        (API_계약.md 8.1절).
+
+        응답이 201이라고 브리프가 다 채워진 것은 아닙니다. 세 갈래를 `state`와 키의 유무로
+        구분하세요:
+
+        | 상황 | state | 함께 오는 것 |
+        |---|---|---|
+        | 정상 | `brief_ready` | `messageMode: normal` |
+        | 추론이 돌았지만 판단이 서지 않음 | `brief_filling` | `needsInput` |
+        | 추론 자체가 못 돌았음 (의존 장애) | `brief_filling` | `messageMode: degraded` |
+
+        뒤의 둘은 **오류가 아닙니다.** 정보 부족은 대화의 한 단계이고(기획서 9.3), 의존 장애는
+        설계된 열화입니다(ADR-0005). 둘을 가르는 근거는 `needsInput` 키의 유무입니다.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/SessionCreateRequest" }
+            encoding:
+              productImage:
+                contentType: image/jpeg, image/png, image/webp
+      responses:
+        "201":
+          description: 세션 생성됨
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: |
+            입력 형식 오류(`INVALID_REQUEST`) 또는 이미지 규격 오류(`INVALID_IMAGE`).
+            초과 입력은 잘라내지 않고 거절합니다 - 조용히 자르면 사용자가 쓴 소구점의
+            뒷부분이 광고에서 사라진 이유를 아무도 설명하지 못합니다.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /v1/generate:
-    post:
-      tags: [generation]
-      summary: 근거 기반 생성 (ai-engine 내부 경로)
+  /v1/sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      summary: 현재 상태 + 브리프 + 시안
       description: |
-        `answer: null`은 **정상 거절**이며 200입니다 — 지어내지 않고 물러선 상태입니다.
-        키를 생략하면 호출자가 "거절"과 "응답 누락"을 구분할 수 없으므로 항상 포함합니다.
-        503은 모델/벡터DB가 사용 불가인 경우이며, 호출자는 타임아웃과 동일하게 취급합니다.
+        남의 세션은 403이 아니라 **404**입니다. 403은 "있지만 당신 것이 아니다"를 알려 주므로
+        `sessionId`를 훑으며 존재 여부를 캐낼 수 있습니다 (INV-9).
+      responses:
+        "200":
+          description: 세션 전체
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/sessions/{sessionId}/brief:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    patch:
+      tags: [sessions]
+      summary: 브리프 부분 교체
+      description: |
+        **클라이언트가 전체 문서를 되돌려 보내지 않습니다.** 그러면 서버가 원문을 유지하는
+        것이 아니라 클라이언트가 유지하는 것이 되고, 화면의 버그가 브리프 원문을 조용히
+        덮어씁니다.
+
+        `needsInput`이 걸린 세션에서 `note`를 채우면 서버가 추론을 다시 시도합니다.
+        `messageMode: degraded`인 세션에서는 `category`와 `target`을 사용자가 직접 채워야
+        `brief_ready`로 넘어갑니다.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GenerateRequest" }
+            schema: { $ref: "#/components/schemas/BriefPatchRequest" }
       responses:
         "200":
-          description: 생성 결과 또는 거절
+          description: 교체됨. `revision`이 1 증가합니다
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GenerateResponse" }
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: |
+            `INVALID_REQUEST`(형식 오류, `null` 포함, hidden 필드 지정) 또는
+            `INSUFFICIENT_INPUT`(재입력 후에도 추론 실패. 세션은 `failed`가 되고 되돌아오는
+            간선이 없으므로 새 세션을 만들어야 합니다).
+
+            주의: 첫 요청(`POST /v1/sessions`)의 정보 부족은 **201**입니다. 422가 나오는 것은
+            재입력 후에도 실패한 이 시점뿐입니다. `INSUFFICIENT_INPUT` 처리는 아직 잠정안이며
+            확정은 기획서 18.2 #11입니다.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/sessions/{sessionId}/draft:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      summary: 시안 생성
+      description: |
+        **이 요청이 브리프를 잠급니다** (INV-7). 시안이 브리프에서 나온 산출물이라, 근거가
+        나중에 바뀌면 시안이 무엇에 근거했는지 알 수 없게 됩니다. 그래서 `brief_ready` 화면이
+        되돌릴 수 없는 마지막 확인 지점이며, 화면이 그 사실을 알려 주어야 합니다.
+
+        **단, 생성이 실패하면 잠금이 풀립니다.** 세션은 `brief_ready`로 되돌아가고 브리프를
+        고쳐서 다시 요청할 수 있습니다 (ADR-0012). 시안이 없으면 지켜야 할 근거 대응 자체가
+        없기 때문입니다.
+
+        동기입니다. 상한 60초이고 초과하면 `GENERATION_TIMEOUT`입니다. 이미지가 아니라
+        텍스트 생성이라 폴링 경로를 하나 더 만들 만한 길이가 아닙니다 (API_계약.md 2절).
+      responses:
+        "200":
+          description: 시안 생성됨. `state`가 `draft_ready`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: "`CONTENT_POLICY_REJECTED` - 재생성 1회 후에도 가드레일을 통과하지 못했습니다"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: 모델/인덱스 사용 불가 (호출자는 폴백으로 전환)
+          $ref: "#/components/responses/UpstreamUnavailable"
+        "504":
+          $ref: "#/components/responses/GenerationTimeout"
+
+    patch:
+      tags: [sessions]
+      summary: 시안 부분 교체
+      description: |
+        실패해도 세션은 `draft_ready`에 남고 기존 시안이 그대로 있습니다. 교체 대상 밖의
+        필드는 서버가 원문을 그대로 되돌려 놓습니다.
+
+        `adPlan`과 `role`은 교체 대상이 아닙니다 (INV-8, INV-5). `adPlan`은 브리프와 내용이
+        겹쳐 따로 고칠 수 있게 두면 둘이 서로 다른 말을 하고, `role`은 6단계 구성 자체가
+        기획의 근거이기 때문입니다. 고칠 것이 있으면 브리프를 고치고 시안을 다시 만듭니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DraftPatchRequest" }
+      responses:
+        "200":
+          description: 교체됨. `revision`이 1 증가합니다
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: "`INVALID_REQUEST`(교체 대상이 아닌 필드 포함) 또는 `CONTENT_POLICY_REJECTED`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
+        "504":
+          $ref: "#/components/responses/GenerationTimeout"
+
+  /v1/sessions/{sessionId}/finalize:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      summary: 확정 + 렌더 잡 접수
+      description: |
+        **동기와 비동기가 갈리는 유일한 지점입니다.** 여기 앞은 전부 응답을 기다리고, 여기
+        뒤만 잡과 폴링입니다. 이미지 한 장에 수 분이 걸려 요청을 붙들면 타임아웃에 먼저
+        걸립니다.
+
+        확정 이후 모든 patch는 409입니다 (INV-2). 렌더는 세션당 1회이며, 이것이 비용
+        방어선입니다 (INV-3). 두 불변식의 근거인 ADR-0006은 아직 `Proposed`입니다.
+      responses:
+        "202":
+          description: 잡 접수됨. `state`가 `finalized`를 거쳐 `rendering`이 됩니다
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinalizeAccepted" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/jobs/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [jobs]
+      summary: 렌더 진행 상태 조회
+      description: |
+        **렌더가 실패해도 200입니다.** 조회는 성공했고 잡이 실패한 것이므로, HTTP 오류로
+        만들면 클라이언트가 "조회 실패"와 "렌더 실패"를 구분하지 못합니다. 실패 사유는
+        응답 본문의 `error.code`에 있습니다.
+
+        폴링 간격은 서버가 `Retry-After`로 알려주고 클라이언트는 그 값을 따릅니다.
+        **간격을 클라이언트에 하드코딩하지 마세요** - 서버가 늘려도 따라오지 않으면 큐가
+        밀릴 때 조회 부하만 늡니다. 초기값 3초이며 설정값입니다.
+
+        브라우저를 닫아도 `jobId`로 회수할 수 있습니다.
+
+        주의: 잡의 `done`과 세션의 `completed`는 **다른 층**입니다 (용어_사전.md 1.4절).
+      responses:
+        "200":
+          description: 잡 상태. 성공 실패 모두 여기로 옵니다
+          headers:
+            Retry-After:
+              description: 다음 조회까지 기다릴 초. `queued` / `running`일 때만 실립니다
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ---- generation (ai-engine 내부. 외부에 열지 말 것) --------------------------
+  #
+  # 콜론 표기(:fill)는 리소스가 아니라 **동작**임을 드러내기 위한 것입니다. 내부 경로는
+  # CRUD가 아니라 파이프라인 단계 호출이므로 REST 리소스로 위장시키지 않습니다.
+
+  /v1/brief:fill:
+    post:
+      tags: [generation]
+      summary: 사진과 제품 정보에서 카테고리 / 타겟 추론
+      security: []
+      description: |
+        **폴백이 있는 유일한 단계입니다** (ADR-0005). 이 호출이 죽거나 15초 상한을 넘기면
+        backend는 자동 채움을 건너뛰고 `messageMode: degraded`로 진행합니다. 나머지 세
+        단계에는 폴백이 없습니다.
+
+        판단이 서지 않으면 오류가 아니라 `needsInput`을 담아 200으로 돌려줍니다. 그때
+        `category`와 `target`은 빈 문자열입니다.
+
+        이미지를 multipart로 받는 이유는 base64가 본문을 3분의 4로 불리기 때문이고, 로컬
+        경로로 넘기지 않는 이유는 두 앱의 허용된 결합이 HTTP 계약뿐이기 때문입니다.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/BriefFillRequest" }
+      responses:
+        "200":
+          description: 추론 결과 또는 추가 입력 요구
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BriefFillResponse" }
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /v1/draft:generate:
+    post:
+      tags: [generation]
+      summary: 브리프에서 시안 생성
+      security: []
+      description: |
+        **모델 호출이 실패했을 때 규칙 기반으로 카피를 조립하지 마세요.** 그것이 곧 입력에
+        없는 주장을 내보내는 경로입니다. 카피는 제품마다 달라 사전 승인 응답이 성립하지
+        않으므로 이 단계는 폴백 없이 명시적으로 실패합니다.
+
+        가드레일은 근거(`sellingPoint` + `note`) 밖의 수치 효능 성분 수상 이력 타사 비교를
+        걸러냅니다. `category`와 `target`은 추론값이므로 **근거가 아닙니다**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DraftGenerateRequest" }
+      responses:
+        "200":
+          description: 시안 또는 정상 거절
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DraftGenerateResponse" }
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /v1/draft:patch:
+    post:
+      tags: [generation]
+      summary: 지정 부분만 재생성
+      security: []
+      description: |
+        **모델에게 전체를 다시 쓰게 하지 않습니다.** 전체 재생성 후 diff를 취하는 방식은
+        지정하지 않은 컷의 대사까지 조용히 바뀌므로 채택하지 않습니다.
+
+        엔진은 `adPlan`을 받지 않습니다. 서버가 422로 먼저 거절하지만, 계약에서도 받을 자리를
+        두지 않습니다 (INV-8).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DraftPatchEngineRequest" }
+      responses:
+        "200":
+          description: 지정 부분만 바뀐 시안 또는 정상 거절
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DraftGenerateResponse" }
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /v1/image:render:
+    post:
+      tags: [generation]
+      summary: 최종 이미지 1장 생성
+      security: []
+      description: |
+        이미지 바이트를 그대로 돌려줍니다. 저장 위치를 엔진이 정하면 backend 와 파일 경로를
+        공유하게 되고, 그 순간 두 앱의 결합이 HTTP 계약 밖으로 새어 나갑니다.
+
+        호출자(backend)는 이 호출을 **잡 안에서** 부릅니다. 응답을 기다리는 것은 잡 워커이지
+        사용자 요청이 아닙니다.
+
+        만화형은 3456 x 2304 (칸당 1152 x 1152) 고정입니다. 단일 광고형의 실제 픽셀 값은
+        아직 미정입니다 (기획서 18.1 #8).
+
+        **형식은 무손실 WebP 입니다.** 손실 압축을 쓰지 않는 이유는 만화형 이미지에 한국어
+        대사가 그려져 들어가고, 검증 1순위 지표가 그 글자의 오탈자 비율이기 때문입니다 -
+        손실 압축을 거친 이미지를 채점하면 모델의 렌더링 정확도가 아니라 압축 아티팩트를
+        재게 됩니다. 사용자에게 내려보내는 파일의 형식은 이것과 별개이며 backend 소관입니다.
+
+        주의: **이 경로의 응답 형태는 바뀔 수 있습니다.** 알려진 경로가 둘입니다 -
+        대사 렌더링이 예비안(말풍선만 그리고 글자는 합성)으로 뒤집히면 출력이 이미지 1장에서
+        이미지 + 좌표 정보가 되고 (생성_파이프라인.md 7절), 컷 경계 제어가 실패해 컷별 제작으로
+        가면 이미지가 1장에서 6장이 됩니다 (기획서 18.1 #2). 둘 다 실험 결과에 종속되므로
+        지금 계약에 반영하지 않습니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImageRenderRequest" }
+      responses:
+        "200":
+          description: 이미지 1장 (무손실 WebP)
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
+        "422":
+          description: "`INVALID_REQUEST` 또는 `CONTENT_POLICY_REJECTED`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
+        "504":
+          $ref: "#/components/responses/GenerationTimeout"
 
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session_token
+      description: |
+        로그인 시 발급되는 `HttpOnly` 쿠키. **`localStorage`에 두지 않습니다** - XSS 한 번에
+        그대로 새어 나갑니다. 수명 24시간 고정, 갱신 없음, 슬라이딩 만료 없음.
+
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      description: |
+        제작 1건의 식별자입니다. 사람 한 명을 가리키는 `userId` 와 다릅니다 - 한 사용자가
+        세션 여러 개를 가집니다.
+
+        **이 값을 아는 것이 접근 권한이 되지는 않습니다.** 접근 제어는 로그인 세션이 하며,
+        소유자가 아닌 요청은 404 입니다 (INV-9). 따라서 이 경로는 **공유 가능한 링크가
+        아닙니다** - 남에게 URL 을 넘겨도 그 사람에게는 열리지 않습니다.
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: "`UNAUTHORIZED` - 미인증이거나 토큰이 만료되었습니다. 로그인 화면으로 보내세요"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InvalidCredentials:
+      description: "`INVALID_CREDENTIALS` - 아이디 오류와 비밀번호 오류를 구분하지 않습니다"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: "`NOT_FOUND` - 없거나, 남의 것입니다. 둘을 구분하지 않습니다 (INV-9)"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: |
+        `REVISION_CONFLICT`(`revision` 불일치. 다시 읽고 재시도하면 됩니다) 또는
+        `STATE_CONFLICT`(지금 상태에서 허용되지 않는 요청. 확정 이후 수정 시도 등).
+
+        **둘은 재시도 가능 여부가 정반대입니다.** 앞은 되고 뒤는 안 되므로 `code`로
+        분기하세요.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InvalidRequest:
+      description: |
+        `INVALID_REQUEST` - 형식 오류입니다. 알 수 없는 필드도 여기로 떨어집니다
+        (조용히 무시하지 않습니다). `null`이 나타나도 여기입니다.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotImplemented:
+      description: "`NOT_IMPLEMENTED` - 계약에는 있지만 1차 범위가 아닙니다 (ADR-0008)"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UpstreamUnavailable:
+      description: "`UPSTREAM_UNAVAILABLE` - 모델 API 를 쓸 수 없습니다. 사용자 재시도 가능"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    GenerationTimeout:
+      description: |
+        `GENERATION_TIMEOUT` - 서버측 상한을 넘겼습니다 (`draft:*` 60초).
+        상한은 설정값이며 코드 상수가 아닙니다.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
   schemas:
-    AskRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        question: { type: string, minLength: 1, maxLength: 500 }
-        locale: { type: string, default: ko }
-      required: [question]
-
-    Answer:
-      type: object
-      additionalProperties: false
-      properties:
-        text: { type: string }
-        messageMode:
-          type: string
-          enum: [grounded, official_fallback]
-          description: grounded=근거 기반 생성, official_fallback=사전 승인 문안
-        sources:
-          type: array
-          items: { $ref: "#/components/schemas/Source" }
-      required: [text, messageMode, sources]
-
-    GenerateRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        question: { type: string, minLength: 1, maxLength: 500 }
-        locale: { type: string, default: ko }
-      required: [question]
-
-    GenerateResponse:
-      type: object
-      additionalProperties: false
-      properties:
-        answer:
-          type: [string, "null"]
-          description: null = 근거 부족/가드레일 위반으로 인한 정상 거절
-        sources:
-          type: array
-          items: { $ref: "#/components/schemas/Source" }
-        refusalReason:
-          type: [string, "null"]
-          enum: [no_evidence, guardrail, null]
-        guardrailApplied:
-          type: boolean
-          description: |
-            false는 가드레일 **대조군** 실행을 뜻합니다. 검증된 출력과 구분되어야 하므로
-            응답에 항상 표기합니다.
-      required: [answer, sources, refusalReason, guardrailApplied]
-
-    Source:
-      type: object
-      additionalProperties: false
-      properties:
-        title: { type: string }
-        quote: { type: string }
-        url: { type: [string, "null"] }
-      required: [title, quote, url]
+    # ---- 공통 ---------------------------------------------------------------
 
     Error:
       type: object
       additionalProperties: false
-      description: FastAPI 기본 `{detail}`이 아니라 `{code, message}` — 클라이언트가 code로 분기합니다.
+      description: |
+        FastAPI 기본 `{detail}`이 아니라 `{code, message}`입니다. 클라이언트는 `code`로
+        분기하고 `message`는 사람에게 보여 줍니다.
+
+        지금 내려보내는 `message`는 **개발용**이며 원인 파악이 목적입니다. 사용자용 문구는
+        배포 단계 소관입니다 (기획서 17.2).
       properties:
-        code:
-          type: string
-          enum: [INVALID_REQUEST, NOT_FOUND, RATE_LIMITED, UPSTREAM_UNAVAILABLE, INTERNAL]
+        code: { $ref: "#/components/schemas/ErrorCode" }
         message: { type: string }
       required: [code, message]
+
+    ErrorCode:
+      type: string
+      description: |
+        전부 15종입니다. **코드는 화면 분기가 달라질 때만 추가합니다** - 분기가 같은 코드를
+        늘리면 클라이언트가 전부 `default`로 떨어뜨립니다.
+
+        `DUPLICATE_ACCOUNT`와 `RATE_LIMITED`는 1차에서 발생 지점이 없습니다(회원가입이 501이고,
+        사용량 제한이 범위 밖). 그래도 계약에 두는 이유는 나중에 붙일 때 코드가 달라지면
+        화면을 다시 고쳐야 하기 때문입니다.
+      enum:
+        - INVALID_REQUEST
+        - NOT_FOUND
+        - UNAUTHORIZED
+        - INVALID_CREDENTIALS
+        - DUPLICATE_ACCOUNT
+        - NOT_IMPLEMENTED
+        - RATE_LIMITED
+        - UPSTREAM_UNAVAILABLE
+        - INTERNAL
+        - INSUFFICIENT_INPUT
+        - INVALID_IMAGE
+        - CONTENT_POLICY_REJECTED
+        - GENERATION_TIMEOUT
+        - REVISION_CONFLICT
+        - STATE_CONFLICT
+
+    OutputType:
+      type: string
+      enum: [comic, single_ad]
+      description: 세션 생성 시 고정입니다. 바꾸려면 새 세션입니다
+
+    MessageMode:
+      type: string
+      enum: [normal, degraded]
+      description: |
+        `degraded`는 `brief:fill`을 건너뛰고 사용자 입력으로 진행했다는 뜻입니다.
+        **한 번 `degraded`가 되면 그 세션은 끝까지 `degraded`입니다** - 되돌아가지 않습니다.
+
+        가드레일 대조 실행과 함께 보고 지표로 쓰이므로 값이 남지 않으면 측정이 무효가 됩니다.
+
+    # ---- auth ---------------------------------------------------------------
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        loginId: { type: string, minLength: 1, maxLength: 64 }
+        password:
+          type: string
+          minLength: 1
+          description: |
+            **요청 본문에만 존재합니다.** 저장되는 것은 `passwordHash`뿐이고 응답에 실리지
+            않습니다. 요청 본문 전체를 찍는 디버그 로그가 가장 흔한 사고입니다.
+      required: [loginId, password]
+
+    Me:
+      type: object
+      additionalProperties: false
+      description: 프로필, 표시 이름, 이메일은 두지 않습니다 - 이메일은 두는 순간 개인정보 보관 항목이 하나 늡니다
+      properties:
+        userId: { type: string, format: uuid, description: 다른 데이터가 참조하는 것은 이쪽입니다 }
+        loginId: { type: string, description: 사용자가 입력하는 아이디. 바뀔 수 있습니다 }
+        createdAt: { type: string, format: date-time }
+      required: [userId, loginId, createdAt]
+
+    # ---- catalog ------------------------------------------------------------
+
+    Template:
+      type: object
+      additionalProperties: false
+      properties:
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        name: { type: string, description: 화면 문구. "만화형" / "단일 광고형" }
+        exampleImageUrl: { type: string }
+      required: [outputType, name, exampleImageUrl]
+
+    ArtStyle:
+      type: object
+      additionalProperties: false
+      properties:
+        artStyleId: { type: string, description: "`brief.artStyle`에 실리는 값" }
+        name: { type: string }
+        exampleImageUrl: { type: string, description: 레퍼런스 이미지. 2026-08-11 회의에서 동반 제시로 확정 }
+      required: [artStyleId, name, exampleImageUrl]
+
+    # ---- session ------------------------------------------------------------
+
+    SessionState:
+      type: string
+      enum:
+        - created
+        - brief_filling
+        - brief_ready
+        - draft_generating
+        - draft_ready
+        - finalized
+        - rendering
+        - completed
+        - failed
+      description: |
+        상태도의 정본은 용어_사전.md 3.1절입니다. 잡의 `status`와 **다른 층**이며, 세션 쪽
+        성공은 `done`이 아니라 `completed`입니다.
+
+        `failed`에서 되돌아오는 간선은 없습니다. 그 세션은 끝나고 새 세션을 만듭니다.
+
+    SessionSummary:
+      type: object
+      additionalProperties: false
+      description: 목록용. 시안 본문을 싣지 않습니다
+      properties:
+        sessionId: { type: string, format: uuid }
+        state: { $ref: "#/components/schemas/SessionState" }
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        productName: { type: string }
+        messageMode: { $ref: "#/components/schemas/MessageMode" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [sessionId, state, outputType, productName, messageMode, createdAt, updatedAt]
+
+    Session:
+      type: object
+      additionalProperties: false
+      description: |
+        키의 부재가 여러 뜻으로 쓰입니다. 응답에서는 **"이 유형에 해당 없음"**(만화형의
+        `aspectRatio`)이거나 **"아직 없음"**(확정 전의 `jobId`, 시안 생성 전의 `draft`)입니다.
+        둘을 구분하지 않는 이유는 클라이언트의 처리가 같기 때문이고, 왜 없는지는 `state`가
+        이미 말해 줍니다.
+
+        **모든 세션에는 소유자가 있습니다.** 다만 `userId` 는 응답에 싣지 않습니다 - 소유자가
+        아닌 세션은 애초에 404 라(INV-9) 여기 오는 것은 **전부 요청자 본인의 것**이고,
+        따라서 클라이언트가 그 값으로 비교할 대상이 없습니다.
+
+        값을 실어 보내면 화면이 `session.userId === me.userId` 같은 검사를 짜게 되는데,
+        그것은 언제나 참이라 보안 검사처럼 보이는 죽은 코드가 됩니다. 소유권 판정은 서버
+        한 곳에만 둡니다.
+      properties:
+        sessionId: { type: string, format: uuid }
+        state: { $ref: "#/components/schemas/SessionState" }
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        revision: { type: integer, minimum: 0, description: 부분 교체마다 1 증가합니다 }
+        messageMode: { $ref: "#/components/schemas/MessageMode" }
+        brief: { $ref: "#/components/schemas/Brief" }
+        briefMeta: { $ref: "#/components/schemas/BriefMeta" }
+        draft:
+          description: 시안 생성 전에는 키가 없습니다
+          oneOf:
+            - $ref: "#/components/schemas/ComicDraft"
+            - $ref: "#/components/schemas/SingleAdDraft"
+        needsInput: { $ref: "#/components/schemas/NeedsInput" }
+        jobId: { type: string, description: 확정 전에는 키가 없습니다 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required:
+        - sessionId
+        - state
+        - outputType
+        - revision
+        - messageMode
+        - brief
+        - briefMeta
+        - createdAt
+        - updatedAt
+
+    NeedsInput:
+      type: object
+      additionalProperties: false
+      description: |
+        추론이 돌았는데 판단이 서지 않은 경우입니다. **의존 장애로 인한 열화에는 쓰지
+        않습니다** - 그쪽은 못 채운 필드가 둘이라 이 단수 객체에 담기지 않고,
+        `messageMode: degraded`로 표현합니다.
+
+        응답 전용이 아니라 **세션에 저장합니다.** 응답할 때마다 다시 계산하면 `reason` 문구가
+        조회할 때마다 달라지고 그때마다 모델을 다시 부르게 됩니다. 채워지면 키를 지웁니다.
+      properties:
+        field: { type: string, description: 채워 달라고 요구하는 브리프 필드 이름 }
+        reason: { type: string, description: 사람에게 보여 줄 문장 }
+      required: [field, reason]
+
+    # ---- brief --------------------------------------------------------------
+
+    Brief:
+      type: object
+      additionalProperties: false
+      description: |
+        사용자 입력과 자동 채움이 합쳐진 결과입니다. **고칠 수 있는 구간은 `brief_ready`
+        까지입니다.**
+
+        `outputType`은 여기 없습니다 - 세션에 하나만 둡니다. 사본을 두면 부분 교체로 한쪽만
+        바뀌었을 때 어느 쪽이 참인지 정하는 규칙이 또 필요해집니다.
+
+        `panelCount`도 여기 없습니다. `visibility: hidden`이라 `brief`와 `briefMeta` **양쪽에서
+        빠진 채** 응답합니다 - 보이지 않아야 하는 값을 실어 보내고 화면에서 감추는 것은
+        감춘 것이 아닙니다.
+
+        **적용되지 않는 유형에서는 필드 자체가 없습니다.** 만화형에 `aspectRatio`가 없고
+        단일 광고형에 `character`가 없습니다.
+      properties:
+        productImageUrl:
+          type: string
+          description: |
+            업로드한 사진 1장의 참조 URL. 보존 24시간입니다 (세션_보관_정책.md 2절).
+
+            **업로드 필드와 이름이 다릅니다.** 올릴 때는 `productImage`(파일 자체)이고 읽을
+            때는 `productImageUrl`(참조)입니다. 같은 것의 두 표현이 아니라 서로 다른 것이라
+            이름을 갈랐습니다 - `JobResult.imageUrl` 과 모양을 맞춘 쪽이 이쪽입니다.
+        productName: { type: string, minLength: 1, maxLength: 40 }
+        sellingPoint:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 가드레일의 **근거 원문**입니다. 여기에 없는 수치와 효능은 생성물에 등장할 수 없습니다
+        note:
+          type: string
+          maxLength: 500
+          description: 선택 항목. 비어 있으면 `null`이 아니라 빈 문자열입니다
+        category: { type: string, description: 추론값. **가드레일의 근거가 아닙니다** }
+        target: { type: string, description: 추론값. **가드레일의 근거가 아닙니다** }
+        artStyle:
+          type: string
+          description: |
+            화풍 후보 목록 안의 값입니다. 미선택 시 `randomFill`이 채우고 `filledBy: random`으로
+            기록됩니다. 목록 자체는 미확정입니다 (18.1 #3)
+        character:
+          $ref: "#/components/schemas/Character"
+        aspectRatio:
+          type: string
+          description: |
+            단일 광고형만. 만화형에 없는 이유는 기획서 10.2가 3456 x 2304로 고정해 두었기
+            때문이며, 사용자가 바꿀 수 있게 두면 16의 배수와 총 픽셀 상한 조건이 무너집니다
+      required: [productImageUrl, productName, sellingPoint, note, category, target, artStyle]
+
+    Character:
+      type: object
+      additionalProperties: false
+      description: 만화형만. 자유 메모에서 추출하며 별도 입력란을 두지 않습니다 (잠정안. 18.2 #10)
+      properties:
+        appearance: { type: string }
+        outfit: { type: string }
+      required: [appearance, outfit]
+
+    FieldMeta:
+      type: object
+      additionalProperties: false
+      description: |
+        기획서 5.4의 "자동으로 채운 값을 사용자가 확인하고 고칠 수 있어야 한다"를 화면 규칙이
+        아니라 **데이터**로 만족시킵니다.
+
+        값마다 `{value, filledBy, visibility}`로 감싸는 방법도 있지만 택하지 않았습니다.
+        모든 필드 접근이 한 단계 깊어지고, 스키마 검증기가 실제 타입을 보지 못하게 됩니다.
+      properties:
+        filledBy:
+          type: string
+          enum: [user, inferred, random, default, fixed, system]
+          description: |
+            서버가 채운 시점의 사실입니다. 사용자가 자동값을 고치면 `user`로 바뀝니다.
+            `fixed`는 사용자가 바꿀 수 없고(컷 수), `default`는 미리 채워져 있을 뿐 바꿀 수 있습니다
+        visibility:
+          type: string
+          enum: [hidden, editable]
+      required: [filledBy, visibility]
+
+    BriefMeta:
+      type: object
+      additionalProperties: false
+      description: |
+        `brief`와 같은 키를 가집니다. `hidden` 필드는 양쪽에서 함께 빠지므로 `panelCount`는
+        여기에도 없습니다.
+      properties:
+        productImageUrl: { $ref: "#/components/schemas/FieldMeta" }
+        productName: { $ref: "#/components/schemas/FieldMeta" }
+        sellingPoint: { $ref: "#/components/schemas/FieldMeta" }
+        note: { $ref: "#/components/schemas/FieldMeta" }
+        category: { $ref: "#/components/schemas/FieldMeta" }
+        target: { $ref: "#/components/schemas/FieldMeta" }
+        artStyle: { $ref: "#/components/schemas/FieldMeta" }
+        character: { $ref: "#/components/schemas/FieldMeta" }
+        aspectRatio: { $ref: "#/components/schemas/FieldMeta" }
+      required: [productImageUrl, productName, sellingPoint, note, category, target, artStyle]
+
+    # ---- draft --------------------------------------------------------------
+
+    PanelRole:
+      type: string
+      enum: [hook, setup, problem, solution, proof, cta]
+      description: |
+        기획서 7.3의 6단계와 1:1입니다. **`index`가 `role`을 결정하며 사용자가 바꾸지
+        않습니다** (INV-5) - 6단계 구성 자체가 기획의 근거이기 때문입니다.
+
+    Panel:
+      type: object
+      additionalProperties: false
+      properties:
+        index:
+          type: integer
+          minimum: 1
+          maximum: 6
+          description: 읽는 순서. 3x2 배치에서의 위치와 1:1입니다
+        role: { $ref: "#/components/schemas/PanelRole" }
+        scene: { type: string }
+        dialogue:
+          type: string
+          description: |
+            길이 상한은 아직 없습니다. 한국어 렌더링 검증 결과에 종속됩니다 (18.1 #1).
+            예비안(말풍선만 그리고 글자는 합성)으로 뒤집히면 이 필드의 제약이 다시 계산됩니다
+      required: [index, role, scene, dialogue]
+
+    ComicDraft:
+      type: object
+      additionalProperties: false
+      description: 만화형. 시안은 **텍스트만** 담습니다 - 이미지 경로나 미리보기가 들어오면 "확정 전에는 그림을 만들지 않는다"가 깨집니다
+      properties:
+        adPlan: { $ref: "#/components/schemas/AdPlan" }
+        panels:
+          type: array
+          minItems: 6
+          maxItems: 6
+          description: 정확히 6개입니다. 0개도 7개도 유효하지 않습니다 (INV-1)
+          items: { $ref: "#/components/schemas/Panel" }
+      required: [adPlan, panels]
+
+    SingleAdDraft:
+      type: object
+      additionalProperties: false
+      description: |
+        단일 광고형에는 `panel` 같은 수정 단위가 없습니다. `copy`와 `visualPlan`은 통짜
+        문자열이라 부분 교체의 단위가 필드 하나입니다.
+      properties:
+        adPlan: { $ref: "#/components/schemas/AdPlan" }
+        copy: { type: string }
+        visualPlan: { type: string }
+      required: [adPlan, copy, visualPlan]
+
+    AdPlan:
+      type: string
+      description: |
+        광고 기획안. 서술형 문단 하나이며 **읽기 전용입니다** (INV-8). 브리프와 내용이 겹치므로
+        고칠 것이 있으면 브리프를 고치고 시안을 다시 생성합니다. 양쪽을 따로 고칠 수 있게 두면
+        브리프와 기획안이 서로 다른 말을 하는 시안이 만들어집니다.
+
+        기획서의 "광고 기획서"이며, 문서인 기획서와도 브리프와도 다릅니다 (용어_사전.md 1.1절).
+
+    # ---- 요청 본문 ------------------------------------------------------------
+
+    SessionCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        productImage:
+          type: string
+          format: binary
+          description: |
+            1장. JPEG / PNG / WebP, 최대 10MB, 짧은 변 512px 이상. GIF 와 HEIC 는 받지
+            않습니다 - 변환 경로가 추가로 필요합니다. 규격 위반은 422 `INVALID_IMAGE`
+        productName: { type: string, minLength: 1, maxLength: 40 }
+        sellingPoint: { type: string, minLength: 1, maxLength: 200 }
+        note: { type: string, maxLength: 500 }
+        artStyle: { type: string, description: 선택. 미선택 시 후보군에서 무작위로 채웁니다 }
+      required: [outputType, productImage, productName, sellingPoint]
+
+    BriefPatchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision:
+          type: integer
+          minimum: 0
+          description: |
+            **본문 필드입니다.** `If-Match` 헤더는 채택하지 않았습니다 - `ETag`를 함께
+            내려보내고 클라이언트가 보관했다가 헤더에 싣는 왕복이 늘어나는데, 낙관적 잠금이
+            필요한 경로는 `PATCH` 둘뿐이고 `revision`은 이미 응답 본문에 있습니다.
+        patch: { $ref: "#/components/schemas/BriefPatch" }
+      required: [revision, patch]
+
+    BriefPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        바꾸려는 필드만 보냅니다. 나머지 키는 생략하며, 그것이 "안 바꿈"입니다.
+        비우려면 빈 문자열 `""`을 보내세요 - 키 생략은 비우기에 쓸 수 없습니다.
+
+        `panelCount`는 `hidden` 이라 patch 대상이 아닙니다 (INV-4).
+
+        **사진 교체는 아직 열린 항목입니다.** 도메인_모델 3절이 `productImageUrl` 을 `editable`
+        로 표시했지만 재업로드 경로를 정한 적이 없어, 지금은 받을 자리를 두지 않았습니다.
+        열게 되면 `PATCH`가 multipart 를 함께 받아야 하므로 이 스키마의 모양이 바뀝니다 -
+        화면에서 사진 교체를 제공하기로 하면 그때 계약을 먼저 고칩니다.
+      properties:
+        productName: { type: string, minLength: 1, maxLength: 40 }
+        sellingPoint: { type: string, minLength: 1, maxLength: 200 }
+        note: { type: string, maxLength: 500 }
+        category: { type: string }
+        target: { type: string }
+        artStyle: { type: string }
+        character: { $ref: "#/components/schemas/Character" }
+        aspectRatio: { type: string }
+
+    DraftPatchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, minimum: 0 }
+        patch: { $ref: "#/components/schemas/DraftPatch" }
+      required: [revision, patch]
+
+    DraftPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        `adPlan`과 `role`은 없습니다 (INV-8, INV-5). 요청에 나타나면 422 `INVALID_REQUEST`이며,
+        알 수 없는 필드로 거절됩니다.
+      properties:
+        panels: { $ref: "#/components/schemas/PanelPatchMap" }
+        copy: { type: string }
+        visualPlan: { type: string }
+
+    PanelPatchMap:
+      type: object
+      description: |
+        **배열을 인덱스 키 객체로 지정합니다.** 컷이 6개 고정이라 순서가 바뀌지 않기 때문에
+        성립하는 규약입니다 - 순서가 바뀔 수 있는 컬렉션이 생기면 이것을 그대로 쓰지 마세요.
+
+        예: `{"panels": {"4": {"dialogue": "이거면 아침이 편해져요"}}}`
+      propertyNames:
+        pattern: "^[1-6]$"
+      additionalProperties:
+        type: object
+        additionalProperties: false
+        minProperties: 1
+        properties:
+          scene: { type: string }
+          dialogue: { type: string }
+
+    FinalizeAccepted:
+      type: object
+      additionalProperties: false
+      properties:
+        jobId: { type: string }
+        statusUrl: { type: string, description: "`/v1/jobs/{jobId}`" }
+      required: [jobId, statusUrl]
+
+    # ---- job ----------------------------------------------------------------
+
+    JobStatus:
+      type: string
+      enum: [queued, running, done, failed]
+      description: |
+        세션 상태와 다른 층입니다. 잡은 `finalized` 이후에만 존재하고, 성공은 세션의
+        `completed`가 아니라 `done`입니다 (용어_사전.md 1.4절).
+
+    Job:
+      type: object
+      additionalProperties: false
+      description: |
+        `queuePosition` `result` `error`는 해당 상황에서만 실립니다. **값을 비교하지 말고
+        키의 유무로 판단하세요** - `null`을 쓰지 않으므로 "아직 없음"은 키 생략입니다.
+      properties:
+        jobId: { type: string }
+        status: { $ref: "#/components/schemas/JobStatus" }
+        queuePosition:
+          type: integer
+          minimum: 0
+          description: |
+            대기 중일 때만 있습니다. 렌더는 직렬 1건이며(GPU 1대), 동시 실행 수는 설정값으로
+            두되 기본값 1로 시작합니다
+        result: { $ref: "#/components/schemas/JobResult" }
+        error:
+          description: |
+            실패했을 때만 있습니다. `CONTENT_POLICY_REJECTED`와 `GENERATION_TIMEOUT`이 HTTP
+            상태와 잡 결과 양쪽에 쓰이는 이유는, 화면이 어느 경로로 왔든 같은 분기를 타야
+            하기 때문입니다.
+          allOf:
+            - $ref: "#/components/schemas/Error"
+      required: [jobId, status]
+
+    JobResult:
+      type: object
+      additionalProperties: false
+      properties:
+        imageUrl: { type: string }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
+        expiresAt:
+          type: string
+          format: date-time
+          description: 결과 이미지의 보존 만료 시각입니다. 7일 (세션_보관_정책.md 2절)
+      required: [imageUrl, width, height, expiresAt]
+
+    # ---- generation (내부) ----------------------------------------------------
+
+    BriefFillRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        productImage: { type: string, format: binary }
+        productName: { type: string, minLength: 1, maxLength: 40 }
+        sellingPoint: { type: string, minLength: 1, maxLength: 200 }
+        note: { type: string, maxLength: 500 }
+      required: [productImage, productName, sellingPoint]
+
+    BriefFillResponse:
+      type: object
+      additionalProperties: false
+      description: |
+        `needsInput`이 실리면 `category`와 `target`은 빈 문자열입니다. 호출자는 세션을
+        `brief_filling`에 두고 사용자에게 자유 메모를 요구합니다.
+
+        **이 응답이 오지 않는 경우(장애, 15초 초과)가 열화 경로입니다.** 호출자는 자동 채움을
+        건너뛰고 `messageMode: degraded`로 진행하며, 그때도 세션은 `brief_filling`에 머뭅니다 -
+        곧바로 `brief_ready`로 보내면 두 필드가 빈 채로 시안 생성이 가능해집니다.
+      properties:
+        category: { type: string }
+        target: { type: string }
+        needsInput: { $ref: "#/components/schemas/NeedsInput" }
+      required: [category, target]
+
+    DraftGenerateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        brief: { $ref: "#/components/schemas/Brief" }
+        guardrailApplied: { $ref: "#/components/schemas/GuardrailApplied" }
+      required: [outputType, brief]
+
+    DraftPatchEngineRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        시안 원문을 함께 보냅니다. 엔진이 지정한 부분만 바꾸려면 나머지가 무엇인지 알아야
+        하기 때문이며, 그럼에도 **전체를 다시 쓰게 하지는 않습니다**.
+      properties:
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        brief: { $ref: "#/components/schemas/Brief" }
+        draft:
+          oneOf:
+            - $ref: "#/components/schemas/ComicDraft"
+            - $ref: "#/components/schemas/SingleAdDraft"
+        patch: { $ref: "#/components/schemas/DraftPatch" }
+        guardrailApplied: { $ref: "#/components/schemas/GuardrailApplied" }
+      required: [outputType, brief, draft, patch]
+
+    DraftGenerateResponse:
+      type: object
+      additionalProperties: false
+      description: |
+        `draft` 키가 없으면 **정상 거절**입니다 - 지어내지 않고 물러선 상태이며 200입니다.
+        그때 `refusalReason`이 실립니다.
+
+        `guardrailApplied`는 거절 여부와 무관하게 **항상** 실립니다. 대조 실행 결과와 검증된
+        출력이 구분되지 않으면 환각 억제율 자체를 계산할 수 없습니다.
+      properties:
+        draft:
+          oneOf:
+            - $ref: "#/components/schemas/ComicDraft"
+            - $ref: "#/components/schemas/SingleAdDraft"
+        guardrailApplied: { $ref: "#/components/schemas/GuardrailApplied" }
+        refusalReason:
+          type: string
+          enum: [no_evidence, guardrail]
+          description: |
+            거절했을 때만 실립니다. `guardrail`은 **재생성 1회 후에도** 근거 밖 주장이 남은
+            경우입니다 - 첫 위반은 엔진이 조용히 재생성하므로 호출자에게 보이지 않습니다.
+      required: [guardrailApplied]
+
+    GuardrailApplied:
+      type: boolean
+      default: true
+      description: |
+        요청에서는 가드레일을 켤지, 응답에서는 켜고 만든 결과인지를 나타냅니다.
+
+        **`false`는 대조군 실행입니다.** 이 값이 보고 지표(환각 억제율)의 분모와 분자를
+        가르므로, 테스트를 통과시키려고 가드레일을 목으로 대체하면 지표가 무효가 됩니다.
+        운영 경로에서 `false`로 부르지 마세요.
+
+    ImageRenderRequest:
+      type: object
+      additionalProperties: false
+      description: 확정된 시안만 들어옵니다. 세션당 1회이며 이것이 비용 방어선입니다 (INV-3)
+      properties:
+        outputType: { $ref: "#/components/schemas/OutputType" }
+        brief: { $ref: "#/components/schemas/Brief" }
+        draft:
+          oneOf:
+            - $ref: "#/components/schemas/ComicDraft"
+            - $ref: "#/components/schemas/SingleAdDraft"
+        spec: { $ref: "#/components/schemas/ImageSpec" }
+      required: [outputType, brief, draft, spec]
+
+    ImageSpec:
+      type: object
+      additionalProperties: false
+      description: |
+        모델 제약(`gpt-image-2`): 긴 변 3840px, 가로 세로 모두 16의 배수, 총 픽셀 약 8.29MP,
+        비율 3:1. 만화형은 3456 x 2304 (약 7.96MP, 1.5:1)이며 칸당 1152 x 1152 입니다.
+
+        **호출자가 규격을 정해 보냅니다.** 엔진이 유형을 보고 스스로 정하면 기획서 10.2의
+        값이 두 곳에 생기고, 한쪽만 고치는 순간 어긋납니다.
+      properties:
+        width: { type: integer, minimum: 16, maximum: 3840, multipleOf: 16 }
+        height: { type: integer, minimum: 16, maximum: 3840, multipleOf: 16 }
+      required: [width, height]

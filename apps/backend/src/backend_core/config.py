@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     # We cut it and fall back rather than letting the caller wait.
     ai_engine_timeout_s: float = 8.0
 
+    # ---- storage (ADR-0010) ------------------------------------------------------------
+
+    # One SQLite file holds accounts, sessions, briefs, drafts and jobs. Configurable
+    # because a constant here splits local development from the VM deployment, where the
+    # file has to live on a mounted path to survive `docker compose up` (ADR-0010).
+    # `.sqlite` rather than `.sqlite3` so the repo's existing ignore rule covers it:
+    # this file holds uploaded-photo paths and briefs, and the repo is public.
+    db_path: str = "./data/adgen.sqlite"
+
     # ---- auth (ADR-0008, ADR-0013) -----------------------------------------------------
 
     # Signs the session token. No default: see the module docstring.

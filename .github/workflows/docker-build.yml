@@ -93,3 +93,47 @@ jobs:
         run: |
           cp infra/.env.example infra/.env 2>/dev/null || true
           docker compose -f infra/docker-compose.yml config -q
+
+      # ai-engine의 내부 계약 경로(/v1/generate)에는 인증이 없습니다. VPC가 학원의 공용
+      # default 네트워크라 태그 없는 방화벽 규칙이 우리 VM에도 걸리고, 우리는 그 규칙을
+      # 늘리지도 막지도 못합니다 (infra/README.md "방화벽은 우리 통제 밖입니다",
+      # docs/adr/0011). 따라서 `127.0.0.1:` 바인딩이 우리 손에 있는 유일한 방어선이고,
+      # 그것을 지우는 한 줄짜리 변경은 diff에서 눈에 잘 띄지 않습니다.
+      #
+      # ⚠️ 이 워크플로는 paths 필터가 걸려 required로 지정할 수 없습니다(파일 상단).
+      #    즉 이 검사는 **막는 것이 아니라 빨간 X를 남기는 것**입니다. 리뷰를 대체하지
+      #    않고, 리뷰어가 놓쳤을 때 눈에 띄게 하는 장치입니다.
+      #
+      # 파싱 대상이 원본 YAML이 아니라 `config` 출력인 이유: 변수 치환이 끝난 최종값을
+      # 봐야 `${BIND:-0.0.0.0}:8100:8100` 같은 우회가 잡힙니다.
+      - name: ai-engine이 루프백에만 묶여 있는지 확인
+        if: hashFiles('infra/docker-compose.yml') != ''
+        run: |
+          # 파일로 받는 이유: heredoc 스크립트가 stdin을 쓰므로 JSON을 파이프로 함께
+          # 넘길 수 없습니다. 작업 트리 밖에 두는 이유: 이 스텝을 로컬에서 그대로 돌려
+          # 보는 사람의 `git status`를 더럽히지 않기 위해서입니다.
+          config_json="${RUNNER_TEMP:-/tmp}/compose-config.json"
+          docker compose -f infra/docker-compose.yml config --format json > "$config_json"
+          CONFIG_JSON="$config_json" python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          services = json.loads(Path(os.environ["CONFIG_JSON"]).read_text())["services"]
+          if "ai-engine" not in services:
+              # 서비스 이름이 바뀌면 이 검사는 아무것도 보지 않으면서 계속 초록입니다.
+              # 통과하지 않는 편이 낫습니다 — 조용히 비어버린 검사가 검사 없음보다 나쁩니다.
+              sys.exit("compose에 ai-engine 서비스가 없습니다. 이름을 바꿨다면 이 검사도 함께 고치세요.")
+
+          # ports 자체가 없으면 호스트에 발행되지 않은 것이므로 가장 안전한 상태입니다.
+          # 발행된 경우에만 host_ip를 봅니다 — 바인딩을 지정하지 않으면 이 키가 아예
+          # 없으므로(= 전 인터페이스), `!= 127.0.0.1` 비교가 그대로 잡아냅니다.
+          exposed = [p for p in services["ai-engine"].get("ports") or [] if p.get("host_ip") != "127.0.0.1"]
+          if exposed:
+              sys.exit(
+                  f"ai-engine 포트가 루프백 밖에 열려 있습니다: {exposed}\n"
+                  '  고치는 법: infra/docker-compose.yml의 ports를 "127.0.0.1:8100:8100" 형태로 되돌리세요.\n'
+                  "  이유: infra/README.md \"방화벽은 우리 통제 밖입니다\" / docs/adr/0011-배포_환경_스펙과_권한_경계.md"
+              )
+          PY

@@ -109,6 +109,10 @@ jobs:
       - name: ai-engine이 루프백에만 묶여 있는지 확인
         if: hashFiles('infra/docker-compose.yml') != ''
         run: |
+          # Actions 의 기본 셸에 이미 -e 가 걸려 있지만 명시합니다 — 이 블록을 로컬에서
+          # 그대로 돌려 볼 때 `config` 실패가 빈 JSON 파싱 오류로 둔갑하지 않도록.
+          set -euo pipefail
+
           # 파일로 받는 이유: heredoc 스크립트가 stdin을 쓰므로 JSON을 파이프로 함께
           # 넘길 수 없습니다. 작업 트리 밖에 두는 이유: 이 스텝을 로컬에서 그대로 돌려
           # 보는 사람의 `git status`를 더럽히지 않기 위해서입니다.
@@ -120,11 +124,33 @@ jobs:
           import sys
           from pathlib import Path
 
+          # 이 검사는 -f 로 지정한 파일 하나만 봅니다. compose 파일이 더 있으면 실제로
+          # 뜨는 구성과 검사 대상이 갈라져, 오버라이드에서 포트를 다시 열어도 초록입니다.
+          # 오버라이드를 처음 만드는 PR 이 위 `-f` 목록을 함께 늘리도록 여기서 막습니다
+          # (사람이 기억하기를 기대하는 순간 이 검사의 존재 이유가 없어집니다).
+          checked = Path("infra/docker-compose.yml")
+          others = sorted(p for p in Path("infra").glob("*compose*.y*ml") if p != checked)
+          if others:
+              sys.exit(
+                  f"검사하지 않는 compose 파일이 있습니다: {[str(p) for p in others]}\n"
+                  "  이 스텝의 `docker compose -f ...` 목록에 함께 넣으세요. 넣지 않으면\n"
+                  "  오버라이드가 포트를 다시 열어도 이 검사는 통과합니다."
+              )
+
           services = json.loads(Path(os.environ["CONFIG_JSON"]).read_text())["services"]
           if "ai-engine" not in services:
               # 서비스 이름이 바뀌면 이 검사는 아무것도 보지 않으면서 계속 초록입니다.
               # 통과하지 않는 편이 낫습니다 — 조용히 비어버린 검사가 검사 없음보다 나쁩니다.
               sys.exit("compose에 ai-engine 서비스가 없습니다. 이름을 바꿨다면 이 검사도 함께 고치세요.")
+
+          if services["ai-engine"].get("network_mode") == "host":
+              # host 모드에서는 ports 가 무시되고 컨테이너가 호스트 인터페이스에 그대로
+              # 붙습니다. `127.0.0.1:8100:8100` 줄은 남아 있으므로 아래 검사만으로는
+              # 초록이 되고, 실제로는 8100 이 인터넷에 열립니다.
+              sys.exit(
+                  "ai-engine이 host 네트워크 모드입니다. ports의 127.0.0.1 바인딩이 무시됩니다.\n"
+                  "  고치는 법: network_mode: host 를 지우고 ports 로만 노출하세요."
+              )
 
           # ports 자체가 없으면 호스트에 발행되지 않은 것이므로 가장 안전한 상태입니다.
           # 발행된 경우에만 host_ip를 봅니다 — 바인딩을 지정하지 않으면 이 키가 아예

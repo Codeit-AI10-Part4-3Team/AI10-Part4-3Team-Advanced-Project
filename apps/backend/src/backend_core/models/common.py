@@ -14,6 +14,10 @@ either direction. The two halves of that rule live here so no schema module can 
 ⚠️ These definitions are deliberately duplicated in apps/ai-engine. The two apps must not
 import each other (AGENTS.md), so drift is caught by the contract-conformance tests rather
 than by sharing code.
+
+Every name and value below comes from the contract, and each one says which node it mirrors.
+**Edit `openapi.yaml` first** — contract, then schema, then implementation (AGENTS.md). Change
+only this file and `tests/backend_core/models/test_common.py` stops you.
 """
 
 from typing import Annotated, Literal, TypeVar
@@ -92,7 +96,9 @@ ErrorCode = Literal[
     "REVISION_CONFLICT",
     "STATE_CONFLICT",
 ]
-"""All 15 codes in the contract. Clients branch on these, so they are the contract itself.
+"""Contract: `components.schemas.ErrorCode`. All 15 codes.
+
+Clients branch on these, so they are the contract itself.
 
 `DUPLICATE_ACCOUNT` and `RATE_LIMITED` have no emit site in the first cut (signup is 501,
 rate limiting is out of scope). They stay because renaming a code later means rewriting the
@@ -101,7 +107,7 @@ screens that branch on it.
 
 
 class Error(Base):
-    """`{code, message}` — not FastAPI's default `{"detail": ...}`.
+    """Contract: `components.schemas.Error`. `{code, message}`, not FastAPI's `{"detail": ...}`.
 
     `message` is developer-facing for now; user-facing wording is a deployment-stage
     concern (기획서 17.2).
@@ -112,11 +118,16 @@ class Error(Base):
 
 
 OutputType = Literal["comic", "single_ad"]
-"""Fixed when the session is created. Changing it means a new session, not an update."""
+"""Contract: `components.schemas.OutputType`.
+
+Fixed when the session is created. Changing it means a new session, not an update.
+"""
 
 
 MessageMode = Literal["normal", "degraded"]
-"""`degraded` = `brief:fill` was skipped and the user's own input was used instead.
+"""Contract: `components.schemas.MessageMode`.
+
+`degraded` = `brief:fill` was skipped and the user's own input was used instead.
 
 Once a session is `degraded` it stays `degraded` for the rest of its life. The value is a
 reported metric alongside the guardrail control run, so losing it invalidates the

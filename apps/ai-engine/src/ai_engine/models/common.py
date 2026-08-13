@@ -15,6 +15,10 @@ either direction. The two halves of that rule live here so no schema module can 
 import each other (AGENTS.md), so drift is caught by the contract-conformance tests rather
 than by sharing code. This app carries only what the internal `generation` paths use —
 sessions, jobs, auth and catalog are the caller's concern and are absent on purpose.
+
+Every name and value below comes from the contract, and each one says which node it mirrors.
+**Edit `openapi.yaml` first** — contract, then schema, then implementation (AGENTS.md). Change
+only this file and `tests/models/test_common.py` stops you.
 """
 
 from typing import Annotated, Literal, TypeVar
@@ -93,7 +97,7 @@ ErrorCode = Literal[
     "REVISION_CONFLICT",
     "STATE_CONFLICT",
 ]
-"""All 15 codes in the contract, not just the four this app emits.
+"""Contract: `components.schemas.ErrorCode`. All 15 codes, not just the four this app emits.
 
 This service only ever raises `INVALID_REQUEST`, `CONTENT_POLICY_REJECTED`,
 `UPSTREAM_UNAVAILABLE` and `GENERATION_TIMEOUT`. The enum is still whole because it is one
@@ -103,7 +107,7 @@ adds.
 
 
 class Error(Base):
-    """`{code, message}` — not FastAPI's default `{"detail": ...}`.
+    """Contract: `components.schemas.Error`. `{code, message}`, not FastAPI's `{"detail": ...}`.
 
     ⚠️ Nothing returns this yet: the service still raises bare `HTTPException`, which
     renders `{"detail": ...}`. Wiring it up belongs to the route replacement, not to the
@@ -115,7 +119,7 @@ class Error(Base):
 
 
 OutputType = Literal["comic", "single_ad"]
-"""Chosen by the caller and sent on every generation request.
+"""Contract: `components.schemas.OutputType`. Chosen by the caller, sent on every request.
 
 The engine never decides it. Nothing here may branch on anything else to tell a comic from
 a single ad — the drafts have no discriminator field of their own.

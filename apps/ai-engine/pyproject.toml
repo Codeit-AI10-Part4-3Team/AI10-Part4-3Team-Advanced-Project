@@ -21,6 +21,9 @@ dependencies = [
     # 계약의 multipart 경로(POST /v1/sessions, /v1/brief:fill)를 FastAPI 가 파싱하려면
     # 필요합니다. 없으면 라우트 정의 시점에 RuntimeError 로 죽습니다 - 런타임 의존입니다.
     "python-multipart>=0.0.9",
+    # 무손실 WebP 인코딩용. 계약이 image:render 의 출력 형식을 무손실 WebP 로 못 박고
+    # 있어 인코더가 런타임 필수입니다 (검증 1순위 지표가 그려진 글자라 손실 압축 불가).
+    "pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +61,10 @@ ai_engine = ["fixtures/*.jsonl"]
 extraPaths = ["src"]
 
 [tool.mypy]
+# pydantic 플러그인이 없으면 alias 를 준 필드의 생성자 인자를 alias 이름으로만 인식해,
+# populate_by_name=True 로 허용된 파이썬 이름 호출이 call-arg 오류로 잡힙니다
+# (SingleAdDraft.ad_copy / alias="copy" 가 그 경우). 플러그인은 그 설정을 읽습니다.
+plugins = ["pydantic.mypy"]
 python_version = "3.12"
 files = ["src"]
 mypy_path = ["src"]

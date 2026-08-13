@@ -9,7 +9,9 @@ non-deterministic (AGENTS.md).
 guardrail behaviour is tested in apps/ai-engine, where it lives.
 """
 
+import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +22,28 @@ from backend_core.ai_client import AiEngineUnavailableError
 from backend_core.models import Answer, Source
 
 GROUNDED_TEXT = "안내문 3조에 따라 먼저 담당 창구에 연락하세요."
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Cut every test off from the machine's own configuration.
+
+    Startup now creates the schema and seeds the fixed accounts (api.main.lifespan), so
+    without this two things happen: the suite writes a real database into the working
+    directory, and a developer who has infra/.env exported in their shell runs the tests
+    against their own accounts. The second is worse — it passes locally and fails in CI.
+
+    `deps.settings` is an `lru_cache`d singleton read outside the request cycle, so
+    `dependency_overrides` cannot reach it; clearing the cache is what makes the patched
+    environment take effect.
+    """
+    for name in [name for name in os.environ if name.startswith("ADGEN_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("ADGEN_DB_PATH", str(tmp_path / "test.sqlite"))
+
+    deps.settings.cache_clear()
+    yield
+    deps.settings.cache_clear()
 
 
 class FakeAiEngine:

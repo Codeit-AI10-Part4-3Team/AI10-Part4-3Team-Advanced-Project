@@ -14,7 +14,13 @@ from PIL import Image
 
 from ai_engine import brief_fill, draft, render, service
 from ai_engine.config import Settings
-from ai_engine.models import Brief, DraftGenerateRequest, ImageRenderRequest, ImageSpec
+from ai_engine.models import (
+    Brief,
+    DraftGenerateRequest,
+    ImageRenderRequest,
+    ImageSpec,
+    OutputType,
+)
 from ai_engine.service_schemas import BriefFillRequest
 
 BRIEF_FIELDS = {
@@ -52,6 +58,15 @@ def render_request(width: int = 1088, height: int = 1088) -> ImageRenderRequest:
     )
 
 
+def draft_request(
+    output_type: OutputType = "single_ad", brief_override: Brief | None = None
+) -> DraftGenerateRequest:
+    return DraftGenerateRequest(
+        output_type=output_type,
+        brief=brief_override if brief_override is not None else brief(),
+    )
+
+
 def fill_request() -> BriefFillRequest:
     return BriefFillRequest.model_construct(
         product_image=None, product_name="핸드크림", selling_point="하루 종일 촉촉합니다"
@@ -67,14 +82,16 @@ def test_model_branch_fails_loudly_on_every_seam(model_settings: Settings) -> No
     A stub returned from the model branch would be indistinguishable from a real result in
     every log, metric and screenshot.
     """
+    # Requests are built outside the blocks: a failure while building one would pass these
+    # tests for the wrong reason, and then the branch could stop raising unnoticed.
+    fill, generate, image = fill_request(), draft_request(), render_request()
+
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
-        brief_fill.fill_brief(fill_request(), model_settings)
+        brief_fill.fill_brief(fill, model_settings)
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
-        draft.generate_draft(
-            DraftGenerateRequest(output_type="single_ad", brief=brief()), model_settings
-        )
+        draft.generate_draft(generate, model_settings)
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
-        render.render_image(render_request(), model_settings)
+        render.render_image(image, model_settings)
 
 
 def test_the_mode_is_readable_without_opening_the_source() -> None:
@@ -126,8 +143,9 @@ def test_comic_branch_exists_but_is_not_faked(stub_settings: Settings) -> None:
     comic = Brief.model_validate(
         {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
     )
+    request = draft_request("comic", comic)
     with pytest.raises(NotImplementedError, match="comic"):
-        draft.generate_draft(DraftGenerateRequest(output_type="comic", brief=comic), stub_settings)
+        draft.generate_draft(request, stub_settings)
 
 
 # ---- S6 렌더 ----------------------------------------------------------------------
@@ -142,7 +160,8 @@ def test_render_stub_returns_lossless_webp_at_the_requested_size(
     a lossy or differently sized placeholder would misreport both.
     """
     payload = render.render_image(render_request(width=1088, height=1088), stub_settings)
-    assert payload[:4] == b"RIFF" and payload[8:12] == b"WEBP"
+    assert payload[:4] == b"RIFF"
+    assert payload[8:12] == b"WEBP"
     with Image.open(io.BytesIO(payload)) as image:
         assert image.size == (1088, 1088)
         assert image.format == "WEBP"
@@ -210,3 +229,29 @@ def test_brief_fill_route_accepts_an_upload(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert set(response.json()) == {"category", "target"}
+
+
+def test_every_generation_path_documents_503(client: TestClient) -> None:
+    """계약이 세 경로 모두에 503 을 적고 있으므로 발행 스펙에도 있어야 합니다.
+
+    ⚠️ FastAPI 는 `raise HTTPException(503)` 을 스펙에 자동으로 넣지 않습니다. 빠지면 계약에는
+    있고 발행 스펙에는 없는 상태가 되고, 프론트엔드가 계약을 보고 짠 분기가 근거를 잃습니다.
+    """
+    spec = client.get("/openapi.json").json()
+    for path in ("/v1/brief:fill", "/v1/draft:generate", "/v1/image:render"):
+        assert "503" in spec["paths"][path]["post"]["responses"], path
+
+
+def test_unimplemented_model_branch_surfaces_as_503_not_500(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """호출자에게는 재시도 가능한 상태여야 합니다. 500 은 계약에 없는 답입니다.
+
+    ⚠️ 스텁이 아니라 **실물 분기가 비어 있을 때**의 동작입니다. 이것이 500 으로 새면 화면이
+    분기할 근거가 없고, 로그에서도 우리 결함과 상류 장애가 구분되지 않습니다.
+    """
+    monkeypatch.setattr(service, "settings", lambda: Settings(generation_mode="model"))
+    response = client.post(
+        "/v1/draft:generate", json={"outputType": "single_ad", "brief": BRIEF_FIELDS}
+    )
+    assert response.status_code == 503

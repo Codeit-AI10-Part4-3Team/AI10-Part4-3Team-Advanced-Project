@@ -41,8 +41,13 @@ def fill_brief(request: BriefFillRequest, settings: Settings) -> BriefFillRespon
     return _infer_with_model(request, settings)
 
 
-def _infer_stub(request: BriefFillRequest, settings: Settings) -> BriefFillResponse:
-    """Fixed answer, marked as such."""
+def _infer_stub(_request: BriefFillRequest, settings: Settings) -> BriefFillResponse:
+    """Fixed answer, marked as such.
+
+    The request is unused and the underscore says so. The parameter stays because the two
+    branches must keep the same signature — that is what lets the real implementation drop
+    in without touching the caller (구현_범위 1.1절).
+    """
     return BriefFillResponse(
         category=f"[{settings.stub_marker}] {STUB_CATEGORY}",
         target=f"[{settings.stub_marker}] {STUB_TARGET}",

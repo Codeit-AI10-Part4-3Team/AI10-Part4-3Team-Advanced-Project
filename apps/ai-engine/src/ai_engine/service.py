@@ -17,7 +17,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import Response
@@ -34,6 +34,7 @@ from ai_engine.models import (
     BriefFillResponse,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    Error,
     ImageRenderRequest,
 )
 from ai_engine.models.legacy_qa import GenerateRequest, GenerateResponse
@@ -116,7 +117,20 @@ def generate(request: GenerateRequest) -> GenerateResponse:
 #    팀이 공유해 우리 통제 밖입니다 (infra/README.md).
 
 
-@app.post("/v1/brief:fill", response_model=BriefFillResponse)
+UPSTREAM_UNAVAILABLE: dict[int | str, dict[str, Any]] = {
+    503: {
+        "model": Error,
+        "description": "`UPSTREAM_UNAVAILABLE` - 모델을 쓸 수 없습니다. 호출자에게 폴백은 없습니다",
+    }
+}
+"""⚠️ 계약이 이 경로에 503 을 적고 있으므로 발행 스펙에도 있어야 합니다.
+
+FastAPI 는 `raise HTTPException(503)` 을 스펙에 자동으로 넣지 않습니다. 빼면 계약에는 있고
+발행 스펙에는 없는 상태가 되어, 프론트엔드가 계약을 보고 짠 분기가 문서상 근거를 잃습니다.
+"""
+
+
+@app.post("/v1/brief:fill", responses=UPSTREAM_UNAVAILABLE)
 def fill_brief(
     body: Annotated[BriefFillRequest, Form(media_type="multipart/form-data")],
 ) -> BriefFillResponse:
@@ -126,14 +140,19 @@ def fill_brief(
     `application/x-www-form-urlencoded` for a multipart body, and every test that posts a
     file still passes.
 
-    No 503 branch here. This is the one seam the caller can degrade around, and it does that
-    by not receiving a response — inventing an error shape to signal it would be a second
-    way to say the same thing (ADR-0005).
+    ⚠️ 503 belongs here even though this is the seam the caller degrades around. The two are
+    different things: **degrading** is what the caller does when no response arrives at all
+    (outage, 15s timeout), while a 503 is this service saying it cannot serve. The contract
+    lists both, so leaving the 503 out would let an unhandled error escape as a 500 and give
+    the caller a status it has no branch for.
     """
-    return brief_fill.fill_brief(body, settings())
+    try:
+        return brief_fill.fill_brief(body, settings())
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.post("/v1/draft:generate", response_model=DraftGenerateResponse)
+@app.post("/v1/draft:generate", responses=UPSTREAM_UNAVAILABLE)
 def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
     """Write the draft, or refuse without inventing anything.
 
@@ -148,7 +167,10 @@ def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
 
 @app.post(
     "/v1/image:render",
-    responses={200: {"content": {"image/webp": {}}, "description": "이미지 1장 (무손실 WebP)"}},
+    responses={
+        200: {"content": {"image/webp": {}}, "description": "이미지 1장 (무손실 WebP)"},
+        **UPSTREAM_UNAVAILABLE,
+    },
     response_class=Response,
 )
 def render_image(request: ImageRenderRequest) -> Response:

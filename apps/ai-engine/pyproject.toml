@@ -18,6 +18,9 @@ dependencies = [
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    # 계약의 multipart 경로(POST /v1/sessions, /v1/brief:fill)를 FastAPI 가 파싱하려면
+    # 필요합니다. 없으면 라우트 정의 시점에 RuntimeError 로 죽습니다 - 런타임 의존입니다.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

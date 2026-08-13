@@ -12,16 +12,44 @@ guardrail behaviour is tested in apps/ai-engine, where it lives.
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from api import deps
 from api.main import app
 from backend_core.ai_client import AiEngineUnavailableError
-from backend_core.models import Answer, Source
+from backend_core.models.legacy_qa import Answer, Source
 
 GROUNDED_TEXT = "안내문 3조에 따라 먼저 담당 창구에 연락하세요."
+
+# tests/ -> apps/backend/ -> apps/ -> repo root
+CONTRACT_PATH = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "openapi.yaml"
+
+
+@pytest.fixture(scope="session")
+def contract_schemas() -> dict[str, Any]:
+    """`components.schemas` from the contract, for the conformance tests.
+
+    Read straight from the spec rather than copied into the test: a copy drifts with the
+    models it is supposed to police, which is the failure this fixture exists to prevent.
+
+    ⚠️ Fails rather than skips when the file is missing. The tests live in this repo, so
+    they cannot run without the checkout that carries the contract — meaning a missing file
+    is never an environment fact, only a broken path or a moved contract. Skipping there
+    would turn off every conformance test and still show green, which is the exact failure
+    mode this suite exists to prevent.
+    """
+    if not CONTRACT_PATH.exists():
+        pytest.fail(
+            f"contract not found at {CONTRACT_PATH} — the conformance tests cannot run. "
+            "Did packages/contracts/openapi.yaml move, or did this app's depth change?"
+        )
+    spec: dict[str, Any] = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    schemas: dict[str, Any] = spec["components"]["schemas"]
+    return schemas
 
 
 @pytest.fixture(autouse=True)

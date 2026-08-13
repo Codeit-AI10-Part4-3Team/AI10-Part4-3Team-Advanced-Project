@@ -14,7 +14,7 @@ from typing import Protocol
 
 import httpx
 
-from backend_core.models import Answer, Source
+from backend_core.models.legacy_qa import Answer, Source
 
 
 class AiEngineUnavailableError(RuntimeError):

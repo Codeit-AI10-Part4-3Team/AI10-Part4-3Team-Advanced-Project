@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend_core.models import ErrorBody, ErrorCode
+from backend_core.models import Error, ErrorCode
 
 
 class ApiError(HTTPException):
@@ -36,7 +36,7 @@ async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
         status, code, message = 500, "INTERNAL", "내부 오류가 발생했습니다."
     return JSONResponse(
         status_code=status,
-        content=ErrorBody(code=code, message=message).model_dump(by_alias=True),
+        content=Error(code=code, message=message).model_dump(by_alias=True),
         # Error bodies can echo request context; keep them out of shared caches.
         headers={"Cache-Control": "no-store"},
     )

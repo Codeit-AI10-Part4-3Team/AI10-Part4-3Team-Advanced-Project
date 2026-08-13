@@ -117,20 +117,21 @@ def generate(request: GenerateRequest) -> GenerateResponse:
 #    팀이 공유해 우리 통제 밖입니다 (infra/README.md).
 
 
-UPSTREAM_UNAVAILABLE: dict[int | str, dict[str, Any]] = {
-    503: {
-        "model": Error,
-        "description": "`UPSTREAM_UNAVAILABLE` - 모델을 쓸 수 없습니다. 호출자에게 폴백은 없습니다",
-    }
+UPSTREAM_503: dict[str, Any] = {
+    "model": Error,
+    "description": "`UPSTREAM_UNAVAILABLE` - 모델을 쓸 수 없습니다. 호출자에게 폴백은 없습니다",
 }
-"""⚠️ 계약이 이 경로에 503 을 적고 있으므로 발행 스펙에도 있어야 합니다.
+"""⚠️ 계약이 생성 경로 셋 모두에 503 을 적고 있으므로 발행 스펙에도 있어야 합니다.
 
 FastAPI 는 `raise HTTPException(503)` 을 스펙에 자동으로 넣지 않습니다. 빼면 계약에는 있고
 발행 스펙에는 없는 상태가 되어, 프론트엔드가 계약을 보고 짠 분기가 문서상 근거를 잃습니다.
+
+**값만 공유하고 `503:` 키는 라우트마다 리터럴로 적습니다.** `**` 로 펼치면 정적 분석기가
+어느 상태 코드가 문서화됐는지 보지 못해, 문서화가 빠진 라우트를 잡아 주지 못합니다.
 """
 
 
-@app.post("/v1/brief:fill", responses=UPSTREAM_UNAVAILABLE)
+@app.post("/v1/brief:fill", responses={503: UPSTREAM_503})
 def fill_brief(
     body: Annotated[BriefFillRequest, Form(media_type="multipart/form-data")],
 ) -> BriefFillResponse:
@@ -152,7 +153,7 @@ def fill_brief(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.post("/v1/draft:generate", responses=UPSTREAM_UNAVAILABLE)
+@app.post("/v1/draft:generate", responses={503: UPSTREAM_503})
 def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
     """Write the draft, or refuse without inventing anything.
 
@@ -169,7 +170,7 @@ def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
     "/v1/image:render",
     responses={
         200: {"content": {"image/webp": {}}, "description": "이미지 1장 (무손실 WebP)"},
-        **UPSTREAM_UNAVAILABLE,
+        503: UPSTREAM_503,
     },
     response_class=Response,
 )

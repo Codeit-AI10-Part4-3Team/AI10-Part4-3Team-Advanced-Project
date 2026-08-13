@@ -104,7 +104,23 @@ def test_signing_without_a_key_fails_loudly() -> None:
         issue(USER_ID, "", ONE_DAY_S)
 
     with pytest.raises(SigningKeyMissingError):
-        verify("anything", "")
-
-    with pytest.raises(SigningKeyMissingError):
         require_secret("")
+
+
+def test_verifying_without_a_key_rejects_rather_than_raising() -> None:
+    """The other direction is not symmetric, on purpose.
+
+    Issuing without a key must raise — a token nobody can trust is worse than no token. But
+    *verifying* without one is just a failed verification: with no key nothing can be a
+    valid token, so `None` is the honest answer, and raising turned a cookie sent at a
+    half-configured server into a 500 (tests/api/test_startup.py).
+
+    ⚠️ What it must never do is verify with the empty key. That would accept anything an
+    attacker signs with the same emptiness, which is why this returns `None` even for a
+    token whose signature "matches" under an empty secret.
+    """
+    forged_under_empty_key = f"{_encode(f'{USER_ID}:99999999999')}."
+    forged_under_empty_key += _sign(forged_under_empty_key[:-1], "")
+
+    assert verify("anything", "") is None
+    assert verify(forged_under_empty_key, "") is None

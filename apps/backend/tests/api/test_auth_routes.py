@@ -87,6 +87,21 @@ def test_the_session_cookie_carries_the_contract_attributes(client: TestClient) 
     assert "Max-Age=86400" in header
 
 
+def test_responses_carrying_identity_are_not_cacheable(client: TestClient) -> None:
+    """`Cache-Control: no-store` on login and on everything behind `current_user`.
+
+    Login's response carries the session token in `Set-Cookie` and `/v1/me` carries one
+    person's identity. Whether a reverse proxy sits in front of us is still an open decision
+    (API_계약.md 2절, 소관 05), so the header has to be right before one appears — a cache
+    handing user A's response to user B is not a failure that shows up in testing.
+    """
+    login = _login(client, "demo1", PLAINTEXT_DEMO1)
+    me = client.get("/v1/me")
+
+    assert login.headers.get("cache-control") == "no-store"
+    assert me.headers.get("cache-control") == "no-store"
+
+
 @pytest.mark.parametrize(
     ("login_id", "password"),
     [("demo1", PLAINTEXT_DEMO2), ("no-such-user", PLAINTEXT_DEMO1)],

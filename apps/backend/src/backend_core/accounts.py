@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from argon2 import PasswordHasher
-from argon2.exceptions import Argon2Error
+from argon2.exceptions import Argon2Error, InvalidHashError
 
 from backend_core.config import SeedAccount
 
@@ -108,7 +108,12 @@ def authenticate(connection: sqlite3.Connection, login_id: str, password: str) -
 
     try:
         _hasher.verify(_DUMMY_HASH if account is None else account.password_hash, password)
-    except Argon2Error:
+    except (Argon2Error, InvalidHashError):
+        # ⚠️ `InvalidHashError` is a `ValueError`, **not** an `Argon2Error`, so it has to be
+        # named separately — otherwise a stored hash that argon2 cannot parse escapes as a
+        # 500 instead of a failed login. Configured accounts cannot reach this (config.py
+        # parses the hash at startup); a row left by an older seed still can, and refusing
+        # to authenticate is the only safe answer to a hash we cannot read.
         return None
 
     # The dummy hash can only be "verified" by the dummy password, which is not reachable

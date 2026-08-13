@@ -41,15 +41,31 @@ CREATE TABLE IF NOT EXISTS users (
 def connect(db_path: str | Path) -> Generator[sqlite3.Connection]:
     """Open one connection, and close it when the caller is done.
 
-    A connection per operation rather than a shared one, because FastAPI runs sync
-    handlers in a threadpool and sqlite3 connections are not safe to share across
-    threads. Opening is cheap; the alternative is thread-local plumbing that buys nothing
-    at this size (one worker, one serial render — 세션_보관_정책.md 6절).
+    A connection per operation rather than a shared one. Opening is cheap; the alternative
+    is thread-local plumbing that buys nothing at this size (one worker, one serial
+    render — 세션_보관_정책.md 6절).
+
+    ⚠️ `check_same_thread=False` is **required**, not a shortcut. FastAPI runs a sync
+    generator dependency through anyio's threadpool, and the setup, the route body and the
+    teardown are not guaranteed to land on the same worker thread. With sqlite3's default
+    (`True`) that raises
+
+        sqlite3.ProgrammingError: SQLite objects created in a thread can only be
+        used in that same thread.
+
+    and it does so **only under concurrency** — 2026-08-13 실측: 16 concurrent requests
+    failed 182 of 200, while the same 200 sequentially all passed. A sequential test suite
+    cannot see this, which is why `tests/api/test_concurrency.py` sends them in parallel.
+
+    Turning the check off is safe here because a connection is never shared *between*
+    requests: each caller opens its own and closes it, and within one request the steps run
+    one after another. It would stop being safe the moment a connection is cached or
+    handed to a background task — do not do that without reopening ADR-0010.
     """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, check_same_thread=False)
     try:
         connection.row_factory = sqlite3.Row
         yield connection

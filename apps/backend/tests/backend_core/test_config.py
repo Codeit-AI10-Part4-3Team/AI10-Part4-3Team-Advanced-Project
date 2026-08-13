@@ -35,6 +35,24 @@ def test_seed_account_rejects_a_compose_mangled_hash() -> None:
     assert "$$" in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    "truncated",
+    ["$argon2", "$argon2id$v=19", "$argon2id$v=19$m=65536,t=3,p=4"],
+    ids=["prefix only", "no parameters", "no salt or digest"],
+)
+def test_seed_account_rejects_a_hash_that_only_starts_right(truncated: str) -> None:
+    """⚠️ Regression guard. A prefix check (`startswith("$argon2")`) let all three of these
+    through, and argon2 then rejected them at *login* — one of them with `InvalidHashError`,
+    which is a `ValueError` rather than an `Argon2Error` and so escaped the handler in
+    `accounts.authenticate` and reached the client as a 500 (2026-08-13 실측).
+
+    The parse belongs at startup: a broken configuration value should stop the container,
+    not surface later as an unexplained error on a login screen.
+    """
+    with pytest.raises(ValidationError):
+        SeedAccount(login_id="demo1", password_hash=truncated)
+
+
 def test_accounts_parse_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "ADGEN_ACCOUNTS",

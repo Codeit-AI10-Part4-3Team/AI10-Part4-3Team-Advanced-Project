@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Cookie, Depends
+from fastapi import Cookie, Depends, Response
 
 from api.errors import unauthorized
 from backend_core import tokens
@@ -47,6 +47,7 @@ def db() -> Iterator[sqlite3.Connection]:
 
 
 def current_user(
+    response: Response,
     connection: Annotated[sqlite3.Connection, Depends(db)],
     session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
 ) -> Account:
@@ -60,7 +61,16 @@ def current_user(
     dropped from `ADGEN_ACCOUNTS` since the token was issued, and a stateless token cannot
     know that (ADR-0013). Looking the account up is also what lets `GET /v1/me` answer with
     the stored row rather than with whatever the cookie claims.
+
+    ⚠️ Marking the response uncacheable is done **here** rather than per route on purpose.
+    Everything behind this dependency is by definition one user's data, and whether it gets
+    stored by something in front of us is not a per-route judgement call. A reverse proxy is
+    an open decision (API_계약.md 2절, 소관 05), so the header has to already be right when
+    one appears — a proxy handing user A's session list to user B is not a bug you find in
+    testing. Routes added later inherit this by depending on `current_user`.
     """
+    response.headers["Cache-Control"] = "no-store"
+
     if session_token is None:
         unauthorized()
 

@@ -90,6 +90,22 @@ def test_configured_accounts_without_a_signing_key_refuse_to_start(
         pass  # pragma: no cover - the context manager raises on entry
 
 
+def test_a_half_configured_server_answers_401_not_500(client: TestClient) -> None:
+    """A cookie arriving where no signing key is configured.
+
+    The startup check only fires when accounts are configured, so this state is reachable:
+    a bare clone that someone points a browser at. Before the fix `tokens.verify` raised on
+    the empty key and the client got a 500 with a stack trace. No key means no token can be
+    valid, so 401 is the honest answer — and it must never become "verify with an empty
+    key", which would accept whatever an attacker signs with the same emptiness.
+    """
+    for method, path in [("get", "/v1/me"), ("post", "/v1/auth/logout")]:
+        response = client.request(method, path, headers={"Cookie": "session_token=anything"})
+
+        assert response.status_code == 401, path
+        assert response.json()["code"] == "UNAUTHORIZED"
+
+
 def test_a_bare_clone_still_starts(client: TestClient) -> None:
     """No .env at all: no accounts, no signing key. The app must still come up and serve
     /health, because a skeleton that needs configuration before it moves is not a walking

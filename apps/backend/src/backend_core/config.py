@@ -11,6 +11,8 @@ secret lives in the auth wiring, not here: this class is also read by /health an
 which must keep working on a fresh clone with no .env at all.
 """
 
+from argon2 import extract_parameters
+from argon2.exceptions import InvalidHashError
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,21 +35,29 @@ class SeedAccount(BaseModel):
 
     @field_validator("password_hash")
     @classmethod
-    def _must_look_like_a_hash(cls, value: str) -> str:
-        """Reject a hash that docker-compose ate on the way in.
+    def _must_be_a_parseable_argon2_hash(cls, value: str) -> str:
+        """Reject a hash that docker-compose ate, or that arrived truncated.
 
         Compose reads `$` inside a .env value as a variable reference, so an un-escaped
         argon2 hash arrives as `=19=65536,t=3,p=4` — still a non-empty string, so nothing
-        downstream notices until a login silently fails. infra/README.md documents the
-        `$$` escaping; this check is here because a rule people have to remember is not a
-        defence. Deliberately shape-only: verifying the hash for real is argon2's job.
+        downstream notices until a login silently fails. infra/README.md documents the `$$`
+        escaping; this check is here because a rule people have to remember is not a defence.
+
+        ⚠️ It parses rather than pattern-matches, and that is the point. A prefix check
+        passes `$argon2` and `$argon2id$v=19`, which argon2 then rejects at *login* with
+        `InvalidHashError` — and that one is a `ValueError`, not an `Argon2Error`, so it
+        escapes the handler in `accounts.authenticate` and reaches the client as a 500
+        (2026-08-13 실측). Startup is the right place to find a broken configuration value.
         """
-        if not value.startswith("$argon2"):
+        try:
+            extract_parameters(value)
+        except InvalidHashError as exc:
             raise ValueError(
-                "password hash is not an argon2 hash. If it came through docker-compose, "
-                "`$` must be written as `$$` in infra/.env "
-                "(see infra/README.md, 환경변수 값에 `$`가 들어갈 때)"
-            )
+                "password hash is not a valid argon2 hash. If it came through "
+                "docker-compose, `$` must be written as `$$` in infra/.env "
+                "(see infra/README.md, 환경변수 값에 `$`가 들어갈 때). "
+                "If it looks right but is short, it was probably truncated on the way in."
+            ) from exc
         return value
 
 

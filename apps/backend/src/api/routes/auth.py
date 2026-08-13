@@ -91,6 +91,11 @@ def login(
     and this route has to keep them together: naming which half was wrong tells an attacker
     which login ids exist (세션_보관_정책.md 1.2절).
     """
+    # Not behind `current_user`, so the header is set here too. This response carries the
+    # session token in `Set-Cookie`; a shared cache that stored it would hand one person's
+    # session to the next caller.
+    response.headers["Cache-Control"] = "no-store"
+
     account = authenticate(connection, body.login_id, body.password)
     if account is None:
         invalid_credentials()

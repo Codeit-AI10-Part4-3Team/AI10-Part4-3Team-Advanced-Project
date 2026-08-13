@@ -73,8 +73,16 @@ def verify(token: str, secret: str, now: datetime | None = None) -> str | None:
     ⚠️ One `None` for every kind of failure — malformed, forged, expired. The contract has
     a single code for all of them (401 `UNAUTHORIZED`, API_계약.md 6절), and a caller that
     never learns which one it was cannot leak the difference by accident.
+
+    "No signing key configured" is one of those failures, not an error. With no key nothing
+    can be a valid token, so the honest answer is `None` — and it must never be "verify with
+    an empty key", which would accept anything an attacker signs with the same emptiness.
+    Raising instead would turn a cookie sent at a half-configured server into a 500
+    (2026-08-13 실측 on a fresh clone). The operator-facing signal for a missing key is the
+    startup check, which is where ADR-0013 puts it.
     """
-    require_secret(secret)
+    if not secret:
+        return None
 
     payload, separator, signature = token.partition(_PART_SEPARATOR)
     if not separator:

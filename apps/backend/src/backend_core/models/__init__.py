@@ -6,6 +6,7 @@ here — import them from `backend_core.models.legacy_qa`, which makes every rem
 site visible and the eventual deletion mechanical.
 """
 
+from backend_core.models.auth import LoginRequest, Me
 from backend_core.models.common import (
     Base,
     Error,
@@ -19,6 +20,8 @@ __all__ = [
     "Base",
     "Error",
     "ErrorCode",
+    "LoginRequest",
+    "Me",
     "MessageMode",
     "Omittable",
     "OutputType",

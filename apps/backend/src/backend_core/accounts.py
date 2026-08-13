@@ -72,11 +72,24 @@ def seed(connection: sqlite3.Connection, seeds: list[SeedAccount]) -> int:
     return len(seeds)
 
 
+_SELECT = "SELECT user_id, login_id, password_hash, created_at FROM users"
+
+
 def find_by_login_id(connection: sqlite3.Connection, login_id: str) -> Account | None:
-    row = connection.execute(
-        "SELECT user_id, login_id, password_hash, created_at FROM users WHERE login_id = ?",
-        (login_id,),
-    ).fetchone()
+    """By the id a person types. Used at login, and to keep `user_id` stable across seeds."""
+    row = connection.execute(f"{_SELECT} WHERE login_id = ?", (login_id,)).fetchone()
+    return None if row is None else Account(**dict(row))
+
+
+def find_by_user_id(connection: sqlite3.Connection, user_id: str) -> Account | None:
+    """By the id other data references. Used to resolve a session token to its owner.
+
+    ⚠️ A signed token proves the `user_id` came from us; it does not prove the account still
+    exists. Accounts come from `ADGEN_ACCOUNTS` and can be removed from it, and a stateless
+    token has no way to learn that (ADR-0013) — so this lookup is what closes the gap, and
+    `None` here has to end as a 401 rather than as a logged-in nobody.
+    """
+    row = connection.execute(f"{_SELECT} WHERE user_id = ?", (user_id,)).fetchone()
     return None if row is None else Account(**dict(row))
 
 

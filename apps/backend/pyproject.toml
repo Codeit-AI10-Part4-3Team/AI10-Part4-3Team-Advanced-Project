@@ -78,3 +78,10 @@ no_implicit_optional = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# ⚠️ 테스트 파일의 **basename 은 레포 안에서 유일해야 합니다.** pytest 기본 import 모드는
+#    테스트를 최상위 모듈명으로 잡으므로, 서로 다른 디렉토리에 같은 이름이 둘 있으면
+#    수집이 `import file mismatch`로 깨집니다. src/ 구조를 미러링하는 규약(AGENTS.md)을
+#    따르다 보면 `api/routes/auth.py`와 `backend_core/models/auth.py`처럼 같은 이름이
+#    생기는데, 그때는 뒤에 역할을 붙이세요(`test_auth_routes.py`).
+#    `--import-mode=importlib`로 푸는 방법도 있지만 `from conftest import ...`가 함께
+#    깨지므로, 그 전환은 conftest 사용처를 정리하는 별도 작업입니다.

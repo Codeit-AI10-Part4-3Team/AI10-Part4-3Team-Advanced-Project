@@ -41,6 +41,15 @@ def _reject_null(value: object) -> object:
     Without this, `Omittable[str]` would happily take `{"note": null}` — and the caller
     that meant "clear this field" would silently get "field not present" instead. The two
     are different requests in this contract (API_계약.md 3절).
+
+    ⚠️ This also rejects `Model(note=None)` in our own Python code. That is intended, not
+    an uncontained side effect: there is no seam to separate the two. FastAPI parses the
+    request body itself and hands pydantic a dict, so an HTTP request validates in
+    `mode="python"` exactly like a constructor call does — narrowing this to `mode="json"`
+    would let `{"note": null}` through on every real request, the one case the rule exists
+    for. Express absence by leaving the argument out:
+
+        Session(**{k: v for k, v in row.items() if v is not None})
     """
     if value is None:
         raise ValueError('null is not allowed by the contract; omit the key or send ""')

@@ -74,6 +74,25 @@ def test_explicit_null_is_rejected_on_a_required_field() -> None:
         Sample.model_validate({"productName": None})
 
 
+def test_null_is_rejected_in_python_construction_too() -> None:
+    """Not only on the wire — constructing with `None` is rejected as well.
+
+    ⚠️ Pinned deliberately. It looks like over-reach and invites a "fix", but the two
+    paths cannot be separated: FastAPI hands pydantic a parsed dict, so a real request
+    validates in `mode="python"` exactly like this call. Allowing `None` here would allow
+    `{"note": null}` on every request (see `_reject_null`).
+    """
+    with pytest.raises(ValidationError):
+        Sample(product_name="핸드크림", note=None)
+
+
+def test_absence_is_expressed_by_leaving_the_argument_out() -> None:
+    """The idiom callers use instead, e.g. when building a model from a storage row."""
+    row = {"product_name": "핸드크림", "note": None}
+    built = Sample(**{key: value for key, value in row.items() if value is not None})
+    assert built.model_dump(by_alias=True) == {"productName": "핸드크림"}
+
+
 def test_absent_field_is_omitted_rather_than_serialized_as_null() -> None:
     assert Sample(product_name="핸드크림").model_dump(by_alias=True) == {"productName": "핸드크림"}
 

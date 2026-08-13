@@ -35,11 +35,17 @@ def contract_schemas() -> dict[str, Any]:
     Read straight from the spec rather than copied into the test: a copy drifts with the
     models it is supposed to police, which is the failure this fixture exists to prevent.
 
-    Skips rather than fails when the file is missing — this app is installable on its own,
-    and a missing monorepo sibling is an environment fact, not a broken model.
+    ⚠️ Fails rather than skips when the file is missing. The tests live in this repo, so
+    they cannot run without the checkout that carries the contract — meaning a missing file
+    is never an environment fact, only a broken path or a moved contract. Skipping there
+    would turn off every conformance test and still show green, which is the exact failure
+    mode this suite exists to prevent.
     """
     if not CONTRACT_PATH.exists():
-        pytest.skip(f"contract not found at {CONTRACT_PATH}")
+        pytest.fail(
+            f"contract not found at {CONTRACT_PATH} — the conformance tests cannot run. "
+            "Did packages/contracts/openapi.yaml move, or did this app's depth change?"
+        )
     spec: dict[str, Any] = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     schemas: dict[str, Any] = spec["components"]["schemas"]
     return schemas

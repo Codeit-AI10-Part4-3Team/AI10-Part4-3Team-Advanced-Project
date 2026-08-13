@@ -7,6 +7,12 @@
 #
 # 로컬과 배포가 **같은 파일**을 쓰는 것이 목적입니다 — 로컬 전용 편의를 여기 넣지 말고
 # 필요하면 compose override 파일로 분리하세요.
+#
+# ⚠️ **override 파일을 새로 만들면 `.github/workflows/docker-build.yml` 의
+#    "ai-engine이 루프백에만 묶여 있는지 확인" 스텝의 `-f` 목록에 함께 넣으세요.**
+#    그 검사는 `-f` 로 지정한 파일만 읽습니다. override 가 ai-engine 의 포트를 다시 열면
+#    실제로는 8100 이 인터넷에 노출되는데 CI 는 초록으로 남습니다 (infra/README.md
+#    "방화벽은 우리 통제 밖입니다"). 빠뜨리면 그 스텝이 먼저 실패하도록 해 두었습니다.
 
 name: adgen
 

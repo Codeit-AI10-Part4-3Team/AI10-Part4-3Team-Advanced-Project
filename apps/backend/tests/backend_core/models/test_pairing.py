@@ -56,16 +56,17 @@ COMIC_DRAFT = ComicDraft(
 
 
 def test_comic_brief_may_not_carry_aspect_ratio() -> None:
+    # Built outside the block on purpose: with the helper inside it, a failure there would
+    # pass this test for the wrong reason and the pairing check could quietly stop running.
+    brief = comic_brief(aspectRatio="1:1")
     with pytest.raises(ValidationError, match="aspectRatio"):
-        DraftGenerateRequest(output_type="comic", brief=comic_brief(aspectRatio="1:1"))
+        DraftGenerateRequest(output_type="comic", brief=brief)
 
 
 def test_single_ad_brief_may_not_carry_character() -> None:
+    brief = single_ad_brief(character={"appearance": "단발", "outfit": "니트"})
     with pytest.raises(ValidationError, match="character"):
-        DraftGenerateRequest(
-            output_type="single_ad",
-            brief=single_ad_brief(character={"appearance": "단발", "outfit": "니트"}),
-        )
+        DraftGenerateRequest(output_type="single_ad", brief=brief)
 
 
 def test_matching_pairs_are_accepted() -> None:
@@ -110,23 +111,15 @@ def test_a_draft_mixing_both_shapes_is_rejected() -> None:
 
 def test_comic_output_type_rejects_a_single_ad_draft() -> None:
     """⚠️ Without the pairing check this validates cleanly — the union accepts either."""
+    brief, spec = comic_brief(), ImageSpec(width=3456, height=2304)
     with pytest.raises(ValidationError, match="expected ComicDraft"):
-        ImageRenderRequest(
-            output_type="comic",
-            brief=comic_brief(),
-            draft=SINGLE_AD_DRAFT,
-            spec=ImageSpec(width=3456, height=2304),
-        )
+        ImageRenderRequest(output_type="comic", brief=brief, draft=SINGLE_AD_DRAFT, spec=spec)
 
 
 def test_single_ad_output_type_rejects_a_comic_draft() -> None:
+    brief, spec = single_ad_brief(), ImageSpec(width=1088, height=1088)
     with pytest.raises(ValidationError, match="expected SingleAdDraft"):
-        ImageRenderRequest(
-            output_type="single_ad",
-            brief=single_ad_brief(),
-            draft=COMIC_DRAFT,
-            spec=ImageSpec(width=1088, height=1088),
-        )
+        ImageRenderRequest(output_type="single_ad", brief=brief, draft=COMIC_DRAFT, spec=spec)
 
 
 # ---- 컷과 규격 -----------------------------------------------------------------

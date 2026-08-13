@@ -63,6 +63,10 @@ extraPaths = ["src"]
 
 # ⚠️ mypy는 이 디렉토리를 cwd로 실행해야 이 설정을 집습니다 (CI/scripts가 그렇게 호출).
 [tool.mypy]
+# pydantic 플러그인이 없으면 alias 를 준 필드의 생성자 인자를 alias 이름으로만 인식해,
+# populate_by_name=True 로 허용된 파이썬 이름 호출이 call-arg 오류로 잡힙니다
+# (SingleAdDraft.ad_copy / alias="copy" 가 그 경우). 플러그인은 그 설정을 읽습니다.
+plugins = ["pydantic.mypy"]
 python_version = "3.12"
 files = ["src"]
 mypy_path = ["src"]

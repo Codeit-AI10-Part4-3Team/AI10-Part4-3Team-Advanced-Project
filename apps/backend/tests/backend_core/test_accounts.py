@@ -4,6 +4,12 @@ The two behaviours worth protecting here are not "does a correct password work" 
 
 - a restart must not change `user_id` (sessions reference it — INV-9), and
 - a failed login must not reveal whether the login id exists (세션_보관_정책.md 1.2절).
+
+⚠️ `test_inv9_...` carries the invariant id in its *name*, not only in a docstring
+(도메인_모델.md 7.1절): whoever later deletes it should find out from `grep INV-9` that it
+was holding up an invariant. This is not the INV-9 test itself — that one checks that
+another user's session 404s, and it arrives with the session routes — but the ownership
+check is worthless if `user_id` moves under it.
 """
 
 from __future__ import annotations
@@ -63,7 +69,9 @@ def test_seed_creates_the_configured_accounts(
     assert find_by_login_id(db, "demo2") is not None
 
 
-def test_reseeding_keeps_the_same_user_id(db: sqlite3.Connection, seeds: list[SeedAccount]) -> None:
+def test_inv9_reseeding_keeps_the_same_user_id(
+    db: sqlite3.Connection, seeds: list[SeedAccount]
+) -> None:
     """INV-9 depends on this.
 
     Seeding runs on every startup. If it re-issued `user_id`, every session that user owns

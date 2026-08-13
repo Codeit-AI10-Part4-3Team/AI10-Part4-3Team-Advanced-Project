@@ -32,6 +32,8 @@ docker compose -f infra/docker-compose.yml up --build
 
 1. `.env.example`에 **키 이름과 설명**을 추가 (값은 빈칸)
 2. `docker-compose.yml`의 해당 서비스 `environment:`에 전달 (`${VAR:-기본값}`)
+   — ⚠️ **값에 `$`가 들어가면 이 방식이 값을 조용히 깨뜨립니다.** 비밀번호 해시가 여기
+   해당합니다. 아래 "환경변수 값에 `$`가 들어갈 때"를 먼저 읽으세요
 3. 앱의 설정 클래스(`backend_core/config.py` 등)에 필드 추가 — 접두어 규약을 지킬 것
 4. 필요하면 CI/배포 시크릿에도 등록
 
@@ -108,6 +110,23 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
 | 스냅샷 일정 | 정책 `adcraft-daily-snap`. UTC 18:00 (KST 03:00), **보존 7일**, `apply-retention-policy` |
 | SSH | **22번을 `0.0.0.0/0`에 열어 둡니다(의도된 상태).** 아래 "SSH 접근 경로" 참고 |
 | 외부 노출 포트 | backend `8000`만. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
+
+### 상태는 `adgen-state` 볼륨 안에 있습니다
+
+계정·세션이 든 SQLite 파일은 컨테이너의 `/data`에 있고, 그 경로에는 이름 있는 볼륨
+`adgen-state`가 붙습니다. 호스트 디렉토리가 아닙니다. 왜 바인드 마운트가 아닌지:
+[ADR-0014](../docs/adr/0014-상태_파일은_이름_있는_볼륨에_둔다.md).
+
+- ⚠️ **`docker compose down -v`는 계정과 세션을 전부 지웁니다.** `-v` 한 글자 차이입니다.
+  스택을 내릴 때는 `-v` 없이 내리세요. 볼륨을 비우는 것은 "다시 시드하겠다"는 결정이며,
+  되돌릴 방법은 백업뿐입니다.
+- 파일을 눈으로 확인할 때: `docker compose -f infra/docker-compose.yml exec backend ls -l /data`
+- 백업은 호스트의 파일 복사가 아니라 컨테이너를 한 번 거칩니다. `VACUUM INTO`로 사본을
+  만든 뒤 `docker compose cp`로 꺼내는 형태이며, 이것이 08-26 백업 cron이 붙을 자리입니다
+  ([ADR-0010](../docs/adr/0010-상태_저장소와_파일_보관_위치.md)).
+- 업로드 사진·결과 이미지가 들어올 때도 **볼륨을 새로 만들지 말고 이 볼륨을 씁니다.**
+  보존 기간 정리 배치가 한 곳만 보게 하기 위해서입니다
+  ([세션_보관_정책.md](../docs/기술문서/세션_보관_정책.md) 2절).
 
 ### 권한 경계 (실측 기록)
 

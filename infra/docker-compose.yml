@@ -53,6 +53,14 @@ services:
       ADGEN_SESSION_SECRET: ${ADGEN_SESSION_SECRET:-}
       ADGEN_SESSION_MAX_AGE_S: ${ADGEN_SESSION_MAX_AGE_S:-86400}
       ADGEN_ACCOUNTS: ${ADGEN_ACCOUNTS:-}
+      # ── 상태 저장소 (ADR-0010, ADR-0014) ──────────────────────────────────
+      # 이미지의 기본값(`./data/...`)은 /app 아래를 가리키는데 그쪽은 root 소유라
+      # 비루트 앱이 쓸 수 없습니다. 볼륨이 붙는 /data 로 옮깁니다.
+      ADGEN_DB_PATH: ${ADGEN_DB_PATH:-/data/adgen.sqlite}
+    volumes:
+      # ⚠️ 이 볼륨이 없으면 컨테이너를 내릴 때 계정과 세션이 사라집니다. ADR-0010 이
+      #    인메모리를 배제한 이유("확정을 눌렀는데 결과가 없다")가 그대로 재현됩니다.
+      - adgen-state:/data
     ports:
       - "8000:8000"
     depends_on:
@@ -67,6 +75,11 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+
+volumes:
+  # 상태 저장소(SQLite 파일)와 앞으로 들어올 이미지 파일이 사는 곳. 이름 있는 볼륨을
+  # 쓰는 이유와 바인드 마운트를 택하지 않은 이유: ADR-0014.
+  adgen-state:
 
 # ── 아직 없는 서비스 ────────────────────────────────────────────────────────────
 # vector-db — 지금 검색은 번들 픽스처 기반이라 붙일 대상이 없습니다. 아무도 말을 걸지 않는

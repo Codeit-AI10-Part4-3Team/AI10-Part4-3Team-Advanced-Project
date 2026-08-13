@@ -5,7 +5,7 @@ to loosen `SUPPORT_THRESHOLD` until it passes. The threshold is a measurement pa
 """
 
 from ai_engine.guardrail import GuardrailContext, verify
-from ai_engine.models import Passage
+from ai_engine.models.legacy_qa import Passage
 
 PASSAGE = Passage(
     id="p1",

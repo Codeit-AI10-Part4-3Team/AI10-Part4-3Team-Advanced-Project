@@ -3,8 +3,10 @@
 [![CI (lint + test)](https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/actions/workflows/ci.yml)
 
 **글과 이미지를 넣으면 브랜드 스타일의 광고 소재를 만들어 주는 AI 서비스.**
-이미지 생성 모델을 브랜드 데이터로 파인튜닝(LoRA)하고, GCP VM에 배포해 실제로 운영하는
-것까지가 범위입니다. (코드잇 AI10 Part4 3팀 고급 프로젝트 / 2026-08-04 ~ 2026-08-31)
+이미지 생성은 외부 API로 하고, GCP VM에 배포해 실제로 운영하는 것까지가 범위입니다.
+파인튜닝(LoRA)은 이번 범위가 아닙니다 ([ADR-0003](docs/adr/0003-이미지_생성_경로.md),
+[ADR-0004](docs/adr/0004-파인튜닝_보류.md)).
+(코드잇 AI10 Part4 3팀 고급 프로젝트 / 2026-08-04 ~ 2026-08-31)
 
 > ⚠️ **현재는 워킹 스켈레톤입니다.** 관통하는 경로는 아직 광고 생성이 아니라 템플릿이 갖고 온
 > 질의응답이며, 외부 의존은 전부 오프라인 스텁입니다. 이 상태의 값어치는 기능이 아니라

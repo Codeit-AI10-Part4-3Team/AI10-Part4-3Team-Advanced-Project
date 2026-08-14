@@ -68,6 +68,27 @@ services:
       # 업로드 사진과 결과 이미지. 같은 볼륨 아래에 둡니다 - 보존 기간 정리 배치가 한 곳만
       # 보면 되도록(세션_보관_정책 2절), 그리고 백업 대상이 둘로 늘지 않도록(ADR-0014).
       ADGEN_IMAGE_DIR: ${ADGEN_IMAGE_DIR:-/data/images}
+      # ── 카탈로그 ──────────────────────────────────────────────────────────
+      # ⚠️ 이 줄이 없으면 **화풍을 설정으로 받는다는 설계가 배포에서 성립하지 않습니다.**
+      #    후보 목록을 코드에 박지 않은 것은 미결정 대장 A절 3번이 차단이기 때문인데
+      #    (backend/src/api/routes/catalog.py), compose 가 값을 전달하지 않으면 결정이
+      #    내려져도 넣을 자리가 없어 화풍 선택 화면이 영원히 빈 목록입니다.
+      #    JSON 배열이며 `ArtStyle` 과 같은 모양입니다.
+      ADGEN_ART_STYLES: ${ADGEN_ART_STYLES:-}
+      # ── 생성 타임아웃 ─────────────────────────────────────────────────────
+      # 앞의 둘은 사용자가 기다리는 호출이고, 렌더는 잡 워커가 기다립니다 - 분 단위가
+      # 허용되는 이유가 그것뿐입니다 (ADR-0015, API_계약.md 2.1절).
+      ADGEN_BRIEF_FILL_TIMEOUT_S: ${ADGEN_BRIEF_FILL_TIMEOUT_S:-15.0}
+      ADGEN_DRAFT_TIMEOUT_S: ${ADGEN_DRAFT_TIMEOUT_S:-60.0}
+      ADGEN_RENDER_TIMEOUT_S: ${ADGEN_RENDER_TIMEOUT_S:-300.0}
+      # ── 렌더 워커 (ADR-0015) ──────────────────────────────────────────────
+      # ⚠️ 끄면 finalize 는 계속 202 를 돌려주는데 아무것도 실행되지 않습니다. 화면에는
+      #    영원히 도는 스피너로 보이므로, 배포에서 이 값을 false 로 두지 마세요.
+      ADGEN_WORKER_ENABLED: ${ADGEN_WORKER_ENABLED:-true}
+      ADGEN_WORKER_POLL_INTERVAL_S: ${ADGEN_WORKER_POLL_INTERVAL_S:-1.0}
+      # 클라이언트에게 `Retry-After` 로 알려 주는 값. 위의 워커 주기와 다릅니다 - 이쪽은
+      # 네트워크 너머의 폴링이고, 저쪽은 같은 파일을 보는 폴링입니다.
+      ADGEN_JOB_POLL_INTERVAL_S: ${ADGEN_JOB_POLL_INTERVAL_S:-3}
     volumes:
       # ⚠️ 이 볼륨이 없으면 컨테이너를 내릴 때 계정과 세션이 사라집니다. ADR-0010 이
       #    인메모리를 배제한 이유("확정을 눌렀는데 결과가 없다")가 그대로 재현됩니다.

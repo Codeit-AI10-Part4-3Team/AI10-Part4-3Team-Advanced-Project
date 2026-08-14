@@ -79,3 +79,38 @@ def test_compose_also_names_every_writable_path(variable: str) -> None:
     assert variable in COMPOSE.read_text(encoding="utf-8"), (
         f"{variable} is missing from infra/docker-compose.yml"
     )
+
+
+NOT_OPERATOR_FACING = {
+    # Set to a service name by compose itself, not by an operator — putting it in .env would
+    # invite someone to point the backend at a host that does not exist inside the network.
+    "ai_engine_url",
+}
+"""Settings deliberately absent from the operator's knobs. Add here **with a reason**."""
+
+
+def test_every_setting_reaches_the_container() -> None:
+    """⚠️ `infra/docker-compose.yml` has no `env_file:`, so a variable it does not name
+    **does not exist in the container** — whatever `infra/.env` says.
+
+    That is not a theoretical gap. `ADGEN_ART_STYLES` was added to `.env.example` and not to
+    compose, which quietly defeated the decision it exists for: the art-style candidates are
+    kept out of the source because 미결정_대장 A절 3번 is 차단, so configuration is the *only*
+    way in — and in the only deployment we have there was no way in at all
+    (2026-08-14, PR #87 리뷰에서 신호정 발견).
+
+    Every new setting now has to be routed or explicitly excused. Forgetting is what this
+    catches; disagreeing is what `NOT_OPERATOR_FACING` is for.
+    """
+    compose = COMPOSE.read_text(encoding="utf-8")
+
+    missing = sorted(
+        f"ADGEN_{name.upper()}"
+        for name in Settings.model_fields
+        if name not in NOT_OPERATOR_FACING and f"ADGEN_{name.upper()}" not in compose
+    )
+
+    assert missing == [], (
+        f"{missing} exist in Settings but are not passed through infra/docker-compose.yml. "
+        "Add them there, or add them to NOT_OPERATOR_FACING with a reason."
+    )

@@ -152,7 +152,17 @@ paths:
     delete:
       tags: [auth]
       summary: 탈퇴 (구현하지 않음)
+      description: |
+        주의: **구현하지 않지만 인증은 필요합니다.** 전역 `security` 가 이 경로를 덮고 있고
+        `security: []` 예외가 없습니다. `POST /v1/auth/signup` 에만 그 예외가 있는 것은
+        가입이 본래 공개이기 때문입니다 - 로그인한 채로 가입할 수는 없습니다. 반면 "내
+        계정을 지운다" 는 지금 무엇을 돌려주든 "나" 가 누구인지를 전제합니다.
+
+        501 과 `security` 는 서로 다른 질문에 답합니다. 501 은 서버가 아직 이 일을 하지
+        않는다는 뜻이고, `security` 는 누가 물어볼 수 있는지입니다.
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "501":
           $ref: "#/components/responses/NotImplemented"
 
@@ -163,7 +173,11 @@ paths:
       description: |
         재설정도 1차 범위 밖입니다. 메일 발송 경로가 없기 때문이며, 잊으면 계정을 다시
         만듭니다 (세션_보관_정책.md 1.2절).
+
+        `DELETE /v1/me` 와 같은 이유로 인증이 필요합니다.
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "501":
           $ref: "#/components/responses/NotImplemented"
 

@@ -18,6 +18,24 @@ RUN pip install --no-cache-dir .
 
 # 비루트 실행 — 한 호스트에 여러 서비스가 뜨므로 권한 격리를 유지한다.
 RUN useradd --create-home --uid 10001 appuser
+
+# 상태 디렉토리. **이미지 안에서 미리 만들고 소유권을 넘기는 것이 요점**입니다 —
+# 도커는 이름 있는 볼륨을 처음 붙일 때 이미지의 해당 경로 소유권을 물려받습니다.
+# 여기서 안 만들면 볼륨이 root 소유로 생기고, 비루트로 도는 앱이 기동하자마자
+# PermissionError 로 죽습니다 (2026-08-12 실측). 근거: ADR-0014.
+RUN mkdir -p /data && chown appuser:appuser /data
+VOLUME ["/data"]
+
+# ⚠️ 이 줄이 없으면 **아무 환경변수 없이 띄운 이미지가 기동하자마자 죽습니다.**
+#    코드 기본값은 `./data/adgen.sqlite` 이고 그것은 WORKDIR(`/app`) 기준 상대 경로인데,
+#    `/app` 은 root 소유라 비루트 appuser 가 `data/` 를 만들 수 없습니다
+#    (`PermissionError: [Errno 13] 'data'`, 2026-08-14 실측 — CI 의 backend 스모크가
+#    바로 여기서 떨어졌습니다). 코드 기본값은 `uvicorn` 을 apps/backend 에서 맨몸으로
+#    돌리는 경우를 위한 것이고, 컨테이너의 기본값은 위에서 소유권까지 넘겨 준 이 경로여야
+#    합니다. compose 도 같은 값을 주지만(infra/docker-compose.yml) 그것은 덧방이고,
+#    `docker run` 한 줄로 뜨는 것은 이 줄의 몫입니다. 근거: ADR-0014.
+ENV ADGEN_DB_PATH=/data/adgen.sqlite
+
 USER appuser
 
 EXPOSE 8000

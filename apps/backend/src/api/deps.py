@@ -9,10 +9,19 @@ Each provider is the named seam where a stub gets replaced by the real thing. Re
 stub *at* its seam, not around it.
 """
 
+import sqlite3
+from collections.abc import Iterator
 from functools import lru_cache
+from typing import Annotated
 
+from fastapi import Cookie, Depends, Response
+
+from api.errors import unauthorized
+from backend_core import tokens
+from backend_core.accounts import Account, find_by_user_id
 from backend_core.ai_client import AiEngineClient, HttpAiEngineClient
-from backend_core.config import Settings, get_settings
+from backend_core.config import SESSION_COOKIE_NAME, Settings, get_settings
+from backend_core.storage import connect
 
 
 @lru_cache(maxsize=1)
@@ -23,3 +32,55 @@ def settings() -> Settings:
 @lru_cache(maxsize=1)
 def ai_client() -> AiEngineClient:
     return HttpAiEngineClient(settings().ai_engine_url, settings().ai_engine_timeout_s)
+
+
+def db() -> Iterator[sqlite3.Connection]:
+    """One connection per request, closed when the response is done.
+
+    ⚠️ A plain `def`, not `async def`. sqlite3 is blocking, and FastAPI only moves sync
+    dependencies to the threadpool — an `async def` here would run the open and every query
+    on the event loop, where with a single worker one slow call stalls every other request
+    (API_계약.md 2.2절, ADR-0011).
+    """
+    with connect(settings().db_path) as connection:
+        yield connection
+
+
+def current_user(
+    response: Response,
+    connection: Annotated[sqlite3.Connection, Depends(db)],
+    session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+) -> Account:
+    """The logged-in account, or 401.
+
+    Depend on this from every route the contract protects — everything except `/health` and
+    `/v1/auth/*` (API_계약.md 6절).
+
+    Two steps, and the second is not redundant. The token is signed, so its `userId` is
+    trustworthy, but "trustworthy" is not "still exists": the account could have been
+    dropped from `ADGEN_ACCOUNTS` since the token was issued, and a stateless token cannot
+    know that (ADR-0013). Looking the account up is also what lets `GET /v1/me` answer with
+    the stored row rather than with whatever the cookie claims.
+
+    ⚠️ Marking the response uncacheable is done **here** rather than per route on purpose.
+    Everything behind this dependency is by definition one user's data, and whether it gets
+    stored by something in front of us is not a per-route judgement call. A reverse proxy is
+    an open decision (API_계약.md 2절, 소관 05), so the header has to already be right when
+    one appears — a proxy handing user A's session list to user B is not a bug you find in
+    testing. Routes added later inherit this by depending on `current_user`.
+    """
+    response.headers["Cache-Control"] = "no-store"
+
+    if session_token is None:
+        unauthorized()
+
+    user_id = tokens.verify(session_token, settings().session_secret)
+    if user_id is None:
+        unauthorized()
+
+    account = find_by_user_id(connection, user_id)
+    if account is None:
+        # Signed, unexpired, and pointing at nobody. Same answer as no cookie at all: the
+        # client's move is to log in again either way.
+        unauthorized()
+    return account

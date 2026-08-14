@@ -5,6 +5,9 @@ Contract: packages/contracts/openapi.yaml. Edit it first (AGENTS.md 교체 순�
 Signup, withdrawal and password change are contract-only in the first cut and answer 501
 (ADR-0008): the skeleton's question is "does authentication actually sit on the flow", and
 creating accounts does not answer it.
+
+⚠️ Never log a request body on the login route. A debug log of the whole body is the most
+common way plaintext passwords end up on disk (세션_보관_정책.md 1.2절).
 """
 
 from datetime import datetime
@@ -37,6 +40,9 @@ class Me(Base):
 
     No profile, display name or email. An email is one more piece of personal data to hold
     and delete, bought for nothing the first cut needs.
+
+    Returned by login and by `GET /v1/me` in the same shape: a client that has just logged
+    in and one that is restoring a session should not have to tell the two apart.
     """
 
     user_id: UUID = Field(description="다른 데이터가 참조하는 것은 이쪽입니다")

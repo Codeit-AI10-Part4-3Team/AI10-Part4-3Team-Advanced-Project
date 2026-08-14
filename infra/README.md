@@ -32,10 +32,66 @@ docker compose -f infra/docker-compose.yml up --build
 
 1. `.env.example`에 **키 이름과 설명**을 추가 (값은 빈칸)
 2. `docker-compose.yml`의 해당 서비스 `environment:`에 전달 (`${VAR:-기본값}`)
+   — ⚠️ **값에 `$`가 들어가면 이 방식이 값을 조용히 깨뜨립니다.** 비밀번호 해시가 여기
+   해당합니다. 아래 "환경변수 값에 `$`가 들어갈 때"를 먼저 읽으세요
 3. 앱의 설정 클래스(`backend_core/config.py` 등)에 필드 추가 — 접두어 규약을 지킬 것
 4. 필요하면 CI/배포 시크릿에도 등록
 
 빠뜨리기 쉬운 것은 4번입니다. 로컬에서만 되는 변수는 배포에서 조용히 기본값으로 동작합니다.
+
+### 환경변수 값에 `$`가 들어갈 때 (2026-08-12 실측, 임동규)
+
+위 2번을 **그대로 따르면 값이 깨집니다.** compose는 `${VAR}` 치환을 한 뒤 그 결과를 다시 읽는
+것이 아니라, `.env` 값 안의 `$`를 **변수 참조로 해석**합니다. argon2 · bcrypt 해시가 전부
+`$argon2id$v=19$...` 꼴이라 이 항목에 정면으로 걸립니다.
+
+```
+.env 입력  : password_hash":"$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaA"
+컨테이너   : password_hash":"=19=65536,t=3,p=4"
+```
+
+`docker compose config` 로그에 `The "argon2id" variable is not set` 경고가 함께 찍힙니다.
+`environment:` 목록형(`- ADGEN_ACCOUNTS`, 값 없이 이름만)도 **같은 방식으로 깨집니다.**
+
+위 값은 `docker compose config` 의 렌더 결과가 아니라 **컨테이너 안에서 `printenv` 로 읽은
+것**입니다. `config` 출력은 `$` 를 `$$` 로 다시 이스케이프해 보여주므로 그것만으로는 판정할 수
+없습니다. 재현:
+
+```bash
+docker compose run --rm -T <서비스> printenv ADGEN_ACCOUNTS
+```
+
+네 가지를 컨테이너 안에서 확인한 결과입니다.
+
+| 방법 | 컨테이너가 받는 값 | 채택 |
+|---|---|---|
+| `environment:` + `${VAR}` (규칙 2번 그대로) | 깨짐 | X |
+| `environment:` 목록형 (`- VAR`) | 깨짐 | X |
+| `.env`에서 `$` 를 `$$` 로 이스케이프 | **`$` 하나로 온전히 도착** | **O** |
+| `env_file:` + `format: raw` | 온전히 도착 | X (아래 이유) |
+
+**`.env`에서 `$$` 로 이스케이프하는 쪽을 씁니다.**
+
+```bash
+# .env - $ 를 두 번 씁니다
+ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3,p=4$$..."}]
+```
+
+`env_file` 을 쓰지 않는 이유는 **파일 단위로만 지정되기 때문**입니다. backend 에 `.env` 를
+통째로 물리면 ai-engine 전용인 `ADGEN_MODEL_API_KEY` 까지 backend 컨테이너에 들어갑니다.
+외부에 열리는 것은 8000(backend) 쪽이므로, 유료 키를 그쪽에 함께 두지 않는 현재의 분리를
+유지합니다. 시크릿 전용 `.env` 를 하나 더 두는 안은 `cp .env.example .env` 한 줄로 끝나는
+세팅 절차가 둘로 갈라져 쓰지 않았습니다.
+
+이스케이프를 빠뜨리면 값이 조용히 뭉개지고 증상은 "로그인만 안 됨"으로 나옵니다. 그래서
+**backend 가 기동 시점에 해시를 실제로 파싱해 보고, 안 되면 거부**합니다 - 사람이 규칙을
+기억하는 것에만 기대지 않기 위해서입니다.
+
+⚠️ **모양(접두어)만 보지 않고 파싱하는 이유가 있습니다** (2026-08-13 실측). `$argon2` 나
+`$argon2id$v=19` 처럼 앞부분만 맞고 잘린 값은 접두어 검사를 통과하는데, argon2 는 그것을
+`InvalidHashError` 로 거부합니다. 그런데 이 예외는 `Argon2Error` 가 아니라 `ValueError` 를
+상속해서 로그인 경로의 예외 처리를 빠져나가고, 사용자에게는 **500** 으로 나갑니다. 깨진 설정
+값은 로그인 화면의 원인 불명 오류가 아니라 컨테이너가 안 뜨는 것으로 드러나야 합니다.
 
 ## 배포
 
@@ -60,6 +116,23 @@ docker compose -f infra/docker-compose.yml up --build
 | 스냅샷 일정 | 정책 `adcraft-daily-snap`. UTC 18:00 (KST 03:00), **보존 7일**, `apply-retention-policy` |
 | SSH | **22번을 `0.0.0.0/0`에 열어 둡니다(의도된 상태).** 아래 "SSH 접근 경로" 참고 |
 | 외부 노출 포트 | backend `8000`만. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
+
+### 상태는 `adgen-state` 볼륨 안에 있습니다
+
+계정·세션이 든 SQLite 파일은 컨테이너의 `/data`에 있고, 그 경로에는 이름 있는 볼륨
+`adgen-state`가 붙습니다. 호스트 디렉토리가 아닙니다. 왜 바인드 마운트가 아닌지:
+[ADR-0014](../docs/adr/0014-상태_파일은_이름_있는_볼륨에_둔다.md).
+
+- ⚠️ **`docker compose down -v`는 계정과 세션을 전부 지웁니다.** `-v` 한 글자 차이입니다.
+  스택을 내릴 때는 `-v` 없이 내리세요. 볼륨을 비우는 것은 "다시 시드하겠다"는 결정이며,
+  되돌릴 방법은 백업뿐입니다.
+- 파일을 눈으로 확인할 때: `docker compose -f infra/docker-compose.yml exec backend ls -l /data`
+- 백업은 호스트의 파일 복사가 아니라 컨테이너를 한 번 거칩니다. `VACUUM INTO`로 사본을
+  만든 뒤 `docker compose cp`로 꺼내는 형태이며, 이것이 08-26 백업 cron이 붙을 자리입니다
+  ([ADR-0010](../docs/adr/0010-상태_저장소와_파일_보관_위치.md)).
+- 업로드 사진·결과 이미지가 들어올 때도 **볼륨을 새로 만들지 말고 이 볼륨을 씁니다.**
+  보존 기간 정리 배치가 한 곳만 보게 하기 위해서입니다
+  ([세션_보관_정책.md](../docs/기술문서/세션_보관_정책.md) 2절).
 
 ### 권한 경계 (실측 기록)
 

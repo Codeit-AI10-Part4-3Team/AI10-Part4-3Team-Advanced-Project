@@ -3,9 +3,65 @@
 Values come from the environment (infra/.env, never committed). Defaults are the local
 docker-compose topology so a fresh clone runs without configuration — a skeleton that
 needs a filled-in .env before it moves is not a walking skeleton.
+
+⚠️ The auth fields below have empty defaults, and that emptiness is *not* a usable value.
+A committed default signing key is a published signing key (ADR-0013), and the fixed
+accounts only exist in infra/.env anyway (ADR-0008). The check that rejects an empty
+secret lives in the auth wiring, not here: this class is also read by /health and /v1/ask,
+which must keep working on a fresh clone with no .env at all.
 """
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated, Any
+
+from argon2 import extract_parameters
+from argon2.exceptions import InvalidHashError
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# The cookie name is contract surface (openapi.yaml securitySchemes), not an operator
+# knob: renaming it silently logs every client out. Kept as a constant so it cannot drift
+# per-environment. The *lifetime* is configurable — see Settings.session_max_age_s.
+SESSION_COOKIE_NAME = "session_token"
+
+
+class SeedAccount(BaseModel):
+    """One pre-made account. Signup is 501, so accounts only ever arrive this way.
+
+    ⚠️ `password_hash` is a hash, never a plaintext password. Nothing in this codebase
+    accepts a plaintext password from configuration — that is how they end up in logs and
+    in shell history.
+    """
+
+    login_id: str = Field(min_length=1, max_length=64)
+    password_hash: str = Field(min_length=1)
+
+    @field_validator("password_hash")
+    @classmethod
+    def _must_be_a_parseable_argon2_hash(cls, value: str) -> str:
+        """Reject a hash that docker-compose ate, or that arrived truncated.
+
+        Compose reads `$` inside a .env value as a variable reference, so an un-escaped
+        argon2 hash arrives as `=19=65536,t=3,p=4` — still a non-empty string, so nothing
+        downstream notices until a login silently fails. infra/README.md documents the `$$`
+        escaping; this check is here because a rule people have to remember is not a defence.
+
+        ⚠️ It parses rather than pattern-matches, and that is the point. A prefix check
+        passes `$argon2` and `$argon2id$v=19`, which argon2 then rejects at *login* with
+        `InvalidHashError` — and that one is a `ValueError`, not an `Argon2Error`, so it
+        escapes the handler in `accounts.authenticate` and reaches the client as a 500
+        (2026-08-13 실측). Startup is the right place to find a broken configuration value.
+        """
+        try:
+            extract_parameters(value)
+        except InvalidHashError as exc:
+            raise ValueError(
+                "password hash is not a valid argon2 hash. If it came through "
+                "docker-compose, `$` must be written as `$$` in infra/.env "
+                "(see infra/README.md, 환경변수 값에 `$`가 들어갈 때). "
+                "If it looks right but is short, it was probably truncated on the way in."
+            ) from exc
+        return value
 
 
 class Settings(BaseSettings):
@@ -19,6 +75,64 @@ class Settings(BaseSettings):
     # A generation call that overruns this has not been "slow", it has missed the request.
     # We cut it and fall back rather than letting the caller wait.
     ai_engine_timeout_s: float = 8.0
+
+    # ---- storage (ADR-0010) ------------------------------------------------------------
+
+    # One SQLite file holds accounts, sessions, briefs, drafts and jobs. Configurable
+    # because a constant here splits local development from the VM deployment, where the
+    # file has to live on a mounted path to survive `docker compose up` (ADR-0010).
+    # `.sqlite` rather than `.sqlite3` so the repo's existing ignore rule covers it:
+    # this file holds uploaded-photo paths and briefs, and the repo is public.
+    db_path: str = "./data/adgen.sqlite"
+
+    # ---- auth (ADR-0008, ADR-0013) -----------------------------------------------------
+
+    # Signs the session token. No default: see the module docstring.
+    session_secret: str = ""
+
+    # 24h, no refresh (세션_보관_정책.md 1.4절). Configurable because the number is a
+    # guess about the theft window, and a guess in code needs a deploy to revise.
+    session_max_age_s: int = 86400
+
+    # JSON list, e.g. [{"login_id": "...", "password_hash": "$argon2id$..."}].
+    # snake_case, not the contract's camelCase: this is operator configuration, not wire
+    # format. Nothing here is ever serialised to a client.
+    # Two accounts are the minimum that can prove INV-9 — with one, "someone else's
+    # session" does not exist and the 404 path is never taken (ADR-0008). Not enforced
+    # here: individual devs may seed extra accounts locally (구현_범위.md 1절).
+    #
+    # `NoDecode` takes the JSON parsing away from pydantic-settings so the validator below
+    # can see the raw string — see it for why an empty one has to survive.
+    accounts: Annotated[list[SeedAccount], NoDecode] = Field(default_factory=list)
+
+    @field_validator("accounts", mode="before")
+    @classmethod
+    def _parse_accounts(cls, value: Any) -> Any:
+        """An empty `ADGEN_ACCOUNTS` means "no accounts", not "malformed configuration".
+
+        ⚠️ This is not a defensive nicety, it is what lets the stack start unconfigured.
+        `docker-compose.yml` writes `ADGEN_ACCOUNTS: ${ADGEN_ACCOUNTS:-}`, which sets the
+        variable to an **empty string** rather than leaving it unset, so without this the
+        default never applies: pydantic-settings tries to JSON-decode `""` and the whole app
+        dies at startup with `SettingsError` before any route exists (2026-08-14 실측 — CI
+        의 종단 관통 테스트가 여기서 unhealthy 로 떨어졌습니다).
+
+        A stack with no accounts is a supported state. Nobody can log in, `/health` and
+        `/v1/ask` still answer, and that is exactly the "빈 스택이어도 충족" deployment the
+        08-14 일정 항목 asks for.
+        """
+        if not isinstance(value, str):
+            return value
+        if not value.strip():
+            return []
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "ADGEN_ACCOUNTS is not valid JSON. It is a list, e.g. "
+                '[{"login_id": "...", "password_hash": "$argon2id$..."}]. '
+                "Leave it empty for a stack with no accounts."
+            ) from exc
 
 
 def get_settings() -> Settings:

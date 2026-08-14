@@ -209,8 +209,17 @@ apps/frontend/
 ## 환경 변수
 
 ```dotenv
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=
 ```
+
+**비워 두는 것이 기본값입니다.** 빈 값은 "같은 출처"를 뜻하고, 개발 서버가 `/v1`을 백엔드로
+프록시합니다(`vite.config.ts`). 브라우저는 `:5173` 하나만 상대하므로 CORS가 아예 생기지 않고,
+세션 쿠키(`HttpOnly; Secure; SameSite=Lax`)가 그대로 실립니다.
+
+절대 URL을 넣으면 프록시를 우회해 교차 출처 요청이 됩니다. 백엔드에는 CORS 미들웨어가 없고
+`credentials: "include"`라 와일드카드 출처도 쓸 수 없어 브라우저가 막습니다. 프론트를 백엔드와
+다른 출처에 배포하게 되면 CORS 설정과 쿠키의 `SameSite=None` 전환이 함께 필요합니다 —
+[API_계약.md](../../docs/기술문서/API_계약.md) 8.3절.
 
 브라우저에 포함되는 `VITE_` 변수에는 비밀 키를 넣지 않습니다. 모델 API 키와 저장소 자격증명은
 백엔드 또는 인프라 환경에만 둡니다.

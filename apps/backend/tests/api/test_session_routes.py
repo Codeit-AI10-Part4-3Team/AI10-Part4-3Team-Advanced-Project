@@ -10,7 +10,6 @@ The three questions this file exists to answer:
 
 from __future__ import annotations
 
-import struct
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,7 @@ from typing import Any
 import pytest
 from argon2 import PasswordHasher
 from conftest import FILLED_CATEGORY, FILLED_TARGET, FakeAiEngine
+from conftest import VALID_PNG as PNG
 from fastapi.testclient import TestClient
 
 from api import deps
@@ -29,13 +29,6 @@ PASSWORD = "correct-horse-battery-staple"  # noqa: S105 - hashed by the fixture 
 
 # A 1x1 PNG. Real magic bytes, because the format check sniffs the payload rather than
 # trusting the filename or the Content-Type — both of which the caller supplies.
-PNG = (
-    b"\x89PNG\r\n\x1a\n"
-    + struct.pack(">I", 13)
-    + b"IHDR"
-    + struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
-    + b"\x1f\x15\xc4\x89"
-)
 
 
 @pytest.fixture

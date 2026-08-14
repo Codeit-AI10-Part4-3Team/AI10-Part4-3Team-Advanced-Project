@@ -34,7 +34,12 @@ VOLUME ["/data"]
 #    돌리는 경우를 위한 것이고, 컨테이너의 기본값은 위에서 소유권까지 넘겨 준 이 경로여야
 #    합니다. compose 도 같은 값을 주지만(infra/docker-compose.yml) 그것은 덧방이고,
 #    `docker run` 한 줄로 뜨는 것은 이 줄의 몫입니다. 근거: ADR-0014.
-ENV ADGEN_DB_PATH=/data/adgen.sqlite
+#
+# ⚠️ **두 줄입니다.** DB 만 옮기고 이미지를 두고 가면 증상이 기동이 아니라 **첫 업로드**에서
+#    납니다 - `/health` 는 계속 초록이고 CI 스모크도 통과하는데, 사람이 사진을 올리는
+#    순간 같은 PermissionError 가 납니다. 새 상태 경로를 만들 때마다 이 줄을 함께 보세요.
+ENV ADGEN_DB_PATH=/data/adgen.sqlite \
+    ADGEN_IMAGE_DIR=/data/images
 
 USER appuser
 

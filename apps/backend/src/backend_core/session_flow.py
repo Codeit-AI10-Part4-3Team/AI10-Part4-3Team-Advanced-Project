@@ -209,8 +209,18 @@ def replace_brief(session: Session, brief: Brief, meta: BriefMeta, at: datetime)
     """A patched brief, and the state it lands in.
 
     From `brief_filling` this is the answer to `needsInput` or to a degraded session: it
-    reaches `brief_ready` once `category` and `target` are both filled, and stays put
-    otherwise, because those two are what draft generation needs.
+    reaches `brief_ready` once `category` and `target` are both filled, and stays in
+    `brief_filling` otherwise, because those two are what draft generation needs.
+
+    ⚠️ **The target is always a brief-editing state — never `session.state`.** That is the
+    whole of INV-7 on this path, and getting it wrong does not look wrong:
+    `draft_ready -> draft_ready` is a legal edge (draft patches repeat), so targeting "wherever
+    we already are" made the guard vacuous. A brief patch that left the brief *incomplete*
+    then landed with a **200 while a draft existed**, overwriting the evidence that draft was
+    built on (2026-08-14 실측 — 기존 테스트는 완성된 patch 만 보내고 있어 이 구멍을 지나쳤습니다).
+
+    Both targets below are unreachable from anywhere a draft exists, so the guard now
+    refuses every such request whatever the patch contains.
     """
     session.brief = brief
     session.brief_meta = meta
@@ -218,7 +228,7 @@ def replace_brief(session: Session, brief: Brief, meta: BriefMeta, at: datetime)
     session.updated_at = at
     complete = bool(brief.category and brief.target)
     session.state = state.require_transition(
-        session.state, "brief_ready" if complete else session.state
+        session.state, "brief_ready" if complete else "brief_filling"
     )
     if complete:
         session.needs_input = None

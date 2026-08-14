@@ -10,6 +10,7 @@ guardrail behaviour is tested in apps/ai-engine, where it lives.
 """
 
 import os
+import struct
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,23 @@ FILLED_TARGET = "[더미] 30대 1인 가구"
 # engine, and a plausible-looking one there is how a stub gets mistaken for a measurement
 # (AGENTS.md 현재 상태).
 _ROLES: tuple[PanelRole, ...] = ("hook", "setup", "problem", "solution", "proof", "cta")
+
+
+def png_of(width: int, height: int) -> bytes:
+    """A PNG header claiming a size, with no pixel data behind it.
+
+    ⚠️ Enough on purpose. Nothing in this app decodes pixels — the bytes go to disk
+    untouched — so the only thing a real encoder would add here is time. What the tests need
+    is a file whose *header* says a size, because that is what the validator reads.
+
+    The CRC is not computed and nothing checks it, for the same reason.
+    """
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\x00\x00\x00\x00"
+
+
+VALID_PNG = png_of(1024, 768)
+"""Comfortably over the 512px short edge that 미결정_대장 N3 fixed."""
 
 
 def draft_for(output_type: OutputType) -> Draft:

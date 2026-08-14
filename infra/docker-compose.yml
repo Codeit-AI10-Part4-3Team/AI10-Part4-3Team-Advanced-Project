@@ -65,6 +65,9 @@ services:
       # 이 줄을 지워도 스택은 뜹니다. 코드 기본값(`./data/...`)으로 떨어지면 /app 이
       # root 소유라 비루트 앱이 죽는데, 그것을 막는 것은 이 줄이 아니라 Dockerfile 쪽입니다.
       ADGEN_DB_PATH: ${ADGEN_DB_PATH:-/data/adgen.sqlite}
+      # 업로드 사진과 결과 이미지. 같은 볼륨 아래에 둡니다 - 보존 기간 정리 배치가 한 곳만
+      # 보면 되도록(세션_보관_정책 2절), 그리고 백업 대상이 둘로 늘지 않도록(ADR-0014).
+      ADGEN_IMAGE_DIR: ${ADGEN_IMAGE_DIR:-/data/images}
     volumes:
       # ⚠️ 이 볼륨이 없으면 컨테이너를 내릴 때 계정과 세션이 사라집니다. ADR-0010 이
       #    인메모리를 배제한 이유("확정을 눌렀는데 결과가 없다")가 그대로 재현됩니다.

@@ -8,13 +8,13 @@ what unlocks, what does not, and what a second attempt is told.
 
 from __future__ import annotations
 
-import struct
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from argon2 import PasswordHasher
+from conftest import VALID_PNG as PNG
 from conftest import FakeAiEngine
 from fastapi.testclient import TestClient
 
@@ -22,14 +22,6 @@ from api import deps
 from api.main import app
 
 PASSWORD = "correct-horse-battery-staple"  # noqa: S105 - hashed by the fixture below
-
-PNG = (
-    b"\x89PNG\r\n\x1a\n"
-    + struct.pack(">I", 13)
-    + b"IHDR"
-    + struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
-    + b"\x1f\x15\xc4\x89"
-)
 
 
 @pytest.fixture
@@ -144,6 +136,52 @@ def test_inv_7_the_brief_locks_once_a_draft_exists(client: TestClient) -> None:
 
     assert response.status_code == 409
     assert response.json()["code"] == "STATE_CONFLICT"
+
+
+def test_inv_7_holds_even_when_the_patch_leaves_the_brief_incomplete(client: TestClient) -> None:
+    """⚠️ Regression guard. The test above sends a *complete* patch and passes for a reason
+    that does not generalise — its target was `brief_ready`, which `draft_ready` cannot
+    reach. An **incomplete** patch used to target `session.state` instead, and
+    `draft_ready -> draft_ready` is a legal edge (draft patches repeat), so the guard had
+    nothing to refuse: the request came back **200 and overwrote the brief a draft was
+    already built on** (2026-08-14 실측).
+
+    Emptying `category` is the cheapest way to express "incomplete"; the hole was in the
+    target selection, not in this particular field.
+    """
+    session_id = _create(client)["sessionId"]
+    client.post(f"/v1/sessions/{session_id}/draft")
+    before = client.get(f"/v1/sessions/{session_id}").json()
+
+    response = client.patch(
+        f"/v1/sessions/{session_id}/brief",
+        json={"revision": 0, "patch": {"category": ""}},
+    )
+
+    assert response.status_code == 409
+    after = client.get(f"/v1/sessions/{session_id}").json()
+    assert after["brief"] == before["brief"]
+    assert after["revision"] == before["revision"]
+
+
+@pytest.mark.parametrize("path", ["brief", "draft"])
+def test_an_empty_patch_is_refused_rather_than_burning_a_revision(
+    client: TestClient, path: str
+) -> None:
+    """`minProperties: 1`, and it is not pedantry.
+
+    An empty patch changes nothing and still increments `revision` — the value every other
+    open screen is holding. One no-op invalidates their optimistic lock and their next real
+    edit comes back 409 for no reason anyone can see.
+    """
+    session_id = _create(client)["sessionId"]
+    if path == "draft":
+        client.post(f"/v1/sessions/{session_id}/draft")
+
+    response = client.patch(f"/v1/sessions/{session_id}/{path}", json={"revision": 0, "patch": {}})
+
+    assert response.status_code == 422
+    assert client.get(f"/v1/sessions/{session_id}").json()["revision"] == 0
 
 
 def test_a_failed_generation_unlocks_the_brief_and_can_be_retried(

@@ -23,9 +23,9 @@ Naming one of them is rejected by `extra="forbid"` as an unknown field, which is
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import Field, RootModel
+from pydantic import Field, RootModel, model_validator
 
 from backend_core.models.brief import Brief, Character
 from backend_core.models.common import Base, Omittable, OutputType
@@ -35,7 +35,27 @@ PanelIndex = Annotated[str, Field(pattern="^[1-6]$")]
 """Panel keys are the strings `"1"`..`"6"` — JSON object keys, so strings, not integers."""
 
 
-class PanelPatch(Base):
+class AtLeastOneField(Base):
+    """A patch body that names nothing is not a request (`minProperties: 1`).
+
+    ⚠️ Enforced because an empty patch is not harmless. It applies no change and still
+    **increments `revision`**, which is the value every other open screen is holding: one
+    no-op request invalidates their optimistic lock and their next real edit comes back 409
+    for no reason anyone can see.
+
+    Checked with `model_fields_set` rather than by looking for non-`None` values, because in
+    this family `""` is a legitimate instruction ("empty it") and `None` only ever means the
+    key was absent.
+    """
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("patch must name at least one field; an empty patch changes nothing")
+        return self
+
+
+class PanelPatch(AtLeastOneField):
     """One cell's changeable parts.
 
     No `index` and no `role`: the key in `PanelPatchMap` is the index, and `role` is derived
@@ -59,7 +79,7 @@ class PanelPatchMap(RootModel[dict[PanelIndex, PanelPatch]]):
     root: dict[PanelIndex, PanelPatch] = Field(min_length=1)
 
 
-class BriefPatch(Base):
+class BriefPatch(AtLeastOneField):
     """Contract: `components.schemas.BriefPatch`. At least one field.
 
     ⚠️ **No `productImageUrl`.** 도메인_모델 3절 marks it `editable`, but no re-upload path
@@ -78,7 +98,7 @@ class BriefPatch(Base):
     aspect_ratio: Omittable[str] = None
 
 
-class DraftPatch(Base):
+class DraftPatch(AtLeastOneField):
     """Contract: `components.schemas.DraftPatch`. At least one field.
 
     ⚠️ No `adPlan` (INV-8) and no `role` (INV-5), and their absence is the enforcement. To

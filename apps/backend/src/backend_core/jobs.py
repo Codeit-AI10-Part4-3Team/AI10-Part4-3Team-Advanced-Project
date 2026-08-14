@@ -151,6 +151,28 @@ def next_queued(connection: sqlite3.Connection) -> tuple[str, str] | None:
     return row["job_id"], row["session_id"]
 
 
+def requeue_running(connection: sqlite3.Connection) -> int:
+    """Move every `running` job back to `queued`. Returns how many moved.
+
+    Called once at startup (api.worker). A `running` job at that moment cannot be running —
+    the only process that could have been rendering it is the one that just started — so it
+    is the residue of a crash or a deploy, and leaving it there strands the session in
+    `rendering` for ever.
+
+    ⚠️ Safe only because a retry is idempotent: the result file is named after the job, so a
+    second attempt overwrites the first (ADR-0015).
+    """
+    # Read the ids first: the stored document carries the job id, so each row needs its own
+    # value and there is no single UPDATE that can write them all.
+    stranded = [
+        row["job_id"]
+        for row in connection.execute("SELECT job_id FROM jobs WHERE status = 'running'")
+    ]
+    for job_id in stranded:
+        _store(connection, job_id, Job(job_id=job_id, status="queued"))
+    return len(stranded)
+
+
 def status_of(connection: sqlite3.Connection, job_id: str) -> JobStatus | None:
     row = connection.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     return None if row is None else str(row["status"])  # type: ignore[return-value]

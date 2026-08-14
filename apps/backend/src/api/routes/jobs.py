@@ -28,7 +28,7 @@ JobId = Annotated[str, Path(alias="jobId")]
 Python name would otherwise reach the published spec and contradict `openapi.yaml`."""
 
 
-@router.get("/{jobId}", response_model=Job)
+@router.get("/{jobId}")
 def get_job(
     job_id: JobId,
     response: Response,

@@ -36,6 +36,7 @@ def ai_client() -> AiEngineClient:
         settings().ai_engine_timeout_s,
         settings().brief_fill_timeout_s,
         settings().draft_timeout_s,
+        settings().render_timeout_s,
     )
 
 

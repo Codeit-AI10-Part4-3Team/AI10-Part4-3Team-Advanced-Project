@@ -189,6 +189,32 @@ def for_user(
     return session, Precondition(state=row["state"], revision=row["revision"])
 
 
+def for_owner_of_job(
+    connection: sqlite3.Connection, session_id: str
+) -> tuple[str, Session, Precondition] | None:
+    """A session looked up **without** a requester, for the render worker.
+
+    ⚠️ The only function here that does not take `user_id`, and the exception needs its
+    reason stated: the worker is not acting for a requester. It picked a job the server
+    itself accepted, so there is nobody to check against — instead it *reads back* the owner
+    and hands it to whatever writes next, so the write is still scoped to one user.
+
+    Nothing reachable from HTTP may call this. Everything a request touches goes through
+    `for_user`, which cannot be called without saying who is asking (INV-9).
+    """
+    row = connection.execute(
+        "SELECT user_id, document, state, revision FROM sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return (
+        row["user_id"],
+        Session.model_validate_json(row["document"]),
+        Precondition(state=row["state"], revision=row["revision"]),
+    )
+
+
 def list_for_user(connection: sqlite3.Connection, user_id: str) -> list[SessionSummary]:
     """This user's sessions, newest first.
 

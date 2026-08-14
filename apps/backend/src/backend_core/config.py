@@ -125,6 +125,15 @@ class Settings(BaseSettings):
     # down when the queue backs up — the load arrives exactly when there is least room.
     job_poll_interval_s: int = 3
 
+    # How long a single render may take. Minutes, not seconds — the waiter is the job worker
+    # and no user is holding a connection open (ADR-0015, API_계약.md 2.1절).
+    render_timeout_s: float = 300.0
+
+    # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which
+    # is what the *client* is told: the client polls over the network, the worker polls a
+    # local file. Tying them together would make slowing clients down also slow rendering.
+    worker_poll_interval_s: float = 1.0
+
     # ---- uploaded images (ADR-0010, 세션_보관_정책 2절) ----------------------------------
 
     # Images go to disk and only their paths into the database — the file is far too big to

@@ -34,14 +34,14 @@ this list is then the smallest of the edits it takes.
 """
 
 
-@router.get("/templates", response_model=list[Template])
+@router.get("/templates")
 def list_templates() -> list[Template]:
     """The output types. The screen calls them "템플릿"; the domain does not — `template`
     collides with prompt templates, so it is not an identifier here (용어_사전.md 1.2절)."""
     return TEMPLATES
 
 
-@router.get("/art-styles", response_model=list[ArtStyle])
+@router.get("/art-styles")
 def list_art_styles(settings: Annotated[Settings, Depends(deps.settings)]) -> list[ArtStyle]:
     """The art-style candidates.
 

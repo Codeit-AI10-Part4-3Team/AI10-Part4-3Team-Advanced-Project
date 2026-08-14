@@ -29,6 +29,7 @@ from backend_core.models import (
     DraftGenerateRequest,
     DraftGenerateResponse,
     DraftPatchEngineRequest,
+    ImageRenderRequest,
     NeedsInput,
     OutputType,
     Panel,
@@ -63,6 +64,13 @@ def png_of(width: int, height: int) -> bytes:
 
 VALID_PNG = png_of(1024, 768)
 """Comfortably over the 512px short edge that 미결정_대장 N3 fixed."""
+
+RENDERED_WEBP = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8 " + b"\x00" * 16
+"""What the fake engine returns from `image:render` — a real WebP container header.
+
+Bytes rather than JSON because that is what the contract says the render returns, and a
+fake that answered JSON would let a caller that mishandled the body still pass.
+"""
 
 
 def draft_for(output_type: OutputType) -> Draft:
@@ -170,6 +178,7 @@ class FakeAiEngine:
         self.seen: list[str] = []
         self.drafts_requested: list[DraftGenerateRequest] = []
         self.patches_requested: list[DraftPatchEngineRequest] = []
+        self.renders_requested: list[ImageRenderRequest] = []
 
     def generate(self, question: str, locale: str) -> Answer | None:
         if not self.available:
@@ -201,6 +210,18 @@ class FakeAiEngine:
         if self.refuses:
             return DraftGenerateResponse(guardrail_applied=True, refusal_reason="no_evidence")
         return DraftGenerateResponse(draft=draft_for(request.output_type), guardrail_applied=True)
+
+    def render_image(self, request: ImageRenderRequest) -> bytes:
+        """Bytes, not JSON — the contract says lossless WebP.
+
+        ⚠️ The fake returns a **WebP header**, not arbitrary bytes, so anything that later
+        looks at the format sees a real one. A render is the one call with no refusal
+        branch: the engine either draws or fails.
+        """
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        self.renders_requested.append(request)
+        return RENDERED_WEBP
 
     def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse:
         """Apply the patch the way the real engine is asked to: **only the named parts.**

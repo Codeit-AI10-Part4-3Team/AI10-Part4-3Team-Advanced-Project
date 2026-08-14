@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api import deps
+from api import deps, worker
 from api.errors import api_error_handler
 from api.routes import ask, auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
@@ -57,7 +57,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if account_count(connection):
             require_secret(settings.session_secret)
 
-    yield
+        # ⚠️ Before the worker starts, not after. A job left `running` by a crash or a
+        # deploy is a session stuck in `rendering` for ever, because `rendering` has no edge
+        # back and nothing would ever pick that job up again (ADR-0015).
+        worker.requeue_interrupted(connection)
+
+    async with worker.lifespan_task(settings.worker_poll_interval_s):
+        yield
 
 
 app = FastAPI(title="adgen-backend", lifespan=lifespan)

@@ -70,11 +70,13 @@ def test_dimensions_are_read_from_the_header(payload: bytes, image_format: str) 
     assert images.dimensions(payload, image_format) == (1024, 768)
 
 
-def test_a_truncated_file_is_an_invalid_image_not_a_crash(tmp_path: Path) -> None:
+def test_a_truncated_file_is_an_invalid_image_not_a_crash() -> None:
     """A cut-off upload looks exactly like a corrupt header. Either way it is a 422, not a
     500 with a stack trace."""
+    truncated = png_of(1024, 768)[:12]
+
     with pytest.raises(images.InvalidImageError):
-        images.dimensions(png_of(1024, 768)[:12], "png")
+        images.dimensions(truncated, "png")
 
 
 @pytest.mark.parametrize(
@@ -85,8 +87,11 @@ def test_a_truncated_file_is_an_invalid_image_not_a_crash(tmp_path: Path) -> Non
 def test_a_photo_below_the_short_edge_is_refused(tmp_path: Path, width: int, height: int) -> None:
     """512px on the **short** edge — so a wide-but-short photo fails just as a narrow one
     does (미결정_대장 N3)."""
+    too_small = png_of(width, height)
+    session_id = uuid4()
+
     with pytest.raises(images.InvalidImageError) as caught:
-        images.store(tmp_path, uuid4(), png_of(width, height))
+        images.store(tmp_path, session_id, too_small)
 
     # The message has to say the size, because "too small" alone leaves the user guessing
     # what would be big enough.

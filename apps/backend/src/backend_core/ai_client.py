@@ -18,6 +18,7 @@ from backend_core.models.generation import (
     BriefFillResponse,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    ImageRenderRequest,
 )
 from backend_core.models.legacy_qa import Answer, Source
 from backend_core.models.patch import DraftPatchEngineRequest
@@ -47,6 +48,8 @@ class AiEngineClient(Protocol):
 
     def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse: ...
 
+    def render_image(self, request: ImageRenderRequest) -> bytes: ...
+
 
 class GenerationTimeoutError(RuntimeError):
     """The engine was reachable but did not finish in time.
@@ -64,11 +67,18 @@ class HttpAiEngineClient:
     Retrying inside the request path would multiply the tail latency the caller is
     waiting on; the fallback is cheaper and always available.
 
-    ⚠️ **Three timeouts, not one.** They are budgets for different things: the legacy
-    question-and-answer path fronts a user's request, `brief:fill` is the one call with a
-    fallback behind it (ADR-0005), and draft generation is capped at the 60s the contract
-    promises. A single shared value would either cut the draft off early or let the brief
-    hold a request open long past the point where degrading is the better answer.
+    ⚠️ **Four timeouts, not one.** They are budgets for different things, and three of them
+    front a user's request while the fourth does not:
+
+    - the legacy question-and-answer path — a user is waiting;
+    - `brief:fill` — a user is waiting, and this is the one call with a fallback behind it
+      (ADR-0005), so overrunning is cheap;
+    - draft generation — a user is waiting, capped at the 60s the contract promises;
+    - `image:render` — **the job worker is waiting, not a user** (ADR-0015), which is the
+      only reason minutes are acceptable.
+
+    A single shared value would either cut the render off long before it could finish or let
+    a user's request hang for minutes. The two cannot be the same number.
     """
 
     def __init__(
@@ -77,11 +87,13 @@ class HttpAiEngineClient:
         timeout_s: float,
         brief_fill_timeout_s: float,
         draft_timeout_s: float,
+        render_timeout_s: float,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
         self._brief_fill_timeout_s = brief_fill_timeout_s
         self._draft_timeout_s = draft_timeout_s
+        self._render_timeout_s = render_timeout_s
 
     def fill_brief(
         self, product_name: str, selling_point: str, note: str, image: bytes, filename: str
@@ -152,6 +164,28 @@ class HttpAiEngineClient:
         except httpx.HTTPError as exc:
             raise AiEngineUnavailableError(str(exc)) from exc
         return DraftGenerateResponse.model_validate(response.json())
+
+    def render_image(self, request: ImageRenderRequest) -> bytes:
+        """Draw the picture. Returns lossless WebP bytes, not JSON.
+
+        ⚠️ **The request that waits here is the job worker's, never a user's** (API_계약.md
+        2.1절). Minutes are acceptable precisely because nobody is holding a connection open
+        — which is why this is the one call with a timeout measured in minutes rather than
+        seconds, and why putting it back on a request path would undo the whole reason
+        `finalize` returns 202.
+        """
+        try:
+            response = httpx.post(
+                f"{self._base_url}/v1/image:render",
+                json=request.model_dump(by_alias=True, exclude_none=True),
+                timeout=self._render_timeout_s,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise GenerationTimeoutError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise AiEngineUnavailableError(str(exc)) from exc
+        return response.content
 
     def generate(self, question: str, locale: str) -> Answer | None:
         """Return the grounded answer, or None when the engine honestly refused.

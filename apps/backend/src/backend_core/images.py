@@ -69,6 +69,24 @@ def detect_format(payload: bytes) -> str:
     )
 
 
+def store_result(image_dir: str | Path, job_id: str, payload: bytes) -> str:
+    """Write a finished render. Named after the **job**, not the session.
+
+    ⚠️ That naming is what makes a retried job idempotent (ADR-0015). A process that dies
+    mid-render leaves the job `running`; startup requeues it, and the second attempt writes
+    to the same path — so a retry replaces the file rather than accumulating one per attempt.
+
+    No validation: these bytes came from our own engine over the contract, not from a user.
+    The lossless WebP is written exactly as received, for the same reason an upload is
+    (`store` below).
+    """
+    directory = Path(image_dir) / "results"
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / f"{job_id}.webp"
+    destination.write_bytes(payload)
+    return str(destination)
+
+
 def dimensions(payload: bytes, image_format: str) -> tuple[int, int]:
     """`(width, height)`, read straight out of the file header.
 

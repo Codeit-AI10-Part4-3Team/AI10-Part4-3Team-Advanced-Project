@@ -16,7 +16,7 @@ real, which is exactly what an attacker walking the id space is trying to learn.
 from __future__ import annotations
 
 import logging
-import random
+import secrets
 import sqlite3
 from collections.abc import Callable
 from typing import Annotated
@@ -74,7 +74,7 @@ lies while the traffic stays correct, so nothing fails until someone generates f
 """
 
 
-@router.get("", response_model=list[SessionSummary])
+@router.get("")
 def list_sessions(
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
@@ -87,7 +87,7 @@ def list_sessions(
     return sessions.list_for_user(connection, account.user_id)
 
 
-@router.post("", response_model=Session, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 def create_session(
     body: Annotated[SessionCreateRequest, Form(media_type="multipart/form-data")],
     account: Annotated[Account, Depends(deps.current_user)],
@@ -131,7 +131,7 @@ def create_session(
     return sessions.create(connection, account.user_id, session)
 
 
-@router.get("/{sessionId}", response_model=Session)
+@router.get("/{sessionId}")
 def get_session(
     session_id: SessionId,
     account: Annotated[Account, Depends(deps.current_user)],
@@ -142,7 +142,7 @@ def get_session(
     return session
 
 
-@router.post("/{sessionId}/draft", response_model=Session)
+@router.post("/{sessionId}/draft")
 def generate_draft(
     session_id: SessionId,
     account: Annotated[Account, Depends(deps.current_user)],
@@ -202,7 +202,7 @@ def generate_draft(
     )
 
 
-@router.patch("/{sessionId}/brief", response_model=Session)
+@router.patch("/{sessionId}/brief")
 def patch_brief(
     session_id: SessionId,
     body: BriefPatchRequest,
@@ -224,7 +224,7 @@ def patch_brief(
     return _store(connection, account, session, was)
 
 
-@router.patch("/{sessionId}/draft", response_model=Session)
+@router.patch("/{sessionId}/draft")
 def patch_draft(
     session_id: SessionId,
     body: DraftPatchRequest,
@@ -272,7 +272,6 @@ def patch_draft(
 
 @router.post(
     "/{sessionId}/finalize",
-    response_model=FinalizeAccepted,
     status_code=status.HTTP_202_ACCEPTED,
 )
 def finalize(
@@ -408,8 +407,11 @@ def _pick_art_style(settings: Settings) -> str:
     """
     if not settings.art_styles:
         return ""
-    # `random` rather than `secrets`: this picks a look, not a secret.
-    return random.choice(settings.art_styles).art_style_id  # noqa: S311
+    # `secrets` rather than `random`, even though nothing here needs to be unpredictable.
+    # The two cost the same at one call per session, so there is no trade to make — and a
+    # PRNG in request-handling code is a finding every scanner raises (SonarQube S2245),
+    # which would mean carrying a suppression forever to keep the weaker one.
+    return secrets.choice(settings.art_styles).art_style_id
 
 
 def _fill_brief(

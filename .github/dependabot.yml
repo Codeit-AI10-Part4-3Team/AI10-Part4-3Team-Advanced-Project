@@ -75,17 +75,15 @@ updates:
       pre-commit-hooks:
         patterns: ["*"]
 
-  # ── 프론트엔드: package.json이 없는 디렉토리를 등록하면 Dependabot이 매주 파싱 오류를
-  #    기록합니다. 프론트엔드 스캐폴딩이 끝난 뒤 아래 블록의 주석을 해제하세요.
-  #    ⚠️ 켜는 시점은 프론트엔드 오너(06)의 판단입니다 — 스프린트 중에는 PR 소음과의 트레이드오프입니다.
-  # - package-ecosystem: "npm"
-  #   directory: "/apps/frontend"
-  #   schedule:
-  #     interval: "weekly"
-  #     day: "monday"
-  #   open-pull-requests-limit: 3
-  #   commit-message:
-  #     prefix: "chore(deps)"
-  #   groups:
-  #     frontend-minor-patch:
-  #       update-types: ["minor", "patch"]
+  # ── 프론트엔드 (pnpm도 Dependabot의 npm 생태계로 관리합니다)
+  - package-ecosystem: "npm"
+    directory: "/apps/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend-minor-patch:
+        update-types: ["minor", "patch"]

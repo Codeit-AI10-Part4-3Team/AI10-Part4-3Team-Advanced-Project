@@ -22,6 +22,7 @@ import sqlite3
 from collections.abc import AsyncIterator
 
 import anyio
+from fastapi import FastAPI
 
 from api import deps
 from backend_core import jobs, render
@@ -47,17 +48,22 @@ def requeue_interrupted(connection: sqlite3.Connection) -> int:
     return requeued
 
 
-async def run(poll_interval_s: float) -> None:
+async def run(app: FastAPI, poll_interval_s: float) -> None:
     """Poll for work until cancelled.
 
     Polling rather than a notification: the queue lives in the same SQLite file this process
     already opens, and at a few dozen renders a day a wake-up per second costs nothing next
     to the machinery a notification channel would add (ADR-0015, 선택지 C).
+
+    ⚠️ The app is threaded through for one reason: the engine is resolved by
+    `deps.resolve_ai_client`, which honours `app.dependency_overrides`. Calling the provider
+    directly gave the worker the **real** HTTP client even under a test that had substituted
+    a fake — see that function.
     """
     settings = deps.settings()
     while True:
         try:
-            done = await anyio.to_thread.run_sync(_drain_one, settings)
+            done = await anyio.to_thread.run_sync(_drain_one, app, settings)
         except Exception:
             # ⚠️ The loop must outlive any single job. An unhandled error here kills the
             # background task and every later render silently never runs — the failure would
@@ -68,22 +74,34 @@ async def run(poll_interval_s: float) -> None:
             await anyio.sleep(poll_interval_s)
 
 
-def _drain_one(settings: Settings) -> bool:
+def _drain_one(app: FastAPI, settings: Settings) -> bool:
     """One iteration, on a worker thread. True when something was rendered."""
     with connect(settings.db_path) as connection:
-        return render.run_one(connection, deps.ai_client(), settings.image_dir) is not None
+        engine = deps.resolve_ai_client(app)
+        return render.run_one(connection, engine, settings.image_dir) is not None
 
 
 @contextlib.asynccontextmanager
-async def lifespan_task(poll_interval_s: float) -> AsyncIterator[None]:
-    """Run the worker for as long as the app is up.
+async def lifespan_task(app: FastAPI, poll_interval_s: float, enabled: bool) -> AsyncIterator[None]:
+    """Run the worker for as long as the app is up, when it is turned on.
+
+    ⚠️ `enabled` exists for the test suite, and defaults to **on** so a deployment cannot
+    forget it. Almost every test starts the app and immediately asserts on a job's state;
+    a worker polling underneath would flip `queued` to `done` between the request and the
+    assertion, and the test would fail depending on how fast the machine is. Tests that mean
+    to exercise the worker turn it on and inject a fake engine.
 
     Cancelled on shutdown rather than joined: a render in flight can take minutes, and
     holding a container's shutdown open for that turns every deploy into a stall. The job it
     was running stays `running` and the next startup requeues it.
     """
+    if not enabled:
+        logger.info("render worker disabled by configuration")
+        yield
+        return
+
     async with anyio.create_task_group() as tasks:
-        tasks.start_soon(run, poll_interval_s)
+        tasks.start_soon(run, app, poll_interval_s)
         try:
             yield
         finally:

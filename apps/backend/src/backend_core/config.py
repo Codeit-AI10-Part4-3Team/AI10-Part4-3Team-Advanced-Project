@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     # local file. Tying them together would make slowing clients down also slow rendering.
     worker_poll_interval_s: float = 1.0
 
+    # ⚠️ **On by default**, so a deployment cannot forget it — a stack whose worker is off
+    # accepts renders and never runs them, and the symptom is a spinner that resolves for
+    # nobody. Only the test suite turns it off (tests/conftest.py), because a worker polling
+    # underneath a test flips a job's state between the request and the assertion.
+    worker_enabled: bool = True
+
     # ---- uploaded images (ADR-0010, 세션_보관_정책 2절) ----------------------------------
 
     # Images go to disk and only their paths into the database — the file is far too big to

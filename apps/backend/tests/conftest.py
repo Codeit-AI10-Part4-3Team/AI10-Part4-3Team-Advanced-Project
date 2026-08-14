@@ -148,6 +148,15 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
         monkeypatch.delenv(name)
     monkeypatch.setenv("ADGEN_DB_PATH", str(tmp_path / "test.sqlite"))
 
+    # ⚠️ The render worker is **off for every test that does not ask for it**. It polls the
+    # job queue once a second, so leaving it on makes assertions about a job's state depend
+    # on how fast the machine is — "queued right after finalize" is true until the poll
+    # lands. Worse, before `deps.resolve_ai_client` existed the worker resolved the *real*
+    # HTTP client and a test suite reached for localhost:8100 (2026-08-14 실측).
+    #
+    # Tests that mean to exercise the worker turn it on and inject a fake engine.
+    monkeypatch.setenv("ADGEN_WORKER_ENABLED", "false")
+
     deps.settings.cache_clear()
     yield
     deps.settings.cache_clear()

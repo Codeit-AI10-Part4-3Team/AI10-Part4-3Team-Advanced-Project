@@ -62,7 +62,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # back and nothing would ever pick that job up again (ADR-0015).
         worker.requeue_interrupted(connection)
 
-    async with worker.lifespan_task(settings.worker_poll_interval_s):
+    async with worker.lifespan_task(_app, settings.worker_poll_interval_s, settings.worker_enabled):
         yield
 
 

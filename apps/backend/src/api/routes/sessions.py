@@ -30,6 +30,7 @@ from api.errors import (
     content_policy_rejected,
     generation_timeout,
     invalid_image,
+    invalid_request,
     not_found,
     state_conflict,
     upstream_unavailable,
@@ -391,6 +392,16 @@ def _guard(operation: Callable[[], Session]) -> Session:
             f"지금은 할 수 없는 요청입니다. 세션이 {exc.current!r} 상태입니다 "
             f"({exc.target!r} 로 넘어갈 수 없습니다)."
         )
+    except ValueError as exc:
+        # ⚠️ The output-type pairing checks raise a plain `ValueError`
+        # (`check_brief_matches_output_type`), and without this it escaped as a **500**:
+        # `PATCH .../brief` with `aspectRatio` on a comic, or `character` on a single ad,
+        # is a request a client can make while following the contract, because `BriefPatch`
+        # carries both fields and cannot know the output type (2026-08-14 실측).
+        #
+        # The contract's answer is 422 `INVALID_REQUEST`, and the domain message already
+        # says which field does not belong.
+        invalid_request(str(exc))
 
 
 def _pick_art_style(settings: Settings) -> str:

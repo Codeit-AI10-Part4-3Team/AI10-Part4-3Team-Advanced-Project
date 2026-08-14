@@ -72,6 +72,35 @@ def run_one(
     jobs.mark_running(connection, job_id)
     logger.info("rendering job %s for session %s", job_id, session_id)
 
+    # ⚠️ **Nothing may escape between `mark_running` and a terminal mark.** The queue is
+    # serial by design — `jobs.next_queued` hands out nothing while anything is `running` —
+    # so one job stuck in that state does not fail one render, it **wedges the whole queue
+    # permanently**: every later `finalize` accepts a job that will never run, and the only
+    # cure is a restart. Verified with a disk-full `OSError` from `store_result`, which this
+    # deployment can genuinely hit (the `/data` volume, ADR-0014).
+    #
+    # So the catch is `Exception`, deliberately, even though a bare catch is usually wrong.
+    # The alternative here is not "fail loudly" — the loop above already swallows and
+    # continues — it is "fail silently and take everything else with it".
+    try:
+        return _render(connection, engine, image_dir, job_id, session_id)
+    except Exception:
+        logger.exception("render job %s failed unexpectedly", job_id)
+        jobs.mark_failed(
+            connection, job_id, Error(code="INTERNAL", message="렌더 중 내부 오류가 발생했습니다.")
+        )
+        _fail_session(connection, session_id)
+        return job_id
+
+
+def _render(
+    connection: sqlite3.Connection,
+    engine: AiEngineClient,
+    image_dir: str | Path,
+    job_id: str,
+    session_id: str,
+) -> str:
+    """The render itself. Its caller guarantees a terminal state whatever happens here."""
     found = sessions.for_owner_of_job(connection, session_id)
     if found is None:  # pragma: no cover - a job cannot outlive its session today
         jobs.mark_failed(connection, job_id, Error(code="INTERNAL", message="세션이 없습니다."))
@@ -125,11 +154,34 @@ def _fail(
 ) -> None:
     """Both layers, in this order.
 
-    ⚠️ The job is marked first. If the process dies between the two writes, a `failed` job
-    beside a `rendering` session is recoverable — startup can read the job and finish the
-    session. The other order leaves a `failed` session with a `running` job, and nothing can
-    tell whether the render ever happened.
+    The job is marked first because a `failed` job beside a `rendering` session is the
+    readable half-state: the failure is recorded and visible to a poller. The other order
+    leaves a `failed` session with a `running` job, which also wedges the queue.
+
+    ⚠️ A crash **between** the two writes still leaves the session in `rendering` with no
+    way back, and nothing reconciles that today — `worker.requeue_interrupted` only touches
+    jobs still `running`. The window is two statements wide and the client sees the failure
+    on the job either way, so it is recorded rather than closed. Closing it means startup
+    reading terminal jobs and finishing their sessions.
     """
     logger.warning("render job %s failed: %s", job_id, message)
     jobs.mark_failed(connection, job_id, Error(code=code, message=message))
     sessions.save(connection, user_id, session_flow.fail(session, sessions.now()), was)
+
+
+def _fail_session(connection: sqlite3.Connection, session_id: str) -> None:
+    """Best-effort session close for the unexpected-error path.
+
+    Separate from `_fail` because by the time we get here the session may never have been
+    read — the failure could have come from reading it. Anything raised here is swallowed:
+    the job is already terminal, and a second exception must not escape the guard that made
+    it terminal.
+    """
+    try:
+        found = sessions.for_owner_of_job(connection, session_id)
+        if found is None:
+            return
+        user_id, session, was = found
+        sessions.save(connection, user_id, session_flow.fail(session, sessions.now()), was)
+    except Exception:
+        logger.exception("could not close session %s after a failed render", session_id)

@@ -27,12 +27,17 @@ I/O and FastAPI has to be free to run it in a threadpool (API_계약.md 2.2절).
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
+
 from backend_core.models import Session, SessionSummary
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -224,12 +229,26 @@ def list_for_user(connection: sqlite3.Connection, user_id: str) -> list[SessionS
     `productName` is read back out of the brief rather than stored beside it. It is the one
     summary field that does not exist on `Session` itself, and a copy in a column would be
     a second place for the product's name to live.
+
+    ⚠️ **A row that will not parse is skipped, not raised.** This endpoint reads every
+    session a user has, so validating them in one comprehension makes a single bad document
+    take down the whole list — the user loses the way back to *all* their work because one
+    of them is malformed, and there is no route that would let them delete the bad one.
+    Logged rather than swallowed, because a document we wrote and cannot read back is a
+    defect somewhere else.
     """
     rows = connection.execute(
-        "SELECT document FROM sessions WHERE user_id = ? ORDER BY updated_at DESC",
+        "SELECT session_id, document FROM sessions WHERE user_id = ? ORDER BY updated_at DESC",
         (user_id,),
     ).fetchall()
-    return [_summarise(Session.model_validate_json(row["document"])) for row in rows]
+
+    summaries = []
+    for row in rows:
+        try:
+            summaries.append(_summarise(Session.model_validate_json(row["document"])))
+        except ValidationError:
+            logger.exception("session %s will not parse; omitted from the list", row["session_id"])
+    return summaries
 
 
 def _summarise(session: Session) -> SessionSummary:

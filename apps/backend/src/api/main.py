@@ -11,10 +11,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import deps, worker
-from api.errors import api_error_handler
+from api.errors import api_error_handler, validation_error_handler
 from api.routes import ask, auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
@@ -73,6 +74,12 @@ app = FastAPI(title="adgen-backend", lifespan=lifespan)
 # the 404 for an unmatched route is raised by Starlette's router as the base class — so
 # registering the subclass leaves exactly the most common error escaping the contract.
 app.add_exception_handler(StarletteHTTPException, api_error_handler)
+
+# ⚠️ The handler above does not cover request validation — FastAPI raises
+# `RequestValidationError`, which is not an `HTTPException`. Leaving it out sent the API's
+# **most common** error out in FastAPI's own `{"detail": [...]}` shape, with no `code` for a
+# client to branch on (2026-08-14 실측).
+app.add_exception_handler(RequestValidationError, validation_error_handler)
 
 app.include_router(auth.router)
 app.include_router(catalog.router)

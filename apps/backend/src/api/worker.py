@@ -63,7 +63,13 @@ async def run(app: FastAPI, poll_interval_s: float) -> None:
     settings = deps.settings()
     while True:
         try:
-            done = await anyio.to_thread.run_sync(_drain_one, app, settings)
+            # ⚠️ `abandon_on_cancel=True`, or shutdown is not a shutdown. The default is
+            # `False`, which makes cancellation **wait for the thread to return** — up to
+            # `render_timeout_s` (300s) for an in-flight render. Every deploy would stall for
+            # the length of whatever was drawing, which is the opposite of what
+            # `lifespan_task` promises below. Abandoning is safe because the job stays
+            # `running` and the next startup requeues it.
+            done = await anyio.to_thread.run_sync(_drain_one, app, settings, abandon_on_cancel=True)
         except Exception:
             # ⚠️ The loop must outlive any single job. An unhandled error here kills the
             # background task and every later render silently never runs — the failure would

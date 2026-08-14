@@ -34,6 +34,7 @@ from backend_core.models import (
     Session,
     Visibility,
     check_brief_matches_output_type,
+    check_draft_matches_output_type,
 )
 
 
@@ -120,6 +121,12 @@ def apply_draft(session: Session, response: DraftGenerateResponse, at: datetime)
     change at all — the route answers 422 and the session stays where the failure left it.
     """
     assert response.draft is not None  # noqa: S101 - callers branch on this first
+    # ⚠️ Checked before it is stored. The engine is a separate service, and a draft whose
+    # shape contradicts the session's output type validates fine on its own — the union
+    # accepts either member. Persisting one makes `Session.model_validate_json` fail on
+    # every later read of that row, which is unrecoverable: the session cannot be read to be
+    # fixed. Refusing here costs one failed generation instead.
+    check_draft_matches_output_type(session.output_type, response.draft)
     session.draft = response.draft
     session.state = state.require_transition(session.state, "draft_ready")
     session.updated_at = at
@@ -154,7 +161,11 @@ def replace_draft(session: Session, draft: Draft, at: datetime) -> Session:
 
     `revision` counts replacements, not requests: it is what a client compares to know its
     copy is stale, so a request that changed nothing must not move it.
+
+    Same pairing check as `apply_draft`, for the same reason: a mismatched draft written to
+    the row makes every later read of that session fail.
     """
+    check_draft_matches_output_type(session.output_type, draft)
     session.draft = draft
     session.revision += 1
     session.state = state.require_transition(session.state, "draft_ready")
@@ -196,7 +207,11 @@ def apply_brief_patch(session: Session, patch: BriefPatch, at: datetime) -> Sess
     correctable, and a value the person just typed is no longer the model's guess.
     """
     changes = patch.model_dump(exclude_unset=True)
-    brief = session.brief.model_copy(update=changes)
+    # ⚠️ `model_validate` rather than `model_copy(update=...)`. `model_copy` does not
+    # validate, and `model_dump` has already turned nested models into plain dicts — so a
+    # patched `character` would sit on `Brief.character` as a `dict`, contradicting the
+    # field's own annotation and drawing serializer warnings on the way out.
+    brief = Brief.model_validate({**session.brief.model_dump(), **changes})
     check_brief_matches_output_type(session.output_type, brief)
 
     # `BriefMeta` carries exactly `Brief`'s keys — a conformance test enforces it — so every

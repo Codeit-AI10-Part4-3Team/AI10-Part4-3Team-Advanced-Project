@@ -106,6 +106,47 @@ def not_implemented(message: str = "이 기능은 제공하지 않습니다.") -
     raise ApiError(501, "NOT_IMPLEMENTED", message)
 
 
+async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Render pydantic's request-validation failures in the contract's error shape.
+
+    ⚠️ Without this, **the most common error in the API** answers with FastAPI's default
+    `{"detail": [...]}` — a 422 with no `code` at all (2026-08-14 실측: `POST /v1/auth/login`
+    with no `password`). Everything else in this module exists so that clients can branch on
+    `code`, and the one path they hit most often was the one that never carried it.
+
+    It also invalidated a claim made elsewhere: `models/patch.py` says naming `adPlan` is
+    "a 422 `INVALID_REQUEST` — the contract's answer". It was a 422 with a different body.
+    The tests missed it because they asserted the status and never the body.
+
+    ⚠️ The detail is **summarised, not forwarded.** pydantic's list embeds the offending
+    input, and on `POST /v1/auth/login` that input is a plaintext password — echoing it into
+    a response body (and any log that records bodies) is exactly what 세션_보관_정책 1.2절
+    forbids.
+    """
+    fields = _offending_fields(exc)
+    message = "요청 형식이 올바르지 않습니다."
+    if fields:
+        message = f"{message} 확인이 필요한 항목: {', '.join(fields)}."
+    return JSONResponse(
+        status_code=422,
+        content=Error(code="INVALID_REQUEST", message=message).model_dump(by_alias=True),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _offending_fields(exc: Exception) -> list[str]:
+    """Field names only — never values. See the warning in the handler above."""
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):  # pragma: no cover - defensive
+        return []
+    names = []
+    for error in errors():
+        location = [str(part) for part in error.get("loc", ()) if part not in ("body", "query")]
+        if location:
+            names.append(".".join(location))
+    return names
+
+
 async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Render ApiError (and any other HTTPException) in the contract's error shape."""
     if isinstance(exc, ApiError):

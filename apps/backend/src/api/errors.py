@@ -45,6 +45,58 @@ def invalid_credentials(message: str = "아이디 또는 비밀번호가 올바�
     raise ApiError(401, "INVALID_CREDENTIALS", message)
 
 
+def state_conflict(message: str) -> NoReturn:
+    """The session is not at a point where this request means anything (INV-2, INV-3, INV-7).
+
+    409 rather than 422: the request itself is well-formed, and the same body would have
+    worked a moment earlier or will work a moment later. A 422 would send the client looking
+    for a mistake in what it sent.
+    """
+    raise ApiError(409, "STATE_CONFLICT", message)
+
+
+def invalid_image(message: str) -> NoReturn:
+    """The upload is not an image we accept (422 `INVALID_IMAGE`).
+
+    ⚠️ Refused, never silently converted or cropped. The picture is the product (기획서 5.2),
+    and a server that quietly re-encodes it changes what the user submitted.
+    """
+    raise ApiError(422, "INVALID_IMAGE", message)
+
+
+def upstream_unavailable(message: str = "생성 엔진을 사용할 수 없습니다.") -> NoReturn:
+    """The engine could not be reached, on a seam with no fallback.
+
+    ⚠️ Only `brief:fill` degrades (ADR-0005). Draft generation and rendering fail loudly,
+    because there is no pre-approved answer for a draft — the copy differs per product, so
+    "something reasonable" cannot exist in advance. Adding a fallback here would mean
+    inventing ad copy, which is the one thing the whole design forbids.
+    """
+    raise ApiError(503, "UPSTREAM_UNAVAILABLE", message)
+
+
+def generation_timeout(message: str = "생성이 제한 시간을 넘겼습니다.") -> NoReturn:
+    """The engine answered too late (504). Distinct from a 503 so a client can decide
+    whether retrying is sensible — it is here, and it is not for an outage."""
+    raise ApiError(504, "GENERATION_TIMEOUT", message)
+
+
+def content_policy_rejected(message: str) -> NoReturn:
+    """The engine declined rather than invent an unsupported claim (422).
+
+    ⚠️ Not a bug and not something to retry around. The guardrail refusing is the design
+    working (INV-6, ADR-0007); a retry loop here would keep asking until the model produced
+    something that slipped through, which is the failure mode the guardrail exists for.
+    """
+    raise ApiError(422, "CONTENT_POLICY_REJECTED", message)
+
+
+def invalid_request(message: str) -> NoReturn:
+    """Well-formed but not allowed — a patch naming a field that is not patchable, most of
+    all (INV-4, INV-8)."""
+    raise ApiError(422, "INVALID_REQUEST", message)
+
+
 def not_implemented(message: str = "이 기능은 제공하지 않습니다.") -> NoReturn:
     """Signup, withdrawal and password change (ADR-0008).
 
@@ -82,6 +134,10 @@ def _code_for(status_code: int) -> ErrorCode:
         return "UNAUTHORIZED"
     if status_code == 404:
         return "NOT_FOUND"
+    if status_code == 409:
+        return "STATE_CONFLICT"
+    if status_code == 504:
+        return "GENERATION_TIMEOUT"
     if status_code == 429:
         return "RATE_LIMITED"
     if status_code == 501:

@@ -21,9 +21,48 @@ from fastapi.testclient import TestClient
 from api import deps
 from api.main import app
 from backend_core.ai_client import AiEngineUnavailableError
+from backend_core.models import (
+    BriefFillResponse,
+    ComicDraft,
+    Draft,
+    DraftGenerateRequest,
+    DraftGenerateResponse,
+    NeedsInput,
+    OutputType,
+    Panel,
+    PanelRole,
+    SingleAdDraft,
+)
 from backend_core.models.legacy_qa import Answer, Source
 
 GROUNDED_TEXT = "안내문 3조에 따라 먼저 담당 창구에 연락하세요."
+
+FILLED_CATEGORY = "[더미] 생활용품"
+FILLED_TARGET = "[더미] 30대 1인 가구"
+
+# ⚠️ Prefixed "[더미]" on purpose. These strings reach a running screen through the fake
+# engine, and a plausible-looking one there is how a stub gets mistaken for a measurement
+# (AGENTS.md 현재 상태).
+_ROLES: tuple[PanelRole, ...] = ("hook", "setup", "problem", "solution", "proof", "cta")
+
+
+def draft_for(output_type: OutputType) -> Draft:
+    """A contract-valid draft of the shape the output type demands.
+
+    Six panels for a comic because 0 and 7 are both invalid (INV-1), and `role` follows
+    `index` rather than being chosen (INV-5) — a fixture that got either wrong would make
+    the pairing checks pass for the wrong reason.
+    """
+    if output_type == "comic":
+        return ComicDraft(
+            ad_plan="[더미] 기획안",
+            panels=[
+                Panel(index=i, role=role, scene=f"[더미] 장면 {i}", dialogue=f"[더미] 대사 {i}")
+                for i, role in enumerate(_ROLES, start=1)
+            ],
+        )
+    return SingleAdDraft(ad_plan="[더미] 기획안", copy="[더미] 카피", visual_plan="[더미] 비주얼")
+
 
 # tests/ -> apps/backend/ -> apps/ -> repo root
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "openapi.yaml"
@@ -75,17 +114,29 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
 
 
 class FakeAiEngine:
-    """Contract-shaped stand-in.
+    """Contract-shaped stand-in for all three seams.
 
     `available=False` simulates the outage branch (raise); `refuses=True` simulates the
-    honest-refusal branch (`answer: null`). Both must end at the same place — the
-    backend's `official_fallback` — which is what the pipeline tests check.
+    honest-refusal branch, which each seam expresses differently — `answer: null` on the
+    legacy path, an absent `draft` on generation. Both must end where the design says they
+    end, which is what the pipeline and session tests check.
+
+    ⚠️ The fake mimics the seams' *shapes*, not the engine's judgement. It never decides
+    whether a claim is supported — the guardrail is tested in apps/ai-engine, where it lives,
+    and a fake that pretended to run it would make the on/off delta meaningless.
     """
 
-    def __init__(self, available: bool = True, refuses: bool = False) -> None:
+    def __init__(
+        self,
+        available: bool = True,
+        refuses: bool = False,
+        needs_input: NeedsInput | None = None,
+    ) -> None:
         self.available = available
         self.refuses = refuses
+        self.needs_input = needs_input
         self.seen: list[str] = []
+        self.drafts_requested: list[DraftGenerateRequest] = []
 
     def generate(self, question: str, locale: str) -> Answer | None:
         if not self.available:
@@ -98,6 +149,25 @@ class FakeAiEngine:
             message_mode="grounded",
             sources=[Source(title="[더미] 공식 안내문", quote="담당 창구에 연락합니다.")],
         )
+
+    def fill_brief(
+        self, product_name: str, selling_point: str, note: str, image: bytes, filename: str
+    ) -> BriefFillResponse:
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        if self.needs_input is not None:
+            # Inference ran and could not decide: the two values are empty strings, not
+            # absent keys, and `needsInput` is what tells the two situations apart.
+            return BriefFillResponse(category="", target="", needs_input=self.needs_input)
+        return BriefFillResponse(category=FILLED_CATEGORY, target=FILLED_TARGET)
+
+    def generate_draft(self, request: DraftGenerateRequest) -> DraftGenerateResponse:
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        self.drafts_requested.append(request)
+        if self.refuses:
+            return DraftGenerateResponse(guardrail_applied=True, refusal_reason="no_evidence")
+        return DraftGenerateResponse(draft=draft_for(request.output_type), guardrail_applied=True)
 
 
 @pytest.fixture

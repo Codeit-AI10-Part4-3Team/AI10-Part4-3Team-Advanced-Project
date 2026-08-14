@@ -31,7 +31,12 @@ def settings() -> Settings:
 
 @lru_cache(maxsize=1)
 def ai_client() -> AiEngineClient:
-    return HttpAiEngineClient(settings().ai_engine_url, settings().ai_engine_timeout_s)
+    return HttpAiEngineClient(
+        settings().ai_engine_url,
+        settings().ai_engine_timeout_s,
+        settings().brief_fill_timeout_s,
+        settings().draft_timeout_s,
+    )
 
 
 def db() -> Iterator[sqlite3.Connection]:

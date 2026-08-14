@@ -27,7 +27,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA = """
+USERS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     user_id       TEXT PRIMARY KEY,
     login_id      TEXT NOT NULL UNIQUE,
@@ -76,6 +76,16 @@ def connect(db_path: str | Path) -> Generator[sqlite3.Connection]:
 def init_schema(connection: sqlite3.Connection) -> None:
     """Make the tables exist. Safe to call on every startup, and that is when it runs:
     the deployment path is `git pull` + `docker compose up`, with no separate migration
-    step to hang one off (ADR-0011)."""
-    connection.execute(SCHEMA)
+    step to hang one off (ADR-0011).
+
+    ⚠️ Every table's DDL is registered here, but each one is **defined in the module that
+    owns it** — `sessions.SCHEMA` next to the queries that use it. A statement kept far from
+    its queries is one that gets a column added on one side only. Imports are local to keep
+    this module at the bottom of the dependency graph: `backend_core.sessions` imports
+    `connect`, so a top-level import back would be a cycle.
+    """
+    from backend_core import jobs, sessions
+
+    for statement in (USERS_SCHEMA, sessions.SCHEMA, sessions.INDEX, jobs.SCHEMA):
+        connection.execute(statement)
     connection.commit()

@@ -88,6 +88,19 @@ CONTRACT_PATH = Path(__file__).resolve().parents[3] / "packages" / "contracts" /
 
 
 @pytest.fixture(scope="session")
+def contract_spec() -> dict[str, Any]:
+    """The whole contract document, for tests that compare **paths** rather than schemas.
+
+    Separate from `contract_schemas` because the two ask different questions: schemas police
+    our pydantic models, paths police what the app publishes.
+    """
+    if not CONTRACT_PATH.exists():
+        pytest.fail(f"contract not found at {CONTRACT_PATH} — see contract_schemas")
+    spec: dict[str, Any] = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    return spec
+
+
+@pytest.fixture(scope="session")
 def contract_schemas() -> dict[str, Any]:
     """`components.schemas` from the contract, for the conformance tests.
 

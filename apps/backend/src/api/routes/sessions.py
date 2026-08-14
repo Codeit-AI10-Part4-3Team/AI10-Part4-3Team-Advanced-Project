@@ -22,7 +22,7 @@ from collections.abc import Callable
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, status
+from fastapi import APIRouter, Depends, Form, Path, status
 
 from api import deps
 from api.errors import (
@@ -58,6 +58,20 @@ from backend_core.state import StateConflictError
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
+
+SessionId = Annotated[UUID, Path(alias="sessionId")]
+"""The path parameter, named as the contract names it.
+
+⚠️ The route template says `sessionId` and this alias repeats it, because FastAPI would
+otherwise publish the Python name (`session_id`). The URL a client sends is identical either
+way — a path parameter's *name* never travels — so getting this wrong changes nothing on the
+wire and everything in the **published** `/openapi.json`, which then disagrees with
+`openapi.yaml` (`components.parameters.SessionId`). A generated client takes its parameter
+names from the spec, not from the traffic.
+
+Same failure mode as leaving `media_type` off a multipart body (api/schemas.py): the spec
+lies while the traffic stays correct, so nothing fails until someone generates from it.
+"""
 
 
 @router.get("", response_model=list[SessionSummary])
@@ -114,22 +128,23 @@ def create_session(
         _fill_brief(engine, body, payload),
         sessions.now(),
     )
-    return sessions.save(connection, account.user_id, session)
+    return sessions.create(connection, account.user_id, session)
 
 
-@router.get("/{session_id}", response_model=Session)
+@router.get("/{sessionId}", response_model=Session)
 def get_session(
-    session_id: UUID,
+    session_id: SessionId,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
 ) -> Session:
     """One session in full. 404 if it is not yours (INV-9)."""
-    return _owned(connection, account, session_id)
+    session, _ = _owned(connection, account, session_id)
+    return session
 
 
-@router.post("/{session_id}/draft", response_model=Session)
+@router.post("/{sessionId}/draft", response_model=Session)
 def generate_draft(
-    session_id: UUID,
+    session_id: SessionId,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
     engine: Annotated[AiEngineClient, Depends(deps.ai_client)],
@@ -145,44 +160,51 @@ def generate_draft(
     generation failed would otherwise be stuck: brief locked, nothing to show, no way to
     retry. The failure paths are as much of the design as the success one.
     """
-    session = _owned(connection, account, session_id)
+    session, was = _owned(connection, account, session_id)
     session = _guard(lambda: session_flow.start_generating(session, sessions.now()))
-    sessions.save(connection, account.user_id, session)
+    _store(connection, account, session, was)
+
+    # ⚠️ The write above is what claims the session. Two simultaneous requests both read
+    # `brief_ready`, both pass the guard, and exactly one of them gets to write
+    # `draft_generating` — the loser gets a 409 without ever calling the engine, which is
+    # what stops one session from costing two generations.
+    #
+    # Everything after this point is based on the session as `draft_generating`, so the
+    # precondition moves with it.
+    was = sessions.Precondition(state=session.state, revision=session.revision)
 
     try:
         result = engine.generate_draft(
             DraftGenerateRequest(output_type=session.output_type, brief=session.brief)
         )
     except GenerationTimeoutError:
-        _unlock(connection, account, session)
+        _unlock(connection, account, session, was)
         generation_timeout()
     except AiEngineUnavailableError as exc:
         # ⚠️ No fallback here, by decision. `brief:fill` degrades because skipping an
         # inference still leaves the user's own words; a draft has nothing to fall back to,
         # and "something reasonable" would be invented ad copy (ADR-0005).
-        _unlock(connection, account, session)
+        _unlock(connection, account, session, was)
         upstream_unavailable(str(exc))
 
     if result.draft is None:
         # A refusal is a successful call: the engine could have written something and
         # declined to invent it. Not something to retry around — the guardrail refusing is
         # the design working (INV-6).
-        _unlock(connection, account, session)
+        _unlock(connection, account, session, was)
         content_policy_rejected(
             "입력한 제품 정보만으로는 광고 문구의 근거가 부족합니다. "
             f"소구점을 구체적으로 적어 주세요. (사유: {result.refusal_reason})"
         )
 
-    return sessions.save(
-        connection,
-        account.user_id,
-        session_flow.apply_draft(session, result, sessions.now()),
+    return _store(
+        connection, account, session_flow.apply_draft(session, result, sessions.now()), was
     )
 
 
-@router.patch("/{session_id}/brief", response_model=Session)
+@router.patch("/{sessionId}/brief", response_model=Session)
 def patch_brief(
-    session_id: UUID,
+    session_id: SessionId,
     body: BriefPatchRequest,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
@@ -196,15 +218,15 @@ def patch_brief(
     409 once a draft exists (INV-7): the brief is a draft's evidence, and evidence that
     moves after the fact leaves nothing to say what the draft was based on.
     """
-    session = _owned(connection, account, session_id)
+    session, was = _owned(connection, account, session_id)
     _require_revision(session, body.revision)
     session = _guard(lambda: session_flow.apply_brief_patch(session, body.patch, sessions.now()))
-    return sessions.save(connection, account.user_id, session)
+    return _store(connection, account, session, was)
 
 
-@router.patch("/{session_id}/draft", response_model=Session)
+@router.patch("/{sessionId}/draft", response_model=Session)
 def patch_draft(
-    session_id: UUID,
+    session_id: SessionId,
     body: DraftPatchRequest,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
@@ -221,7 +243,7 @@ def patch_draft(
     so naming one is an unknown field and a 422 — enforced by the schema's shape rather than
     by a check that a later edit could forget.
     """
-    session = _owned(connection, account, session_id)
+    session, was = _owned(connection, account, session_id)
     _require_revision(session, body.revision)
     if session.draft is None or session.state != "draft_ready":
         state_conflict(f"시안이 아직 없습니다. 세션이 {session.state!r} 상태입니다.")
@@ -243,20 +265,18 @@ def patch_draft(
     if result.draft is None:
         content_policy_rejected(f"교체한 내용의 근거가 부족합니다. (사유: {result.refusal_reason})")
 
-    return sessions.save(
-        connection,
-        account.user_id,
-        session_flow.replace_draft(session, result.draft, sessions.now()),
+    return _store(
+        connection, account, session_flow.replace_draft(session, result.draft, sessions.now()), was
     )
 
 
 @router.post(
-    "/{session_id}/finalize",
+    "/{sessionId}/finalize",
     response_model=FinalizeAccepted,
     status_code=status.HTTP_202_ACCEPTED,
 )
 def finalize(
-    session_id: UUID,
+    session_id: SessionId,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
 ) -> FinalizeAccepted:
@@ -269,13 +289,18 @@ def finalize(
     409 on a second call, and that is the cost defence rather than a nicety: one render per
     session (INV-3), enforced by the state machine having no way back to `finalized`.
     """
-    session = _owned(connection, account, session_id)
+    session, was = _owned(connection, account, session_id)
     job_id = jobs.new_job_id()
     at = sessions.now()
 
     session = _guard(lambda: session_flow.finalize(session, job_id, at))
+
+    # ⚠️ Session first, job second, and the order is the whole defence. The conditional write
+    # is what decides which of two simultaneous finalizes wins (INV-3); queueing before it
+    # would let the loser enqueue a render and only then find out it had lost — two GPU
+    # passes for one session, which is exactly what INV-3 exists to prevent.
+    _store(connection, account, session, was)
     jobs.enqueue(connection, account.user_id, str(session_id), job_id, at.isoformat())
-    sessions.save(connection, account.user_id, session)
 
     return FinalizeAccepted(job_id=job_id, status_url=f"/v1/jobs/{job_id}")
 
@@ -293,22 +318,65 @@ def _require_revision(session: Session, sent: int) -> None:
         ) from exc
 
 
-def _unlock(connection: sqlite3.Connection, account: Account, session: Session) -> None:
+def _unlock(
+    connection: sqlite3.Connection,
+    account: Account,
+    session: Session,
+    was: sessions.Precondition,
+) -> None:
     """Put a failed generation back where it can be retried (ADR-0012).
 
     Written to storage before the error response goes out, not after: the response is what
     tells the user to try again, and it must not arrive before the state that makes trying
     again possible.
+
+    ⚠️ The precondition here is the one from **`draft_generating`**, not from the original
+    read — this route already wrote once, on the way in. Losing the race at this point means
+    someone else moved the session while the engine was working, and their result is the one
+    that stands; we are unwinding a request that no longer owns the session.
     """
-    sessions.save(connection, account.user_id, session_flow.fail_draft(session, sessions.now()))
+    try:
+        sessions.save(
+            connection,
+            account.user_id,
+            session_flow.fail_draft(session, sessions.now()),
+            was,
+        )
+    except sessions.ConcurrentUpdateError:
+        logger.warning("session %s moved while generating; leaving it alone", session.session_id)
 
 
-def _owned(connection: sqlite3.Connection, account: Account, session_id: UUID) -> Session:
-    """The session, or a 404 that does not reveal whether it exists (INV-9)."""
-    session = sessions.for_user(connection, account.user_id, session_id)
-    if session is None:
+def _owned(
+    connection: sqlite3.Connection, account: Account, session_id: UUID
+) -> tuple[Session, sessions.Precondition]:
+    """The session and the version we read it at, or a 404 (INV-9).
+
+    The two travel together so a route cannot write without saying what it read — see
+    `sessions.save`.
+    """
+    found = sessions.for_user(connection, account.user_id, session_id)
+    if found is None:
         not_found("세션을 찾을 수 없습니다.")
-    return session
+    return found
+
+
+def _store(
+    connection: sqlite3.Connection,
+    account: Account,
+    session: Session,
+    was: sessions.Precondition,
+) -> Session:
+    """Write the session back, turning a lost race into the contract's 409.
+
+    ⚠️ A concurrent loser gets `STATE_CONFLICT` and **not** a 500, because from the client's
+    side it is the same situation as arriving too late: the session is no longer where this
+    request needed it to be. The 202-versus-409 split on two simultaneous finalizes is INV-3
+    holding (2026-08-14 실측 — before the conditional write both won and two renders queued).
+    """
+    try:
+        return sessions.save(connection, account.user_id, session, was)
+    except sessions.ConcurrentUpdateError:
+        state_conflict("세션이 방금 다른 요청으로 바뀌었습니다. 최신 상태를 다시 읽고 시도하세요.")
 
 
 def _guard(operation: Callable[[], Session]) -> Session:

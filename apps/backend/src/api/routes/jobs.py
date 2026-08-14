@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Path, Response
 
 from api import deps
 from api.errors import not_found
@@ -23,10 +23,14 @@ from backend_core.models import Job
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
+JobId = Annotated[str, Path(alias="jobId")]
+"""⚠️ Named as the contract names it. See `api.routes.sessions.SessionId` for why the
+Python name would otherwise reach the published spec and contradict `openapi.yaml`."""
 
-@router.get("/{job_id}", response_model=Job)
+
+@router.get("/{jobId}", response_model=Job)
 def get_job(
-    job_id: str,
+    job_id: JobId,
     response: Response,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],

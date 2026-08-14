@@ -25,6 +25,7 @@ from backend_core.models import (
     Brief,
     BriefFillResponse,
     BriefMeta,
+    BriefPatch,
     Draft,
     DraftGenerateResponse,
     FieldMeta,
@@ -32,6 +33,7 @@ from backend_core.models import (
     OutputType,
     Session,
     Visibility,
+    check_brief_matches_output_type,
 )
 
 
@@ -158,6 +160,49 @@ def replace_draft(session: Session, draft: Draft, at: datetime) -> Session:
     session.state = state.require_transition(session.state, "draft_ready")
     session.updated_at = at
     return session
+
+
+class RevisionConflictError(Exception):
+    """The client is patching a version of the session it no longer has.
+
+    ⚠️ Optimistic locking, and it is not optional. Two screens open on the same session both
+    hold `revision: 3`; without this the second save silently discards the first person's
+    edit and neither of them ever finds out.
+    """
+
+    def __init__(self, expected: int, sent: int) -> None:
+        self.expected = expected
+        self.sent = sent
+        super().__init__(f"session is at revision {expected}, request carried {sent}")
+
+
+def require_revision(session: Session, sent: int) -> None:
+    """Refuse a patch built on a stale copy. `revision` is a body field, not `If-Match` —
+    the contract records why."""
+    if session.revision != sent:
+        raise RevisionConflictError(session.revision, sent)
+
+
+def apply_brief_patch(session: Session, patch: BriefPatch, at: datetime) -> Session:
+    """Merge the named brief fields and re-decide the state.
+
+    ⚠️ Read with `exclude_unset`, which is the only correct way to read this family: an
+    omitted key means "leave it alone" and `""` means "empty it", and they are opposite
+    instructions. `exclude_none` would treat both as absent and quietly ignore every
+    request to clear a field.
+
+    Every field the user touches has its `filledBy` flipped to `user`, including one that
+    was `inferred` a moment ago — 기획서 5.4 requires an auto-filled value to be visibly
+    correctable, and a value the person just typed is no longer the model's guess.
+    """
+    changes = patch.model_dump(exclude_unset=True)
+    brief = session.brief.model_copy(update=changes)
+    check_brief_matches_output_type(session.output_type, brief)
+
+    # `BriefMeta` carries exactly `Brief`'s keys — a conformance test enforces it — so every
+    # changed field names a meta field, with no lookup needed to find out.
+    meta = session.brief_meta.model_copy(update={field: _meta("user") for field in changes})
+    return replace_brief(session, brief, meta, at)
 
 
 def replace_brief(session: Session, brief: Brief, meta: BriefMeta, at: datetime) -> Session:

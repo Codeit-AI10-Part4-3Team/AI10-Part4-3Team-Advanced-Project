@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import deps
 from api.errors import api_error_handler
-from api.routes import ask, auth, catalog, sessions
+from api.routes import ask, auth, catalog, jobs, sessions
 from backend_core.accounts import seed
 from backend_core.storage import connect, init_schema
 from backend_core.tokens import require_secret
@@ -62,6 +62,7 @@ app.add_exception_handler(StarletteHTTPException, api_error_handler)
 app.include_router(auth.router)
 app.include_router(catalog.router)
 app.include_router(sessions.router)
+app.include_router(jobs.router)
 
 # ⚠️ `/v1/ask` is the template's question-and-answer path, not part of the ad-generation
 # contract, and it is deliberately left unauthenticated. The contract protects "every /v1

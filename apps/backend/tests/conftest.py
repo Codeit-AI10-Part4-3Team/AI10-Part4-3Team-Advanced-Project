@@ -27,6 +27,7 @@ from backend_core.models import (
     Draft,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    DraftPatchEngineRequest,
     NeedsInput,
     OutputType,
     Panel,
@@ -137,6 +138,7 @@ class FakeAiEngine:
         self.needs_input = needs_input
         self.seen: list[str] = []
         self.drafts_requested: list[DraftGenerateRequest] = []
+        self.patches_requested: list[DraftPatchEngineRequest] = []
 
     def generate(self, question: str, locale: str) -> Answer | None:
         if not self.available:
@@ -168,6 +170,38 @@ class FakeAiEngine:
         if self.refuses:
             return DraftGenerateResponse(guardrail_applied=True, refusal_reason="no_evidence")
         return DraftGenerateResponse(draft=draft_for(request.output_type), guardrail_applied=True)
+
+    def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse:
+        """Apply the patch the way the real engine is asked to: **only the named parts.**
+
+        ⚠️ The fake actually merges rather than returning a canned draft. A fake that
+        returned a fresh draft would pass a test asserting "the copy changed" while hiding
+        the failure that matters — the fields *outside* the patch being rewritten, which is
+        the whole difference between 부분 교체 and regeneration.
+        """
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        self.patches_requested.append(request)
+        if self.refuses:
+            return DraftGenerateResponse(guardrail_applied=True, refusal_reason="guardrail")
+
+        changes = request.patch.model_dump(exclude_unset=True, exclude={"panels"})
+        patched = request.draft.model_copy(update=changes)
+        if request.patch.panels is not None and isinstance(patched, ComicDraft):
+            edits = request.patch.panels.root
+            patched = patched.model_copy(
+                update={
+                    "panels": [
+                        panel.model_copy(
+                            update=edits[str(panel.index)].model_dump(exclude_unset=True)
+                        )
+                        if str(panel.index) in edits
+                        else panel
+                        for panel in patched.panels
+                    ]
+                }
+            )
+        return DraftGenerateResponse(draft=patched, guardrail_applied=True)
 
 
 @pytest.fixture

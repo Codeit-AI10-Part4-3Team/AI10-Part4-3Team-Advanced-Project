@@ -20,6 +20,7 @@ from backend_core.models.generation import (
     DraftGenerateResponse,
 )
 from backend_core.models.legacy_qa import Answer, Source
+from backend_core.models.patch import DraftPatchEngineRequest
 
 
 class AiEngineUnavailableError(RuntimeError):
@@ -43,6 +44,8 @@ class AiEngineClient(Protocol):
     ) -> BriefFillResponse: ...
 
     def generate_draft(self, request: DraftGenerateRequest) -> DraftGenerateResponse: ...
+
+    def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse: ...
 
 
 class GenerationTimeoutError(RuntimeError):
@@ -122,6 +125,26 @@ class HttpAiEngineClient:
                 f"{self._base_url}/v1/draft:generate",
                 json=request.model_dump(by_alias=True, exclude_none=True),
                 timeout=self._draft_timeout_s,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise GenerationTimeoutError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise AiEngineUnavailableError(str(exc)) from exc
+        return DraftGenerateResponse.model_validate(response.json())
+
+    def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse:
+        """Change the named parts of an existing draft.
+
+        ⚠️ `exclude_unset` on the patch, not `exclude_none`. In this one family an omitted
+        key and `""` are opposite instructions — "leave it alone" against "empty it" — and
+        `exclude_none` would collapse them (models/patch.py).
+        """
+        payload = request.model_dump(by_alias=True, exclude_none=True)
+        payload["patch"] = request.patch.model_dump(by_alias=True, exclude_unset=True)
+        try:
+            response = httpx.post(
+                f"{self._base_url}/v1/draft:patch", json=payload, timeout=self._draft_timeout_s
             )
             response.raise_for_status()
         except httpx.TimeoutException as exc:

@@ -120,6 +120,11 @@ class Settings(BaseSettings):
     # (API_계약.md 2절). There is no fallback here, so this number *is* the promise.
     draft_timeout_s: float = 60.0
 
+    # How long a client waits between job polls, sent as `Retry-After`. 3s is the contract's
+    # initial value and it is a setting because the server has to be able to slow clients
+    # down when the queue backs up — the load arrives exactly when there is least room.
+    job_poll_interval_s: int = 3
+
     # ---- uploaded images (ADR-0010, 세션_보관_정책 2절) ----------------------------------
 
     # Images go to disk and only their paths into the database — the file is far too big to

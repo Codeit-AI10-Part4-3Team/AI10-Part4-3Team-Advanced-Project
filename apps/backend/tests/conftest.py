@@ -10,6 +10,7 @@ guardrail behaviour is tested in apps/ai-engine, where it lives.
 """
 
 import os
+import struct
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,90 @@ from fastapi.testclient import TestClient
 from api import deps
 from api.main import app
 from backend_core.ai_client import AiEngineUnavailableError
+from backend_core.models import (
+    BriefFillResponse,
+    ComicDraft,
+    Draft,
+    DraftGenerateRequest,
+    DraftGenerateResponse,
+    DraftPatchEngineRequest,
+    ImageRenderRequest,
+    NeedsInput,
+    OutputType,
+    Panel,
+    PanelRole,
+    SingleAdDraft,
+)
 from backend_core.models.legacy_qa import Answer, Source
 
 GROUNDED_TEXT = "안내문 3조에 따라 먼저 담당 창구에 연락하세요."
 
+FILLED_CATEGORY = "[더미] 생활용품"
+FILLED_TARGET = "[더미] 30대 1인 가구"
+
+# ⚠️ Prefixed "[더미]" on purpose. These strings reach a running screen through the fake
+# engine, and a plausible-looking one there is how a stub gets mistaken for a measurement
+# (AGENTS.md 현재 상태).
+_ROLES: tuple[PanelRole, ...] = ("hook", "setup", "problem", "solution", "proof", "cta")
+
+
+def png_of(width: int, height: int) -> bytes:
+    """A PNG header claiming a size, with no pixel data behind it.
+
+    ⚠️ Enough on purpose. Nothing in this app decodes pixels — the bytes go to disk
+    untouched — so the only thing a real encoder would add here is time. What the tests need
+    is a file whose *header* says a size, because that is what the validator reads.
+
+    The CRC is not computed and nothing checks it, for the same reason.
+    """
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\x00\x00\x00\x00"
+
+
+VALID_PNG = png_of(1024, 768)
+"""Comfortably over the 512px short edge that 미결정_대장 N3 fixed."""
+
+RENDERED_WEBP = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8 " + b"\x00" * 16
+"""What the fake engine returns from `image:render` — a real WebP container header.
+
+Bytes rather than JSON because that is what the contract says the render returns, and a
+fake that answered JSON would let a caller that mishandled the body still pass.
+"""
+
+
+def draft_for(output_type: OutputType) -> Draft:
+    """A contract-valid draft of the shape the output type demands.
+
+    Six panels for a comic because 0 and 7 are both invalid (INV-1), and `role` follows
+    `index` rather than being chosen (INV-5) — a fixture that got either wrong would make
+    the pairing checks pass for the wrong reason.
+    """
+    if output_type == "comic":
+        return ComicDraft(
+            ad_plan="[더미] 기획안",
+            panels=[
+                Panel(index=i, role=role, scene=f"[더미] 장면 {i}", dialogue=f"[더미] 대사 {i}")
+                for i, role in enumerate(_ROLES, start=1)
+            ],
+        )
+    return SingleAdDraft(ad_plan="[더미] 기획안", copy="[더미] 카피", visual_plan="[더미] 비주얼")
+
+
 # tests/ -> apps/backend/ -> apps/ -> repo root
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "openapi.yaml"
+
+
+@pytest.fixture(scope="session")
+def contract_spec() -> dict[str, Any]:
+    """The whole contract document, for tests that compare **paths** rather than schemas.
+
+    Separate from `contract_schemas` because the two ask different questions: schemas police
+    our pydantic models, paths police what the app publishes.
+    """
+    if not CONTRACT_PATH.exists():
+        pytest.fail(f"contract not found at {CONTRACT_PATH} — see contract_schemas")
+    spec: dict[str, Any] = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    return spec
 
 
 @pytest.fixture(scope="session")
@@ -69,23 +148,46 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
         monkeypatch.delenv(name)
     monkeypatch.setenv("ADGEN_DB_PATH", str(tmp_path / "test.sqlite"))
 
+    # ⚠️ The render worker is **off for every test that does not ask for it**. It polls the
+    # job queue once a second, so leaving it on makes assertions about a job's state depend
+    # on how fast the machine is — "queued right after finalize" is true until the poll
+    # lands. Worse, before `deps.resolve_ai_client` existed the worker resolved the *real*
+    # HTTP client and a test suite reached for localhost:8100 (2026-08-14 실측).
+    #
+    # Tests that mean to exercise the worker turn it on and inject a fake engine.
+    monkeypatch.setenv("ADGEN_WORKER_ENABLED", "false")
+
     deps.settings.cache_clear()
     yield
     deps.settings.cache_clear()
 
 
 class FakeAiEngine:
-    """Contract-shaped stand-in.
+    """Contract-shaped stand-in for all three seams.
 
     `available=False` simulates the outage branch (raise); `refuses=True` simulates the
-    honest-refusal branch (`answer: null`). Both must end at the same place — the
-    backend's `official_fallback` — which is what the pipeline tests check.
+    honest-refusal branch, which each seam expresses differently — `answer: null` on the
+    legacy path, an absent `draft` on generation. Both must end where the design says they
+    end, which is what the pipeline and session tests check.
+
+    ⚠️ The fake mimics the seams' *shapes*, not the engine's judgement. It never decides
+    whether a claim is supported — the guardrail is tested in apps/ai-engine, where it lives,
+    and a fake that pretended to run it would make the on/off delta meaningless.
     """
 
-    def __init__(self, available: bool = True, refuses: bool = False) -> None:
+    def __init__(
+        self,
+        available: bool = True,
+        refuses: bool = False,
+        needs_input: NeedsInput | None = None,
+    ) -> None:
         self.available = available
         self.refuses = refuses
+        self.needs_input = needs_input
         self.seen: list[str] = []
+        self.drafts_requested: list[DraftGenerateRequest] = []
+        self.patches_requested: list[DraftPatchEngineRequest] = []
+        self.renders_requested: list[ImageRenderRequest] = []
 
     def generate(self, question: str, locale: str) -> Answer | None:
         if not self.available:
@@ -98,6 +200,69 @@ class FakeAiEngine:
             message_mode="grounded",
             sources=[Source(title="[더미] 공식 안내문", quote="담당 창구에 연락합니다.")],
         )
+
+    def fill_brief(
+        self, product_name: str, selling_point: str, note: str, image: bytes, filename: str
+    ) -> BriefFillResponse:
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        if self.needs_input is not None:
+            # Inference ran and could not decide: the two values are empty strings, not
+            # absent keys, and `needsInput` is what tells the two situations apart.
+            return BriefFillResponse(category="", target="", needs_input=self.needs_input)
+        return BriefFillResponse(category=FILLED_CATEGORY, target=FILLED_TARGET)
+
+    def generate_draft(self, request: DraftGenerateRequest) -> DraftGenerateResponse:
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        self.drafts_requested.append(request)
+        if self.refuses:
+            return DraftGenerateResponse(guardrail_applied=True, refusal_reason="no_evidence")
+        return DraftGenerateResponse(draft=draft_for(request.output_type), guardrail_applied=True)
+
+    def render_image(self, request: ImageRenderRequest) -> bytes:
+        """Bytes, not JSON — the contract says lossless WebP.
+
+        ⚠️ The fake returns a **WebP header**, not arbitrary bytes, so anything that later
+        looks at the format sees a real one. A render is the one call with no refusal
+        branch: the engine either draws or fails.
+        """
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        self.renders_requested.append(request)
+        return RENDERED_WEBP
+
+    def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse:
+        """Apply the patch the way the real engine is asked to: **only the named parts.**
+
+        ⚠️ The fake actually merges rather than returning a canned draft. A fake that
+        returned a fresh draft would pass a test asserting "the copy changed" while hiding
+        the failure that matters — the fields *outside* the patch being rewritten, which is
+        the whole difference between 부분 교체 and regeneration.
+        """
+        if not self.available:
+            raise AiEngineUnavailableError("fake outage")
+        self.patches_requested.append(request)
+        if self.refuses:
+            return DraftGenerateResponse(guardrail_applied=True, refusal_reason="guardrail")
+
+        changes = request.patch.model_dump(exclude_unset=True, exclude={"panels"})
+        patched = request.draft.model_copy(update=changes)
+        if request.patch.panels is not None and isinstance(patched, ComicDraft):
+            edits = request.patch.panels.root
+            patched = patched.model_copy(
+                update={
+                    "panels": [
+                        panel.model_copy(
+                            update=edits[str(panel.index)].model_dump(exclude_unset=True)
+                        )
+                        if str(panel.index) in edits
+                        else panel
+                        for panel in patched.panels
+                    ]
+                }
+            )
+        return DraftGenerateResponse(draft=patched, guardrail_applied=True)
 
 
 @pytest.fixture

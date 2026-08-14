@@ -19,6 +19,8 @@ from argon2.exceptions import InvalidHashError
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from backend_core.models.catalog import ArtStyle
+
 # The cookie name is contract surface (openapi.yaml securitySchemes), not an operator
 # knob: renaming it silently logs every client out. Kept as a constant so it cannot drift
 # per-environment. The *lifetime* is configurable — see Settings.session_max_age_s.
@@ -64,6 +66,38 @@ class SeedAccount(BaseModel):
         return value
 
 
+def _json_list(value: Any, variable: str, example: str) -> Any:
+    """Read a JSON list out of an environment variable, treating blank as empty.
+
+    ⚠️ This is not a defensive nicety, it is what lets the stack start unconfigured.
+    `docker-compose.yml` writes `${ADGEN_ACCOUNTS:-}` and friends, which set the variable to
+    an **empty string** rather than leaving it unset — so without this the field default
+    never applies: pydantic-settings tries to JSON-decode `""` and the whole app dies at
+    startup with `SettingsError`, before any route exists to report it (2026-08-14 실측 —
+    CI 의 종단 관통 테스트가 여기서 unhealthy 로 떨어졌습니다).
+
+    An unconfigured stack is a supported state. Nobody can log in and the catalog is empty,
+    while `/health` and `/v1/ask` still answer — which is exactly the "빈 스택이어도 충족"
+    deployment the 08-14 일정 항목 asks for.
+
+    Genuinely broken JSON still fails, loudly and **with the shape in the message**: whoever
+    hits it is looking at a container that will not start, and the value is one long line in
+    a file they cannot see the parser's opinion of. "Invalid JSON" alone does not tell them
+    what the valid version looks like, which is the only thing they need.
+    """
+    if not isinstance(value, str):
+        return value
+    if not value.strip():
+        return []
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{variable} is not valid JSON. It is a list, e.g. {example}. "
+            "Leave it empty to configure none."
+        ) from exc
+
+
 class Settings(BaseSettings):
     """`ADGEN_` prefix keeps our variables distinguishable from everything else on the host."""
 
@@ -75,6 +109,66 @@ class Settings(BaseSettings):
     # A generation call that overruns this has not been "slow", it has missed the request.
     # We cut it and fall back rather than letting the caller wait.
     ai_engine_timeout_s: float = 8.0
+
+    # `brief:fill` is the one seam with a fallback behind it (ADR-0005): past this we stop
+    # waiting, proceed on the user's own input and say `degraded`. 15s because the user is
+    # sitting in front of the request — a longer wait buys an inferred `category` at the
+    # price of the screen looking frozen.
+    brief_fill_timeout_s: float = 15.0
+
+    # The contract promises draft generation inside 60s and `GENERATION_TIMEOUT` past it
+    # (API_계약.md 2절). There is no fallback here, so this number *is* the promise.
+    draft_timeout_s: float = 60.0
+
+    # How long a client waits between job polls, sent as `Retry-After`. 3s is the contract's
+    # initial value and it is a setting because the server has to be able to slow clients
+    # down when the queue backs up — the load arrives exactly when there is least room.
+    job_poll_interval_s: int = 3
+
+    # How long a single render may take. Minutes, not seconds — the waiter is the job worker
+    # and no user is holding a connection open (ADR-0015, API_계약.md 2.1절).
+    render_timeout_s: float = 300.0
+
+    # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which
+    # is what the *client* is told: the client polls over the network, the worker polls a
+    # local file. Tying them together would make slowing clients down also slow rendering.
+    worker_poll_interval_s: float = 1.0
+
+    # ⚠️ **On by default**, so a deployment cannot forget it — a stack whose worker is off
+    # accepts renders and never runs them, and the symptom is a spinner that resolves for
+    # nobody. Only the test suite turns it off (tests/conftest.py), because a worker polling
+    # underneath a test flips a job's state between the request and the assertion.
+    worker_enabled: bool = True
+
+    # ---- uploaded images (ADR-0010, 세션_보관_정책 2절) ----------------------------------
+
+    # Images go to disk and only their paths into the database — the file is far too big to
+    # sit in a row, and 24-hour retention means the cleanup batch (08-25) needs to find them
+    # by walking a directory rather than by scanning a table.
+    # Under the same volume as the database so one mount carries all durable state
+    # (ADR-0014); a second location would be a second thing to back up and forget.
+    image_dir: str = "./data/images"
+
+    # ---- catalog -----------------------------------------------------------------------
+
+    # ⚠️ Empty by default, and that is the honest value: **the art-style candidates are not
+    # decided** (미결정_대장 A절 3번, 차단). The contract says as much — "이 경로의 응답
+    # 모양은 확정이고, 그 안에 실릴 값이 아직 없습니다."
+    #
+    # A list here rather than a constant in the source so the decision can land as data
+    # without a code change, and so nothing in this repo ever looks like the decision was
+    # made. JSON, same shape as `ArtStyle`.
+    art_styles: Annotated[list[ArtStyle], NoDecode] = Field(default_factory=list)
+
+    @field_validator("art_styles", mode="before")
+    @classmethod
+    def _parse_art_styles(cls, value: Any) -> Any:
+        """Same empty-string handling as `accounts` — see `_json_list` for why."""
+        return _json_list(
+            value,
+            "ADGEN_ART_STYLES",
+            '[{"artStyleId": "...", "name": "...", "exampleImageUrl": "..."}]',
+        )
 
     # ---- storage (ADR-0010) ------------------------------------------------------------
 
@@ -108,31 +202,11 @@ class Settings(BaseSettings):
     @field_validator("accounts", mode="before")
     @classmethod
     def _parse_accounts(cls, value: Any) -> Any:
-        """An empty `ADGEN_ACCOUNTS` means "no accounts", not "malformed configuration".
-
-        ⚠️ This is not a defensive nicety, it is what lets the stack start unconfigured.
-        `docker-compose.yml` writes `ADGEN_ACCOUNTS: ${ADGEN_ACCOUNTS:-}`, which sets the
-        variable to an **empty string** rather than leaving it unset, so without this the
-        default never applies: pydantic-settings tries to JSON-decode `""` and the whole app
-        dies at startup with `SettingsError` before any route exists (2026-08-14 실측 — CI
-        의 종단 관통 테스트가 여기서 unhealthy 로 떨어졌습니다).
-
-        A stack with no accounts is a supported state. Nobody can log in, `/health` and
-        `/v1/ask` still answer, and that is exactly the "빈 스택이어도 충족" deployment the
-        08-14 일정 항목 asks for.
-        """
-        if not isinstance(value, str):
-            return value
-        if not value.strip():
-            return []
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "ADGEN_ACCOUNTS is not valid JSON. It is a list, e.g. "
-                '[{"login_id": "...", "password_hash": "$argon2id$..."}]. '
-                "Leave it empty for a stack with no accounts."
-            ) from exc
+        return _json_list(
+            value,
+            "ADGEN_ACCOUNTS",
+            '[{"login_id": "...", "password_hash": "$argon2id$..."}]',
+        )
 
 
 def get_settings() -> Settings:

@@ -19,10 +19,15 @@ from backend_core.models import (
     Brief,
     BriefFillResponse,
     BriefMeta,
+    BriefPatch,
+    BriefPatchRequest,
     Character,
     ComicDraft,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    DraftPatch,
+    DraftPatchEngineRequest,
+    DraftPatchRequest,
     Error,
     FieldMeta,
     FinalizeAccepted,
@@ -49,10 +54,15 @@ MODELS: dict[str, type[BaseModel]] = {
     "Brief": Brief,
     "BriefFillResponse": BriefFillResponse,
     "BriefMeta": BriefMeta,
+    "BriefPatch": BriefPatch,
+    "BriefPatchRequest": BriefPatchRequest,
     "Character": Character,
     "ComicDraft": ComicDraft,
     "DraftGenerateRequest": DraftGenerateRequest,
     "DraftGenerateResponse": DraftGenerateResponse,
+    "DraftPatch": DraftPatch,
+    "DraftPatchEngineRequest": DraftPatchEngineRequest,
+    "DraftPatchRequest": DraftPatchRequest,
     "Error": Error,
     "FieldMeta": FieldMeta,
     "FinalizeAccepted": FinalizeAccepted,
@@ -82,20 +92,17 @@ SCALAR_ALIASES = {"AdPlan", "GuardrailApplied"}
 
 COVERED_IN_TEST_COMMON = {"ErrorCode", "MessageMode", "OutputType"}
 
-DEFERRED = {
-    "BriefPatch",
-    "BriefPatchRequest",
-    "DraftPatch",
-    "DraftPatchEngineRequest",
-    "DraftPatchRequest",
-    "PanelPatchMap",
-}
-"""The patch family (S5 부분 교체), off the walking skeleton's single pass-through path.
+DEFERRED: set[str] = set()
+"""Empty as of S5 — the patch family landed in `backend_core.models.patch`.
 
-⚠️ Listed rather than ignored. Deleting a name from this set without writing the model
-turns the coverage test red, which is the only reason "we deferred it" and "we forgot it"
-stay distinguishable.
+⚠️ Kept as an empty set rather than deleted. It is the mechanism that keeps "we deferred it"
+and "we forgot it" distinguishable, and the next schema the contract grows ahead of the
+implementation belongs in here rather than quietly missing from the coverage test.
 """
+
+ROOT_MODELS = {"PanelPatchMap"}
+"""A JSON object with no fixed keys, so `model_fields` is empty and there is nothing to
+compare. Its key pattern and value shape are checked in test_patch.py instead."""
 
 NOT_MODELLED = {"BriefFillRequest"}
 """Sent by this app as a multipart body it never receives, so there is nothing to validate.
@@ -165,6 +172,12 @@ def test_every_contract_schema_is_accounted_for(contract_schemas: dict[str, Any]
     remembered to write proves nothing about the ones we forgot.
     """
     accounted = (
-        set(MODELS) | set(ENUMS) | SCALAR_ALIASES | COVERED_IN_TEST_COMMON | DEFERRED | NOT_MODELLED
+        set(MODELS)
+        | set(ENUMS)
+        | SCALAR_ALIASES
+        | COVERED_IN_TEST_COMMON
+        | DEFERRED
+        | ROOT_MODELS
+        | NOT_MODELLED
     )
     assert set(contract_schemas) == accounted

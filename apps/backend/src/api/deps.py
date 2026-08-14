@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Cookie, Depends, Response
+from fastapi import Cookie, Depends, FastAPI, Response
 
 from api.errors import unauthorized
 from backend_core import tokens
@@ -31,7 +31,29 @@ def settings() -> Settings:
 
 @lru_cache(maxsize=1)
 def ai_client() -> AiEngineClient:
-    return HttpAiEngineClient(settings().ai_engine_url, settings().ai_engine_timeout_s)
+    return HttpAiEngineClient(
+        settings().ai_engine_url,
+        settings().ai_engine_timeout_s,
+        settings().brief_fill_timeout_s,
+        settings().draft_timeout_s,
+        settings().render_timeout_s,
+    )
+
+
+def resolve_ai_client(app: FastAPI) -> AiEngineClient:
+    """The engine seam **for callers outside the request cycle** — the render worker.
+
+    ⚠️ Calling `ai_client()` directly from the worker looked equivalent and is not.
+    `app.dependency_overrides` is consulted by FastAPI when it resolves a `Depends(...)`,
+    and nowhere else — so a worker that called the provider itself got the **real HTTP
+    client** even in a test that had substituted a fake, and went out to the network
+    (2026-08-14 실측: a job sat `running` for the render timeout while the suite waited on a
+    connection to localhost:8100). Test suites must never make external calls (AGENTS.md).
+
+    Reading the overrides here is what keeps one seam rather than two.
+    """
+    provider = app.dependency_overrides.get(ai_client, ai_client)
+    return provider()
 
 
 def db() -> Iterator[sqlite3.Connection]:

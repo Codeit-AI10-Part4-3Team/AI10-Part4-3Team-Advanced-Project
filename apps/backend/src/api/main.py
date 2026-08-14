@@ -11,11 +11,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api import deps
-from api.errors import api_error_handler
-from api.routes import ask, auth
+from api import deps, worker
+from api.errors import api_error_handler, unhandled_error_handler, validation_error_handler
+from api.routes import ask, auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
 from backend_core.storage import connect, init_schema
@@ -57,7 +58,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if account_count(connection):
             require_secret(settings.session_secret)
 
-    yield
+        # ⚠️ Before the worker starts, not after. A job left `running` by a crash or a
+        # deploy is a session stuck in `rendering` for ever, because `rendering` has no edge
+        # back and nothing would ever pick that job up again (ADR-0015).
+        worker.requeue_interrupted(connection)
+
+    async with worker.lifespan_task(_app, settings.worker_poll_interval_s, settings.worker_enabled):
+        yield
 
 
 app = FastAPI(title="adgen-backend", lifespan=lifespan)
@@ -68,7 +75,23 @@ app = FastAPI(title="adgen-backend", lifespan=lifespan)
 # registering the subclass leaves exactly the most common error escaping the contract.
 app.add_exception_handler(StarletteHTTPException, api_error_handler)
 
+# ⚠️ The handler above does not cover request validation — FastAPI raises
+# `RequestValidationError`, which is not an `HTTPException`. Leaving it out sent the API's
+# **most common** error out in FastAPI's own `{"detail": [...]}` shape, with no `code` for a
+# client to branch on (2026-08-14 실측).
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+
+# ⚠️ And the last resort. `INTERNAL` is in the contract's `ErrorCode`, so a client is told it
+# may receive one — but an unhandled exception left as Starlette's plain-text
+# `Internal Server Error`, with no JSON at all. The `else` branch in `api_error_handler` was
+# written for this and could never run, because that handler is only registered for
+# `StarletteHTTPException`.
+app.add_exception_handler(Exception, unhandled_error_handler)
+
 app.include_router(auth.router)
+app.include_router(catalog.router)
+app.include_router(sessions.router)
+app.include_router(jobs.router)
 
 # ⚠️ `/v1/ask` is the template's question-and-answer path, not part of the ad-generation
 # contract, and it is deliberately left unauthenticated. The contract protects "every /v1

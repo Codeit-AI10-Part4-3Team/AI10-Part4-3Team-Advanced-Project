@@ -5,14 +5,9 @@ question-and-answer models that the walking skeleton still runs on are not re-ex
 here — import them from `backend_core.models.legacy_qa`, which makes every remaining call
 site visible and the eventual deletion mechanical.
 
-Two contract schemas are **not** here:
-
-- `SessionCreateRequest` is in `api.schemas` — it names an uploaded file, and `backend_core`
-  stays importable without a web framework (apps/backend/AGENTS.md).
-- The patch family (`BriefPatch`, `DraftPatch`, `PanelPatchMap`, their request wrappers and
-  `DraftPatchEngineRequest`) is not written yet. They serve S5 (부분 교체), which is off the
-  walking skeleton's single pass-through path, so they were deferred to keep this landing
-  before the 08-14 관통 deadline. The contract already describes them.
+One contract schema is **not** here: `SessionCreateRequest` lives in `api.schemas`, because
+it names an uploaded file and `backend_core` stays importable without a web framework
+(apps/backend/AGENTS.md).
 """
 
 from backend_core.models.auth import LoginRequest, Me
@@ -54,6 +49,15 @@ from backend_core.models.generation import (
     RefusalReason,
 )
 from backend_core.models.job import Job, JobResult, JobStatus
+from backend_core.models.patch import (
+    BriefPatch,
+    BriefPatchRequest,
+    DraftPatch,
+    DraftPatchEngineRequest,
+    DraftPatchRequest,
+    PanelPatch,
+    PanelPatchMap,
+)
 from backend_core.models.session import (
     FinalizeAccepted,
     Session,
@@ -68,11 +72,16 @@ __all__ = [
     "Brief",
     "BriefFillResponse",
     "BriefMeta",
+    "BriefPatch",
+    "BriefPatchRequest",
     "Character",
     "ComicDraft",
     "Draft",
     "DraftGenerateRequest",
     "DraftGenerateResponse",
+    "DraftPatch",
+    "DraftPatchEngineRequest",
+    "DraftPatchRequest",
     "Error",
     "ErrorCode",
     "FieldMeta",
@@ -91,6 +100,8 @@ __all__ = [
     "Omittable",
     "OutputType",
     "Panel",
+    "PanelPatch",
+    "PanelPatchMap",
     "PanelRole",
     "RefusalReason",
     "Session",

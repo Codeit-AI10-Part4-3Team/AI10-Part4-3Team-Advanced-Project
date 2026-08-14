@@ -79,7 +79,7 @@ def _me(account: Account) -> Me:
     )
 
 
-@router.post("/auth/login", response_model=Me)
+@router.post("/auth/login")
 def login(
     body: LoginRequest,
     response: Response,
@@ -130,7 +130,7 @@ def signup() -> None:
     not_implemented("가입은 제공하지 않습니다. 미리 만들어 둔 고정 계정만 씁니다 (ADR-0008).")
 
 
-@router.get("/me", response_model=Me)
+@router.get("/me")
 def me(account: Annotated[Account, Depends(deps.current_user)]) -> Me:
     """Who the cookie says you are — read back from storage, not from the cookie.
 

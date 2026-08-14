@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from api import deps
 from api.errors import api_error_handler
 from api.routes import ask, auth
+from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
 from backend_core.storage import connect, init_schema
 from backend_core.tokens import require_secret
@@ -35,18 +36,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """
     settings = deps.settings()
 
-    # ADR-0013 says a missing signing key must stop the process, not the first login. The
-    # condition is `accounts` rather than the key alone, because a fresh clone with no .env
-    # at all still has to serve /health and /v1/ask — a skeleton that needs configuration
-    # before it moves is not a walking skeleton (config.py). Configured accounts are the
-    # signal that auth is meant to work here, and a deployment always has them (ADR-0008),
-    # so the deployment always fails fast.
-    if settings.accounts:
-        require_secret(settings.session_secret)
-
     with connect(settings.db_path) as connection:
         init_schema(connection)
         seed(connection, settings.accounts)
+
+        # ADR-0013 says a missing signing key must stop the process, not the first login.
+        #
+        # ⚠️ The condition is **how many accounts are in the database**, not how many are
+        # configured, and the difference is the whole point. `ADGEN_ACCOUNTS` says what this
+        # startup was told to seed; the file says what is actually there. With a named volume
+        # (ADR-0014) they come apart the first time someone restarts without their .env:
+        # `seed([])` does not delete anything, so a real account survives, `authenticate`
+        # succeeds against it, and `tokens.issue` then raises on the empty key — a 500 on a
+        # correct password, which is exactly the failure this check exists to prevent
+        # (2026-08-14, PR #84 리뷰에서 신호정 발견).
+        #
+        # An empty database still starts with no key: a fresh clone has to serve /health and
+        # /v1/ask, because a skeleton that needs configuration before it moves is not a
+        # walking skeleton (config.py).
+        if account_count(connection):
+            require_secret(settings.session_secret)
 
     yield
 

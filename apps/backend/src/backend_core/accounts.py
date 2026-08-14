@@ -81,6 +81,19 @@ def find_by_login_id(connection: sqlite3.Connection, login_id: str) -> Account |
     return None if row is None else Account(**dict(row))
 
 
+def count(connection: sqlite3.Connection) -> int:
+    """How many accounts exist **in the database**.
+
+    ⚠️ Not the same question as "how many are configured". `ADGEN_ACCOUNTS` is what the last
+    startup was told to seed; this is what is actually there, and with a persistent volume
+    (ADR-0014) the two come apart the moment someone restarts without their .env. Anything
+    deciding whether authentication has to work must ask this one — the environment can be
+    empty while a perfectly usable account sits in the file.
+    """
+    row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()
+    return int(row["total"])
+
+
 def find_by_user_id(connection: sqlite3.Connection, user_id: str) -> Account | None:
     """By the id other data references. Used to resolve a session token to its owner.
 

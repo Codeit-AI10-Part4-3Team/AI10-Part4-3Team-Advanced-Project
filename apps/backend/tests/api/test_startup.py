@@ -106,6 +106,39 @@ def test_a_half_configured_server_answers_401_not_500(client: TestClient) -> Non
         assert response.json()["code"] == "UNAUTHORIZED"
 
 
+def test_accounts_left_on_the_volume_stop_a_keyless_restart(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """⚠️ Regression guard. **Accounts live in the database, not in the environment**, and
+    the startup check has to ask the database.
+
+    The sequence, from the PR #84 review (신호정):
+
+    1. a configured run seeds `demo1` into the file and logging in returns 200;
+    2. the stack restarts against the **same volume** with `ADGEN_ACCOUNTS` and
+       `ADGEN_SESSION_SECRET` both empty. `seed([])` deletes nothing, so `demo1` is still
+       there — but the old check looked at `settings.accounts`, saw an empty list, and
+       skipped `require_secret`. `/health` answered 200;
+    3. logging in with the **correct** password then reached `tokens.issue`, which raised on
+       the empty key — a 500.
+
+    That inverts the rule this app is built on (ADR-0013): a missing key stops the process,
+    it does not stop the first login. Startup is where a misconfiguration is cheap to see;
+    a 500 on a correct password is where it is most expensive.
+    """
+    with TestClient(app):
+        pass
+    with connect(configured) as connection:
+        assert find_by_login_id(connection, "demo1") is not None, "the fixture must seed first"
+
+    monkeypatch.setenv("ADGEN_ACCOUNTS", "")
+    monkeypatch.setenv("ADGEN_SESSION_SECRET", "")
+    deps.settings.cache_clear()
+
+    with pytest.raises(SigningKeyMissingError), TestClient(app):
+        pass  # pragma: no cover - the context manager raises on entry
+
+
 def test_a_bare_clone_still_starts(client: TestClient) -> None:
     """No .env at all: no accounts, no signing key. The app must still come up and serve
     /health, because a skeleton that needs configuration before it moves is not a walking

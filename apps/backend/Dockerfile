@@ -26,6 +26,16 @@ RUN useradd --create-home --uid 10001 appuser
 RUN mkdir -p /data && chown appuser:appuser /data
 VOLUME ["/data"]
 
+# ⚠️ 이 줄이 없으면 **아무 환경변수 없이 띄운 이미지가 기동하자마자 죽습니다.**
+#    코드 기본값은 `./data/adgen.sqlite` 이고 그것은 WORKDIR(`/app`) 기준 상대 경로인데,
+#    `/app` 은 root 소유라 비루트 appuser 가 `data/` 를 만들 수 없습니다
+#    (`PermissionError: [Errno 13] 'data'`, 2026-08-14 실측 — CI 의 backend 스모크가
+#    바로 여기서 떨어졌습니다). 코드 기본값은 `uvicorn` 을 apps/backend 에서 맨몸으로
+#    돌리는 경우를 위한 것이고, 컨테이너의 기본값은 위에서 소유권까지 넘겨 준 이 경로여야
+#    합니다. compose 도 같은 값을 주지만(infra/docker-compose.yml) 그것은 덧방이고,
+#    `docker run` 한 줄로 뜨는 것은 이 줄의 몫입니다. 근거: ADR-0014.
+ENV ADGEN_DB_PATH=/data/adgen.sqlite
+
 USER appuser
 
 EXPOSE 8000

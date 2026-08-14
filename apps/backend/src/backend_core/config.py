@@ -11,10 +11,13 @@ secret lives in the auth wiring, not here: this class is also read by /health an
 which must keep working on a fresh clone with no .env at all.
 """
 
+import json
+from typing import Annotated, Any
+
 from argon2 import extract_parameters
 from argon2.exceptions import InvalidHashError
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # The cookie name is contract surface (openapi.yaml securitySchemes), not an operator
 # knob: renaming it silently logs every client out. Kept as a constant so it cannot drift
@@ -97,7 +100,39 @@ class Settings(BaseSettings):
     # Two accounts are the minimum that can prove INV-9 — with one, "someone else's
     # session" does not exist and the 404 path is never taken (ADR-0008). Not enforced
     # here: individual devs may seed extra accounts locally (구현_범위.md 1절).
-    accounts: list[SeedAccount] = Field(default_factory=list)
+    #
+    # `NoDecode` takes the JSON parsing away from pydantic-settings so the validator below
+    # can see the raw string — see it for why an empty one has to survive.
+    accounts: Annotated[list[SeedAccount], NoDecode] = Field(default_factory=list)
+
+    @field_validator("accounts", mode="before")
+    @classmethod
+    def _parse_accounts(cls, value: Any) -> Any:
+        """An empty `ADGEN_ACCOUNTS` means "no accounts", not "malformed configuration".
+
+        ⚠️ This is not a defensive nicety, it is what lets the stack start unconfigured.
+        `docker-compose.yml` writes `ADGEN_ACCOUNTS: ${ADGEN_ACCOUNTS:-}`, which sets the
+        variable to an **empty string** rather than leaving it unset, so without this the
+        default never applies: pydantic-settings tries to JSON-decode `""` and the whole app
+        dies at startup with `SettingsError` before any route exists (2026-08-14 실측 — CI
+        의 종단 관통 테스트가 여기서 unhealthy 로 떨어졌습니다).
+
+        A stack with no accounts is a supported state. Nobody can log in, `/health` and
+        `/v1/ask` still answer, and that is exactly the "빈 스택이어도 충족" deployment the
+        08-14 일정 항목 asks for.
+        """
+        if not isinstance(value, str):
+            return value
+        if not value.strip():
+            return []
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "ADGEN_ACCOUNTS is not valid JSON. It is a list, e.g. "
+                '[{"login_id": "...", "password_hash": "$argon2id$..."}]. '
+                "Leave it empty for a stack with no accounts."
+            ) from exc
 
 
 def get_settings() -> Settings:

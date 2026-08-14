@@ -112,3 +112,21 @@ def test_a_bare_clone_still_starts(client: TestClient) -> None:
     skeleton (backend_core/config.py). `client` comes from conftest, which strips every
     ADGEN_ variable — that is the bare-clone condition."""
     assert client.get("/health").status_code == 200
+
+
+def test_an_unconfigured_compose_stack_still_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same as above, except the variables are **empty rather than absent**.
+
+    ⚠️ These are two different conditions and only the first one was covered. Compose writes
+    `ADGEN_ACCOUNTS: ${ADGEN_ACCOUNTS:-}`, which *sets* the variable to an empty string, so
+    `docker compose up` with no infra/.env lands here and not in the test above. Before the
+    fix pydantic-settings tried to JSON-decode `""` and the process died at startup —
+    every route gone, `/health` included, so the container never became healthy
+    (2026-08-14, CI 종단 관통 테스트).
+    """
+    monkeypatch.setenv("ADGEN_ACCOUNTS", "")
+    monkeypatch.setenv("ADGEN_SESSION_SECRET", "")
+    deps.settings.cache_clear()
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200

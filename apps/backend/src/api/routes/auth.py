@@ -124,6 +124,9 @@ def logout(response: Response, _: Annotated[Account, Depends(deps.current_user)]
 
 @router.post("/auth/signup", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 def signup() -> None:
+    """⚠️ The only one of the three 501s that is **public**, and that is not an accident:
+    you cannot be logged in to create an account. The contract gives this path
+    `security: []` for that reason, and the other two deliberately do not have it."""
     not_implemented("가입은 제공하지 않습니다. 미리 만들어 둔 고정 계정만 씁니다 (ADR-0008).")
 
 
@@ -138,12 +141,25 @@ def me(account: Annotated[Account, Depends(deps.current_user)]) -> Me:
 
 
 @router.delete("/me", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def withdraw() -> None:
+def withdraw(_: Annotated[Account, Depends(deps.current_user)]) -> None:
+    """⚠️ Authenticated, even though it answers 501 to everyone.
+
+    The contract's global `security: [sessionCookie]` covers this path and gives it no
+    exception (unlike `signup`), so the dependency is what makes the implementation match
+    (PR #84 리뷰, 신호정). Leaving it off was harmless *today* — the answer is 501 either
+    way — and that is exactly the problem: the day someone fills this in, nothing would
+    remind them that deleting an account needs to know whose account it is.
+
+    The security scheme and the status code answer different questions. 501 says the server
+    does not do this yet; `security` says who may ask. A route that means "my account"
+    presupposes a "me" whatever it returns.
+    """
     not_implemented("탈퇴는 제공하지 않습니다 (ADR-0008).")
 
 
 @router.patch("/me/password", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def change_password() -> None:
+def change_password(_: Annotated[Account, Depends(deps.current_user)]) -> None:
+    """Authenticated for the same reason as `withdraw` above."""
     not_implemented(
         "비밀번호 변경과 재설정은 제공하지 않습니다. 메일 발송 경로가 없습니다 "
         "(ADR-0008, 세션_보관_정책.md 1.2절)."

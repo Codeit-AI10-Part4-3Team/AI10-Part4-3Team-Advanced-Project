@@ -210,13 +210,46 @@ def test_logout_without_a_session_is_401(client: TestClient) -> None:
 )
 def test_the_unimplemented_routes_answer_501(client: TestClient, method: str, path: str) -> None:
     """501, not 404 and not 200. 404 is indistinguishable from a typo in the path; 200 makes
-    an undone thing look done (ADR-0008).
+    an undone thing look done (ADR-0008)."""
+    _login(client, "demo1", PLAINTEXT_DEMO1)
 
-    ⚠️ Run **without logging in**, and that is the point for signup: the contract marks it
-    `security: []`, so it has to be reachable while logged out. If auth ran first it would
-    answer 401 and the 501 would be unreachable, hiding the decision behind a login screen.
-    """
     response = client.request(method, path)
 
     assert response.status_code == 501
     assert response.json()["code"] == "NOT_IMPLEMENTED"
+
+
+def test_signup_is_reachable_while_logged_out(client: TestClient) -> None:
+    """⚠️ The contract marks this one `security: []` and the other two deliberately not.
+
+    Gating signup behind a login would put the 501 behind a login screen — unreachable by
+    anyone who could actually want it, because you cannot be logged in to create an account.
+    """
+    response = client.post("/v1/auth/signup")
+
+    assert response.status_code == 501
+    assert response.json()["code"] == "NOT_IMPLEMENTED"
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("delete", "/v1/me"), ("patch", "/v1/me/password")],
+    ids=["withdraw", "change password"],
+)
+def test_the_me_routes_require_a_session_even_though_they_are_501(
+    client: TestClient, method: str, path: str
+) -> None:
+    """⚠️ Regression guard (PR #84 리뷰, 신호정). These two inherit the contract's global
+    `security: [sessionCookie]` and have **no** `security: []` exception — only `signup`
+    does.
+
+    Answering 501 to anonymous callers was harmless today and that is precisely the risk:
+    the day someone implements withdrawal, nothing would have reminded them that deleting
+    an account has to know whose account it is. The security scheme and the status code
+    answer different questions — 501 is "the server does not do this yet", `security` is
+    "who may ask".
+    """
+    response = client.request(method, path)
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "UNAUTHORIZED"

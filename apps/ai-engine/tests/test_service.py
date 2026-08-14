@@ -49,5 +49,18 @@ def test_unknown_field_is_rejected(client: TestClient) -> None:
 
 
 def test_retrieval_is_not_exposed(client: TestClient) -> None:
-    """Retrieval is a stage in a one-way pipeline, not a public entry point."""
-    assert set(client.get("/openapi.json").json()["paths"]) == {"/health", "/v1/generate"}
+    """Retrieval is a stage in a one-way pipeline, not a public entry point.
+
+    ⚠️ An exact set, not a membership check. Listing what may exist is what makes a new
+    route someone added "for debugging" fail here instead of shipping — inviting callers
+    into the middle of the pipeline is the thing this test guards.
+
+    `/v1/generate` is the template question-and-answer path and leaves with the seam swap.
+    """
+    assert set(client.get("/openapi.json").json()["paths"]) == {
+        "/health",
+        "/v1/generate",
+        "/v1/brief:fill",
+        "/v1/draft:generate",
+        "/v1/image:render",
+    }

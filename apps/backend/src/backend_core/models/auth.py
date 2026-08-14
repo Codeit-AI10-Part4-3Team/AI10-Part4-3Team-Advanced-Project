@@ -1,23 +1,17 @@
-"""Auth wire models — the login request, and who the caller is.
+"""Auth — login and the identity the client gets back.
 
-Contract: packages/contracts/openapi.yaml, the `auth` tag. Both schemas are notable for
-what they leave out.
+Contract: packages/contracts/openapi.yaml. Edit it first (AGENTS.md 교체 순서).
 
-`LoginRequest` carries the only plaintext password in the system, and it exists only on
-the way in: what gets stored is a hash, and nothing sends it back. ⚠️ Never log a request
-body on this route — a debug log of the whole body is the most common way plaintext
-passwords end up on disk (세션_보관_정책.md 1.2절).
+Signup, withdrawal and password change are contract-only in the first cut and answer 501
+(ADR-0008): the skeleton's question is "does authentication actually sit on the flow", and
+creating accounts does not answer it.
 
-`Me` has no email and no display name. The contract says so explicitly, and the reason is
-that an email is one more personal item we would then have to hold, protect and delete
-(도메인_모델.md 2.1절). `userId` is what other data references; `loginId` is what the
-person types and may change.
-
-⚠️ Contract first: edit `openapi.yaml`, then this file (AGENTS.md). The conformance tests
-in tests/backend_core/models/test_auth.py compare the two field by field.
+⚠️ Never log a request body on the login route. A debug log of the whole body is the most
+common way plaintext passwords end up on disk (세션_보관_정책.md 1.2절).
 """
 
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import Field
 
@@ -25,22 +19,32 @@ from backend_core.models.common import Base
 
 
 class LoginRequest(Base):
-    """Contract: `components.schemas.LoginRequest`."""
+    """Contract: `components.schemas.LoginRequest`.
+
+    A wrong id and a wrong password are the same answer (`INVALID_CREDENTIALS`); telling
+    them apart leaks whether an account exists.
+    """
 
     login_id: str = Field(min_length=1, max_length=64)
-
-    # No max length. A cap here is a cap on password strength, and the value never reaches
-    # storage as-is — argon2 hashes it to a fixed size (세션_보관_정책.md 1.2절).
-    password: str = Field(min_length=1)
+    password: str = Field(
+        min_length=1,
+        description=(
+            "요청 본문에만 존재합니다. 저장되는 것은 passwordHash 뿐이고 응답에 실리지 않습니다. "
+            "요청 본문 전체를 찍는 디버그 로그가 가장 흔한 사고입니다"
+        ),
+    )
 
 
 class Me(Base):
-    """Contract: `components.schemas.Me`. Returned by login and by `GET /v1/me`.
+    """Contract: `components.schemas.Me`.
 
-    Deliberately the same shape from both routes: a client that has just logged in and one
-    that is restoring a session should not have to tell the two apart.
+    No profile, display name or email. An email is one more piece of personal data to hold
+    and delete, bought for nothing the first cut needs.
+
+    Returned by login and by `GET /v1/me` in the same shape: a client that has just logged
+    in and one that is restoring a session should not have to tell the two apart.
     """
 
-    user_id: str
-    login_id: str
+    user_id: UUID = Field(description="다른 데이터가 참조하는 것은 이쪽입니다")
+    login_id: str = Field(description="사용자가 입력하는 아이디. 바뀔 수 있습니다")
     created_at: datetime

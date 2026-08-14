@@ -23,6 +23,9 @@ dependencies = [
     # 평문·가역 암호화는 둘 다 금지이고, 이 저장소가 public 이라 예외가 없습니다.
     # 파라미터는 라이브러리 기본값을 씁니다(직접 조정하면 잘못 조정합니다 — 같은 절).
     "argon2-cffi>=23.1.0",
+    # 계약의 multipart 경로(POST /v1/sessions, /v1/brief:fill)를 FastAPI 가 파싱하려면
+    # 필요합니다. 없으면 라우트 정의 시점에 RuntimeError 로 죽습니다 - 런타임 의존입니다.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +67,10 @@ extraPaths = ["src"]
 
 # ⚠️ mypy는 이 디렉토리를 cwd로 실행해야 이 설정을 집습니다 (CI/scripts가 그렇게 호출).
 [tool.mypy]
+# pydantic 플러그인이 없으면 alias 를 준 필드의 생성자 인자를 alias 이름으로만 인식해,
+# populate_by_name=True 로 허용된 파이썬 이름 호출이 call-arg 오류로 잡힙니다
+# (SingleAdDraft.ad_copy / alias="copy" 가 그 경우). 플러그인은 그 설정을 읽습니다.
+plugins = ["pydantic.mypy"]
 python_version = "3.12"
 files = ["src"]
 mypy_path = ["src"]

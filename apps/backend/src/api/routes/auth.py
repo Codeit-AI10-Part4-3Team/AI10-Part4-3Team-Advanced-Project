@@ -18,6 +18,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from typing import Annotated, Literal, TypedDict
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response, status
 
@@ -66,13 +67,13 @@ _COOKIE_ATTRS: _CookieAttrs = {
 def _me(account: Account) -> Me:
     """Note what is not carried across: `password_hash` has no field on `Me` to land in.
 
-    `created_at` is parsed here rather than left to pydantic's string coercion. The stored
-    value is whatever `accounts.seed` wrote, and the contract promises `format: date-time` —
-    converting at the boundary means a malformed row fails here, with the row in hand,
-    instead of somewhere downstream.
+    Both stored values are parsed here rather than left to pydantic's coercion. The row
+    holds whatever `accounts.seed` wrote, while the contract promises `format: uuid` and
+    `format: date-time` — converting at the boundary means a malformed row fails here, with
+    the row in hand, instead of somewhere downstream.
     """
     return Me(
-        user_id=account.user_id,
+        user_id=UUID(account.user_id),
         login_id=account.login_id,
         created_at=datetime.fromisoformat(account.created_at),
     )

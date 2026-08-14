@@ -4,6 +4,7 @@ The contract specifies `{code, message}` with a fixed code enum, not FastAPI's d
 `{"detail": ...}`. Clients branch on `code`, so it has to survive all the way to the wire.
 """
 
+import logging
 from typing import NoReturn
 
 from fastapi import HTTPException, Request
@@ -11,6 +12,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend_core.models import Error, ErrorCode
+
+logger = logging.getLogger(__name__)
 
 
 class ApiError(HTTPException):
@@ -106,6 +109,32 @@ def not_implemented(message: str = "이 기능은 제공하지 않습니다.") -
     raise ApiError(501, "NOT_IMPLEMENTED", message)
 
 
+async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """The last resort: anything we did not anticipate, in the contract's shape.
+
+    ⚠️ `INTERNAL` is in the contract's `ErrorCode` enum, so a client is told it may receive
+    it — but without this, a genuine 500 left as Starlette's plain-text `Internal Server
+    Error`, with no JSON and nothing to branch on. That is the same defect this module just
+    fixed one level up for 422 (`validation_error_handler`), and it is worse here: a client
+    hitting an unexpected 500 is exactly the one that most needs a machine-readable answer.
+
+    ⚠️ **The exception is logged and not described.** A 500 means a bug on our side, and its
+    message can carry anything that was in scope where it was raised — a file path, a query,
+    a password that reached a stack frame. The traceback goes to the log, which is ours; the
+    body says only that something broke.
+    """
+    # `exc_info=exc` rather than `.exception()`: this *is* an exception handler, but it is
+    # not lexically inside an `except`, and the traceback has to reach the log either way.
+    logger.error("unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content=Error(code="INTERNAL", message="내부 오류가 발생했습니다.").model_dump(
+            by_alias=True
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Render pydantic's request-validation failures in the contract's error shape.
 
@@ -141,7 +170,10 @@ def _offending_fields(exc: Exception) -> list[str]:
         return []
     names = []
     for error in errors():
-        location = [str(part) for part in error.get("loc", ()) if part not in ("body", "query")]
+        # `body` / `query` / `path` name where the field came from, not which field it is.
+        location = [
+            str(part) for part in error.get("loc", ()) if part not in ("body", "query", "path")
+        ]
         if location:
             names.append(".".join(location))
     return names

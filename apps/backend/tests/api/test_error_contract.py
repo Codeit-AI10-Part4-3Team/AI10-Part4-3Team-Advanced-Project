@@ -129,3 +129,45 @@ def test_a_bad_path_parameter_is_still_the_contract_shape(client: TestClient) ->
 
     assert response.status_code == 422
     assert response.json()["code"] == "INVALID_REQUEST"
+    # The field, not the part of the request it arrived in.
+    assert "path" not in response.json()["message"]
+
+
+def test_an_unexpected_failure_is_still_the_contract_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """⚠️ `INTERNAL` is in the contract's `ErrorCode`, so a client is told it may receive
+    one — but an unhandled exception came back as Starlette's plain-text `Internal Server
+    Error`, with no JSON to branch on. Same defect as the 422 above, one level down.
+
+    `raise_server_exceptions=False` because the default re-raises into the test instead of
+    letting the response be observed, which is exactly what hid this.
+    """
+    hasher = PasswordHasher()
+    monkeypatch.setenv("ADGEN_DB_PATH", str(tmp_path / "boom.sqlite"))
+    monkeypatch.setenv("ADGEN_SESSION_SECRET", "test-signing-key")
+    monkeypatch.setenv(
+        "ADGEN_ACCOUNTS",
+        f'[{{"login_id": "demo1", "password_hash": "{hasher.hash(PASSWORD)}"}}]',
+    )
+    deps.settings.cache_clear()
+
+    def explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("비밀번호가 섞여 있을 수 있는 내부 메시지")
+
+    with TestClient(
+        app, base_url="https://testserver", raise_server_exceptions=False
+    ) as test_client:
+        # ⚠️ Patch where it is *used*, not where it is defined. `routes/auth.py` does
+        # `from backend_core.accounts import authenticate`, so the name is bound at import
+        # and patching the source module leaves the route holding the original.
+        monkeypatch.setattr("api.routes.auth.authenticate", explode)
+        response = test_client.post(
+            "/v1/auth/login", json={"loginId": "demo1", "password": PASSWORD}
+        )
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "INTERNAL"
+    # ⚠️ The exception's own message never reaches the client. A 500 is our bug, and whatever
+    # was in scope where it was raised can be in that string.
+    assert "비밀번호가 섞여" not in response.text

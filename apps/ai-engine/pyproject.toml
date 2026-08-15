@@ -82,6 +82,14 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
 
+# ⚠️ optional extra 는 CI 에 설치되지 않으므로 스텁을 찾지 못합니다. `ignore_missing_imports`
+#    가 전역으로 false 라, extra 를 하나 쓰기 시작할 때마다 여기 예외를 함께 넣어야 합니다.
+#    (실측: `[model]` 을 추가하고 예외를 빼먹어 CI 의 mypy 만 빨갛게 났습니다 - 로컬에는
+#    `openai` 가 우연히 설치돼 있어 통과했습니다.)
+[[tool.mypy.overrides]]
+module = ["openai.*"]
+ignore_missing_imports = true
+
 # RAG extra는 타입 스텁이 없으므로 도입 시 아래 예외를 켜세요.
 # [[tool.mypy.overrides]]
 # module = ["langchain.*", "chromadb.*"]

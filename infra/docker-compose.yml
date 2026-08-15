@@ -127,7 +127,12 @@ services:
       #    연결하지 못했습니다" 입니다 (features/auth/LoginPage.tsx).
       - backend
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost/index.html"]
+      # ⚠️ `127.0.0.1` 이고 `localhost` 가 아닙니다. 이 이미지 안에서 `localhost` 는 `::1`
+      #    로 먼저 풀리는데 nginx 는 IPv4 만 듣고 있어 **연결 거부**가 납니다. 컨테이너는
+      #    멀쩡히 서빙하는데 헬스체크만 실패하고, compose 의 `--wait` 가 거기서 멈춥니다
+      #    (실측: CI 의 종단 관통 테스트가 `container adgen-frontend-1 is unhealthy` 로
+      #    죽었습니다. 밖에서 보내는 요청은 전부 정상이라 증상이 서비스 장애로 안 보입니다).
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/index.html"]
       interval: 10s
       timeout: 3s
       retries: 5

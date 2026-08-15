@@ -1,4 +1,4 @@
-"""S4 시안 생성 이음매 — the ad plan and copy the user reviews.
+"""S4 시안 생성과 S5 부분 교체 이음매 — the ad plan and copy the user reviews.
 
 ⚠️ **The stub and the real implementation are two branches of the same function**
 (구현_범위 1.1절). Filling in `_generate_with_model` is the whole of the real work.
@@ -16,7 +16,12 @@ Two rules this module must not "simplify":
 import logging
 
 from ai_engine.config import Settings
-from ai_engine.models import DraftGenerateRequest, DraftGenerateResponse, SingleAdDraft
+from ai_engine.models import (
+    DraftGenerateRequest,
+    DraftGenerateResponse,
+    DraftPatchEngineRequest,
+    SingleAdDraft,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,4 +81,68 @@ def _generate_with_model(
     raise NotImplementedError(
         f"generation_mode={settings.generation_mode!r} but the model path is not implemented; "
         "set ADGEN_GENERATION_MODE=stub or fill in ai_engine.draft._generate_with_model"
+    )
+
+
+def patch_draft(request: DraftPatchEngineRequest, settings: Settings) -> DraftGenerateResponse:
+    """Rewrite the named parts of an existing draft, and nothing else.
+
+    ⚠️ **The fields outside the patch come back unchanged.** That is the whole difference
+    between 부분 교체 and regeneration: a caller that asked to change the copy has a visual
+    plan it already approved, and quietly rewriting it discards a decision the user made.
+    """
+    logger.info(
+        "draft:patch mode=%s outputType=%s fields=%s guardrail=%s",
+        settings.generation_mode,
+        request.output_type,
+        sorted(request.patch.model_fields_set),
+        request.guardrail_applied,
+    )
+    if settings.generation_mode == "stub":
+        return _patch_stub(request, settings)
+    return _patch_with_model(request, settings)
+
+
+def _patch_stub(request: DraftPatchEngineRequest, settings: Settings) -> DraftGenerateResponse:
+    """Apply the patch literally, with the stub marker on what moved.
+
+    ⚠️ **The stub takes the caller's text as given** rather than writing new copy from the
+    brief. A patch carries what the user typed, and the one thing this branch can honestly
+    do with it is put it where it belongs — inventing replacement copy here would put claims
+    on the wire that neither the input nor the user supplied (ADR-0005, INV-6).
+
+    ⚠️ Comic-blind, like `_generate_stub`. The skeleton's pass-through path is single-ad and
+    the comic branch exists as structure only (구현_범위 1절); patching six panels here would
+    make the comic path look finished.
+    """
+    if request.output_type == "comic":
+        raise NotImplementedError(
+            "comic output is a structural branch only in the walking skeleton "
+            "(구현_범위 1절); the stub patches the single-ad path"
+        )
+
+    marker = settings.stub_marker
+    # `exclude_unset` and not `exclude_none`: in this family an omitted key and `""` are
+    # opposite instructions — "leave it alone" against "empty it" (models/patch.py).
+    changes = {
+        name: f"[{marker}] {value}"
+        for name, value in request.patch.model_dump(exclude_unset=True, exclude={"panels"}).items()
+    }
+    return DraftGenerateResponse(
+        draft=request.draft.model_copy(update=changes),
+        guardrail_applied=request.guardrail_applied,
+    )
+
+
+def _patch_with_model(
+    request: DraftPatchEngineRequest, settings: Settings
+) -> DraftGenerateResponse:
+    """The real partial regeneration. Not written yet.
+
+    ⚠️ Raise rather than fall back, for the same reason as `_generate_with_model`: there is
+    no pre-approved copy for a product we have not seen.
+    """
+    raise NotImplementedError(
+        f"generation_mode={settings.generation_mode!r} but the model path is not implemented; "
+        "set ADGEN_GENERATION_MODE=stub or fill in ai_engine.draft._patch_with_model"
     )

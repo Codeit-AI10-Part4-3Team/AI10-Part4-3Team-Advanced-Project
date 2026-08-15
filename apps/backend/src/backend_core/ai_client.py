@@ -148,12 +148,12 @@ class HttpAiEngineClient:
     def patch_draft(self, request: DraftPatchEngineRequest) -> DraftGenerateResponse:
         """Change the named parts of an existing draft.
 
-        ⚠️ **apps/ai-engine does not serve `/v1/draft:patch` yet.** The contract describes
-        it and this client calls it, so against the real engine every `PATCH .../draft`
-        currently fails — and because a 404 is mapped below like any other HTTP error, the
-        user is told `503 UPSTREAM_UNAVAILABLE`, which sends whoever debugs it to look at a
-        service that is running fine. The engine route is 03 소관 and tracked as a follow-up;
-        until it lands, S5 works only against the test fake.
+        ⚠️ `/v1/draft:patch` on apps/ai-engine landed 2026-08-15. Until then the contract
+        described it and this client called it, so every `PATCH .../draft` against the real
+        engine came back 404 — and a 404 is mapped below like any other HTTP error, so the
+        user was told `503 UPSTREAM_UNAVAILABLE` and whoever debugged it went looking at a
+        service that was running fine. Kept as a note because the mapping is unchanged: any
+        future missing route on the engine fails exactly this way.
 
         ⚠️ `exclude_unset` on the patch, not `exclude_none`. In this one family an omitted
         key and `""` are opposite instructions — "leave it alone" against "empty it" — and

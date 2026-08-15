@@ -41,6 +41,15 @@ dev = [
     "ruff==0.16.2",
     "mypy>=1.10.0",
 ]
+# ── 외부 이미지 생성 API 클라이언트 (ADR-0003).
+#    core 가 아닌 이유는 CI 와 스텁 모드가 이것 없이 돌아야 하기 때문입니다 - 키가 없는
+#    환경에서 SDK 만 설치돼 있어 봐야 하는 일이 없고, 있으면 CI 설치 시간만 늘어납니다.
+#    `ai_engine.render` 가 이 패키지를 **지연 import** 하므로 없어도 기동합니다.
+#    실제 렌더를 돌리는 환경에서만: pip install -e "./apps/ai-engine[model]"
+model = [
+    "openai>=1.30.0",
+]
+
 # ── RAG 스택은 무거우므로 core가 아닌 extra로 분리합니다 (CI를 가볍게 유지).
 #    실제 개발 시: pip install -e "./apps/ai-engine[rag]"
 # rag = [

@@ -186,6 +186,8 @@ def render_image(request: ImageRenderRequest) -> Response:
     """
     try:
         payload = render.render_image(request, settings())
-    except NotImplementedError as exc:
+    except (NotImplementedError, render.RenderFailedError) as exc:
+        # ⚠️ 둘 다 503 입니다. "아직 안 만들었다"와 "지금 못 만든다"는 우리에게는 다른
+        # 이야기지만 호출자에게는 같은 답이고, 계약이 이 경로에 준 실패 코드는 하나입니다.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(content=payload, media_type="image/webp")

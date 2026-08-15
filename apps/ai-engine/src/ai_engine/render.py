@@ -13,15 +13,28 @@ Two properties the stub keeps even though it draws nothing:
   job report a size nobody asked for.
 """
 
+import base64
 import io
 import logging
+from typing import Any
 
 from PIL import Image, ImageDraw
 
+from ai_engine import render_prompt
 from ai_engine.config import Settings
 from ai_engine.models import ImageRenderRequest
 
 logger = logging.getLogger(__name__)
+
+
+class RenderFailedError(RuntimeError):
+    """그림을 만들지 못했습니다. 라우트가 503 `UPSTREAM_UNAVAILABLE` 로 바꿉니다.
+
+    ⚠️ 거절과 다릅니다. 거절은 `draft:generate` 쪽의 200 이고, 이것은 "지금 이 서비스로는
+    안 된다" 입니다. 호출자에게 폴백은 없습니다 - 카피와 그림은 제품마다 달라 사전 승인된
+    응답이 성립하지 않습니다 (ADR-0005).
+    """
+
 
 STUB_BACKGROUND = (238, 238, 244)
 STUB_FOREGROUND = (120, 120, 140)
@@ -68,12 +81,79 @@ def _render_stub(request: ImageRenderRequest, settings: Settings) -> bytes:
 
 
 def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes:
-    """The real render. Not written yet.
+    """The real render, through the external image API (ADR-0003).
 
-    ⚠️ Raise rather than return a placeholder. A placeholder returned from the model branch
-    would be indistinguishable from a successful render in every log and metric.
+    ⚠️ **No fallback and no placeholder.** Every failure here raises, and the route turns it
+    into a 503 the caller has no recovery path for — that is the design (ADR-0005). A
+    placeholder returned from this branch would be indistinguishable from a successful
+    render in every log, metric and screenshot.
+
+    ⚠️ The call shape is the one 검증 1순위 actually got images out of
+    (`notebooks/hj/verify01_korean_text_rendering/run_experiment.py`, 2026-08-14): one
+    request, `n=1`, inline base64. A URL response is refused rather than downloaded — the
+    experiment never exercised that path, so treating it as equivalent would be a guess.
     """
-    raise NotImplementedError(
-        f"generation_mode={settings.generation_mode!r} but the model path is not implemented; "
-        "set ADGEN_GENERATION_MODE=stub or fill in ai_engine.render._render_with_model"
-    )
+    if not settings.model_api_key:
+        raise RenderFailedError(
+            "ADGEN_MODEL_API_KEY 가 비어 있습니다. 키 없이 그림을 그릴 수는 없고, "
+            "스텁으로 되돌아가면 그 결과가 측정값처럼 보입니다 (구현_범위 1.1절)."
+        )
+
+    prompt = render_prompt.build(request)
+    size = f"{request.spec.width}x{request.spec.height}"
+
+    # ⚠️ 지연 import. `openai` 는 optional extra 라 스텁만 돌리는 CI 와 컨테이너에는 없습니다.
+    # 모듈 최상단에서 import 하면 이 파일을 읽는 것만으로 ImportError 가 나고, 증상은
+    # "스텁 모드인데 엔진이 기동하지 않는다" 로 보입니다.
+    try:
+        from openai import OpenAI
+    except ImportError as exc:  # pragma: no cover - 설치 여부에 따라 갈리는 경로
+        raise RenderFailedError(
+            "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
+        ) from exc
+
+    client = OpenAI(api_key=settings.model_api_key, timeout=settings.image_timeout_s)
+    kwargs: dict[str, Any] = {"model": settings.image_model, "prompt": prompt, "size": size, "n": 1}
+    if settings.image_quality:
+        kwargs["quality"] = settings.image_quality
+
+    try:
+        response = client.images.generate(**kwargs)
+    except Exception as exc:
+        # 벤더 예외 계층에 의존하지 않습니다.
+        # 인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음.
+        # 벤더의 예외 클래스를 나눠 잡으면 SDK 버전이 오를 때 조용히 빠지는 갈래가 생깁니다.
+        raise RenderFailedError(f"{type(exc).__name__}: {exc}") from exc
+
+    return _to_lossless_webp(_inline_bytes(response))
+
+
+def _inline_bytes(response: Any) -> bytes:
+    """응답에서 이미지 바이트를 꺼냅니다. 인라인 base64 만 다룹니다."""
+    payload = response.data[0]
+    encoded = getattr(payload, "b64_json", None)
+    if not encoded:
+        raise RenderFailedError(
+            "응답에 b64_json 이 없습니다. URL 응답이면 내려받는 경로를 따로 만들어야 하며, "
+            "검증 1순위가 그 경로를 확인한 적이 없습니다."
+        )
+    return base64.b64decode(encoded)
+
+
+def _to_lossless_webp(payload: bytes) -> bytes:
+    """계약이 정한 형식으로 맞춥니다 (무손실 WebP).
+
+    ⚠️ **무손실이라 다시 인코딩해도 픽셀이 바뀌지 않습니다.** 검증 1순위의 지표가 그려진
+    한국어 글자라, 손실 압축을 한 번이라도 거치면 채점이 모델의 렌더링 정확도가 아니라 압축
+    아티팩트를 재게 됩니다.
+
+    API 가 이미 WebP 를 주더라도 그대로 통과시키지 않습니다 - 무손실인지 손실인지를 바이트만
+    보고 단정할 수 없고, 여기서 한 번 맞춰 두면 벤더가 형식을 바꿔도 계약이 흔들리지 않습니다.
+    """
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="WEBP", lossless=True)
+    except OSError as exc:
+        raise RenderFailedError(f"응답 이미지를 읽지 못했습니다: {exc}") from exc
+    return buffer.getvalue()

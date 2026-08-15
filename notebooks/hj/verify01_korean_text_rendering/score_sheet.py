@@ -21,6 +21,10 @@ import conditions
 
 SHEET_PREFIX = "sheet"
 
+# ⚠️ 3순위 시트를 같은 이름으로 쓰면 **이미 채워진 1순위 판정을 덮어씁니다.** 같은 회차
+# 폴더를 다시 쓰는 설계라(3순위는 1순위 이미지를 그대로 봅니다) 이름을 갈라 두어야 합니다.
+TASK_PREFIX = {"text": SHEET_PREFIX, "consistency": "consistency"}
+
 
 def _read_manifest(run_dir: Path) -> list[dict[str, str]]:
     manifest = run_dir / "manifest.csv"
@@ -37,11 +41,24 @@ def _variant_of(run_dir: Path, rows: list[dict[str, str]]) -> str:
     return rows[0].get("variant") or run_dir.name.rsplit("-", 1)[-1]
 
 
-def _build(run_dir: Path, judges: list[str]) -> None:
+def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
     rows = _read_manifest(run_dir)
     variant = _variant_of(run_dir, rows)
 
-    if variant == "single":
+    if task == "consistency":
+        # 검증 3순위. 1순위에서 만든 이미지를 그대로 다시 봅니다 - 같은 조건에서 나온 그림이라
+        # 새로 생성할 이유가 없고, 생성하면 조건이 달라져 1순위 결과와 이어 붙일 수 없습니다.
+        criterion = (
+            "**한 장 안에서** 두 가지를 봅니다. 회차끼리 비교하지 마세요.\n\n"
+            "1. **같은 인물인가** - 1번부터 5번 칸에 나오는 사람이 같은 사람으로 보이는지. "
+            "얼굴, 머리 모양, 복장이 기준입니다. 6번 칸은 제품 컷이라 제외합니다.\n"
+            "2. **화풍이 일관되는가** - 6칸이 같은 그림체인지. 한 칸만 사진처럼 나오거나 "
+            "다른 톤이면 실패입니다.\n"
+        )
+        count_column = "동일 인물 (1) / 아님 (0)"
+        count_hint = "1번부터 5번 칸이 같은 사람으로 보이면 `1`, 아니면 `0`"
+        columns = ["회차", "이미지 파일", count_column, "6칸 화풍 일관 (Y/N)", "메모"]
+    elif variant == "single":
         # 단일 광고형은 칸이 없습니다. 6칸 척도를 그대로 쓰면 판정자가 없는 칸을 세게 됩니다.
         criterion = (
             "이미지에 그려진 한국어 카피가 아래 정답과 **글자 단위로 완전히 같은지** 봅니다. "
@@ -52,10 +69,11 @@ def _build(run_dir: Path, judges: list[str]) -> None:
         count_column = "카피 정확 (1) / 실패 (0)"
         count_hint = "정확하면 `1`, 한 글자라도 어긋나거나 없는 문구가 추가됐으면 `0`"
         columns = ["회차", "이미지 파일", count_column, "제품이 주인공 (Y/N)", "메모"]
-    elif variant == "main":
-        answer_block = "\n".join(
-            f"- {p.index}번 칸: `{p.line}`" for p in conditions.PANELS
-        )
+    elif variant in ("main", "hard"):
+        # 어려운 대사 회차는 정답 문자열만 다르고 척도는 같습니다. 정답 표를 갈아 끼우지
+        # 않으면 판정자가 1순위 대사를 기준으로 채점하게 됩니다.
+        panels = conditions.PANELS_HARD if variant == "hard" else conditions.PANELS
+        answer_block = "\n".join(f"- {p.index}번 칸: `{p.line}`" for p in panels)
         criterion = (
             "각 칸의 말풍선 글자가 아래 정답과 **글자 단위로 완전히 같은지** 봅니다. "
             "한 글자라도 다르거나, 빠지거나, 깨져 있으면 그 칸은 오탈자입니다.\n\n"
@@ -114,7 +132,7 @@ def _build(run_dir: Path, judges: list[str]) -> None:
             "",
             "",
         ]
-        path = run_dir / f"{SHEET_PREFIX}-{judge}.md"
+        path = run_dir / f"{TASK_PREFIX[task]}-{judge}.md"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"생성: {path}")
 
@@ -139,10 +157,11 @@ def _parse_sheet(path: Path) -> dict[int, tuple[int | None, str | None]]:
     return result
 
 
-def _tally(run_dir: Path) -> None:
+def _tally(run_dir: Path, task: str = "text") -> None:
     rows = _read_manifest(run_dir)
     variant = _variant_of(run_dir, rows)
-    sheets = sorted(run_dir.glob(f"{SHEET_PREFIX}-*.md"))
+    prefix = TASK_PREFIX[task]
+    sheets = sorted(run_dir.glob(f"{prefix}-*.md"))
     if not sheets:
         raise SystemExit("채워진 판정 시트가 없습니다. build를 먼저 돌리고 판정을 받으세요.")
 
@@ -151,7 +170,9 @@ def _tally(run_dir: Path) -> None:
 
     # 단일 광고형은 칸이 없어 척도가 0/1 입니다. 6칸 기준을 그대로 적용하면 정확한 회차가
     # 전부 실패로 집계됩니다.
-    if variant == "single":
+    if task == "consistency":
+        threshold, scale, side_label = 1, "동일 인물 판정", "6칸 화풍 일관"
+    elif variant == "single":
         threshold, scale, side_label = 1, "카피 정확", "제품이 주인공"
     else:
         threshold = conditions.PANELS_OK_THRESHOLD
@@ -159,7 +180,7 @@ def _tally(run_dir: Path) -> None:
         side_label = "6칸 균등 분할"
 
     for sheet in sheets:
-        judge = sheet.stem[len(SHEET_PREFIX) + 1 :]
+        judge = sheet.stem[len(prefix) + 1 :]
         scored = _parse_sheet(sheet)
         filled = {k: v for k, v in scored.items() if v[0] is not None}
         if not filled:
@@ -196,15 +217,23 @@ def main() -> int:
     build = sub.add_parser("build", help="판정 시트 생성")
     build.add_argument("--run-dir", type=Path, required=True)
     build.add_argument("--judges", nargs="+", required=True, help="실험을 돌린 사람은 제외")
+    build.add_argument(
+        "--task",
+        choices=["text", "consistency"],
+        default="text",
+        help="text=대사 표기(1순위), consistency=캐릭터와 화풍 일관성(3순위). "
+        "3순위는 1순위 이미지를 그대로 다시 보므로 추가 생성이 없습니다",
+    )
 
     tally = sub.add_parser("tally", help="채워진 시트 집계")
     tally.add_argument("--run-dir", type=Path, required=True)
+    tally.add_argument("--task", choices=["text", "consistency"], default="text")
 
     args = parser.parse_args()
     if args.command == "build":
-        _build(args.run_dir, args.judges)
+        _build(args.run_dir, args.judges, args.task)
     else:
-        _tally(args.run_dir)
+        _tally(args.run_dir, args.task)
     return 0
 
 

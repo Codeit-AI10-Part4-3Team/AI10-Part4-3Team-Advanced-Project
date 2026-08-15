@@ -130,16 +130,95 @@ def prompt_single_ad() -> str:
     )
 
 
+# 제품컷 입력 경로 - 사용자가 올린 제품 사진을 입력으로 넣습니다.
+#
+# ⚠️ 기획의 전제인데 검증되지 않은 경로입니다. 42회까지의 실험은 전부 텍스트 입력이었고
+# `input_tokens_details.image_tokens` 가 0이었습니다. 요금도 다릅니다(image input $8/1M).
+#
+# ⚠️ **타사 상표입니다.** 실제 상용 제품의 사진을 입력으로 쓰므로 생성 결과는 타사 브랜드
+# 광고물이 됩니다. 내부 검증 목적에 한정하고 커밋하지 않습니다.
+PRODUCT_SHOT_NAME = "나랑드 사이다 제로"
+PRODUCT_SHOT_SELLING_POINT = "0kcal 제로 칼로리, 245ml"
+"""소구점은 **패키지에 인쇄된 문구만** 씁니다. 근거 기반 생성이 지켜지는지 보려면 근거가
+입력 안에 있어야 하고, 없는 효능을 우리가 먼저 프롬프트에 넣으면 검증이 성립하지 않습니다."""
+
+SINGLE_AD_COPY_PRODUCT = "시원하게, 부담 없이."
+"""제품에 맞춘 카피. 소구점(제로 칼로리)에서 나온 문장이며 없는 효능을 담지 않습니다."""
+
+
+def prompt_product_shot() -> str:
+    """입력 제품 사진을 살린 단일 광고형."""
+    return (
+        "정사각형 광고 이미지 한 장. 격자로 나누지 않는다.\n"
+        "입력으로 준 제품 사진의 제품을 그대로 유지한다. 패키지의 색, 문구, 로고, 비율을 "
+        "바꾸지 않는다.\n"
+        f"제품은 '{PRODUCT_SHOT_NAME}'이고 소구점은 '{PRODUCT_SHOT_SELLING_POINT}'이다. "
+        "이 정보에 없는 효능, 수치, 성분, 수상 이력, 타사 비교를 이미지 안에 쓰지 않는다.\n\n"
+        "제품이 돋보이는 광고 배경을 그리고, 이미지 위쪽에 한국어 카피 "
+        f'"{SINGLE_AD_COPY_PRODUCT}"를 오탈자 없이 정확히 그대로 표기한다. '
+        "그 밖의 문구는 넣지 않는다."
+    )
+
+
+# 어려운 대사 - 1순위가 본안에 유리한 조건이었다는 한계를 메웁니다.
+#
+# 1순위 대사는 6 ~ 14자의 짧은 순한국어였고 영어, 숫자, 고유명사가 섞이지 않았습니다.
+# 100% 가 나왔지만 그것이 긴 문장이나 영어 혼용까지 보증하지는 않습니다. 판정자(정승호)가
+# 같은 지적을 했습니다.
+#
+# ⚠️ **격자 조건과 시나리오 구조는 1순위와 같게 둡니다.** 여기서 해상도나 칸 수까지 바꾸면
+# 떨어졌을 때 원인이 대사 난이도인지 다른 것인지 갈라낼 수 없습니다. 바뀌는 것은 대사뿐입니다.
+SELLING_POINT_HARD = "무향 무알코올, 두꺼운 원단, 1팩 80매, 리필팩 NEW"
+"""소구점을 늘린 이유는 난이도가 아니라 **근거**입니다. 대사에 숫자와 영어를 넣으려면 그 값이
+근거 안에 있어야 합니다 - 근거 밖 숫자를 우리가 먼저 프롬프트에 넣으면 가드레일이 잡아야 할
+것을 실험자가 만들어 주는 셈이 됩니다."""
+
+PANELS_HARD: tuple[Panel, ...] = (
+    Panel(1, "선반 위 물티슈 패키지를 정면에서 본 컷", "1팩 80매."),
+    Panel(2, "리필팩을 새로 뜯는 손", "리필팩 NEW"),
+    Panel(
+        3,
+        "아이 손을 닦아 주는 장면",
+        "무향 무알코올이라 아이 손을 닦아도 안심할 수 있어요.",
+    ),
+    Panel(4, "제품 라벨의 무알코올 표기를 확대한 컷", "ALCOHOL FREE"),
+    Panel(5, "두꺼운 원단 한 장을 집어 드는 손", "두꺼운 원단 80매"),
+    Panel(6, "제품 패키지가 정면으로 보이는 마무리 컷", "NEW 리필팩 1팩 80매, 무향 무알코올."),
+)
+"""난이도 축 네 가지를 나눠 담았습니다: 숫자(1, 5), 영어 혼용(2, 6), 영어 단독(4),
+긴 문장(3은 27자, 6은 24자 + 영어 + 숫자). 1순위 최장 대사가 14자였습니다."""
+
+_GROUNDING_HARD = (
+    f"제품은 '{PRODUCT_NAME}'이고 소구점은 '{SELLING_POINT_HARD}'이다. "
+    "이 정보에 없는 효능, 수치, 성분, 수상 이력, 타사 비교를 이미지 안에 쓰지 않는다."
+)
+
+
+def prompt_hard() -> str:
+    """어려운 대사 - 영어, 숫자, 긴 문장을 섞습니다."""
+    lines = "\n".join(f'{p.index}번 칸: {p.scene}. 말풍선 대사: "{p.line}"' for p in PANELS_HARD)
+    return (
+        f"{_GRID_INSTRUCTION}\n{_STYLE_INSTRUCTION}\n{_GROUNDING_HARD}\n\n"
+        "각 칸에 말풍선을 그리고 아래 대사를 오탈자 없이 정확히 그대로 표기한다. "
+        "글자를 임의로 바꾸거나 줄이지 않는다. 영어 대문자와 숫자도 그대로 표기한다.\n\n"
+        f"{lines}"
+    )
+
+
 VARIANTS = {
     "main": prompt_main,
     "fallback": prompt_fallback,
     "single": prompt_single_ad,
+    "product": prompt_product_shot,
+    "hard": prompt_hard,
 }
 
 DEFAULT_SIZE = {
     "main": (CANVAS_WIDTH, CANVAS_HEIGHT),
     "fallback": (CANVAS_WIDTH, CANVAS_HEIGHT),
     "single": (SINGLE_AD_SIZE, SINGLE_AD_SIZE),
+    "product": (SINGLE_AD_SIZE, SINGLE_AD_SIZE),
+    "hard": (CANVAS_WIDTH, CANVAS_HEIGHT),
 }
 """variant 마다 기본 해상도가 다릅니다. 만화형 규격을 단일 광고형에 그대로 쓰면 7배 비싼
 이미지를 만들고도 관통 경로의 숫자는 못 얻습니다."""

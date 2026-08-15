@@ -1,3 +1,4 @@
+import { useAuth } from "../../auth/useAuth";
 import { mockSessions } from "../mock-data";
 
 interface AppSidebarProps {
@@ -5,6 +6,8 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar({ onNewSession }: AppSidebarProps) {
+  const { me, signOut } = useAuth();
+
   return (
     <aside className="sidebar" aria-label="광고 세션 탐색">
       <div className="brand">
@@ -36,10 +39,16 @@ export function AppSidebar({ onNewSession }: AppSidebarProps) {
       </nav>
 
       <div className="sidebar-footer">
-        <button type="button">설정</button>
+        {/* 표시할 것은 `loginId` 뿐입니다. 계약의 `Me` 에 표시 이름도 이메일도 없고,
+            그것은 아직 안 넣은 것이 아니라 두지 않기로 한 결정입니다. */}
         <button type="button" className="profile-button">
-          <span className="avatar" aria-hidden="true">행</span>
-          팀 계정
+          <span className="avatar" aria-hidden="true">
+            {me?.loginId.slice(0, 1).toUpperCase() ?? "?"}
+          </span>
+          {me?.loginId ?? "계정 확인 중"}
+        </button>
+        <button type="button" onClick={() => void signOut()}>
+          로그아웃
         </button>
       </div>
     </aside>

@@ -23,6 +23,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Path, status
+from fastapi.responses import FileResponse
 
 from api import deps
 from api.errors import (
@@ -141,6 +142,43 @@ def get_session(
     """One session in full. 404 if it is not yours (INV-9)."""
     session, _ = _owned(connection, account, session_id)
     return session
+
+
+@router.get(
+    "/{sessionId}/image",
+    response_class=FileResponse,
+    responses={200: {"content": {mime: {} for mime in images.MEDIA_TYPE.values()}}},
+)
+def get_session_image(
+    session_id: SessionId,
+    account: Annotated[Account, Depends(deps.current_user)],
+    connection: Annotated[sqlite3.Connection, Depends(deps.db)],
+    settings: Annotated[Settings, Depends(deps.settings)],
+) -> FileResponse:
+    """The uploaded photo, as bytes. This is what `Brief.productImageUrl` points at.
+
+    ⚠️ **Ownership first, file second.** `_owned` runs before the disk is touched, so a
+    stranger gets the same 404 whether the session exists or not (INV-9) — reading the
+    directory first would answer faster for sessions that exist and turn the timing into the
+    existence oracle that the 404 is there to prevent.
+
+    A missing file is also a 404, and that is the retention gap rather than an error: the
+    photo lives 24 hours and the session seven days (세션_보관_정책.md 2절). The screen is
+    not meant to discover this here — `productImageUrl` is emptied when the cleanup batch
+    removes the file, so `GET /v1/sessions/{id}` already says so before any `<img>` is drawn
+    (API_계약.md 8.4절). No new error code, because an `<img>` never reads the body.
+    """
+    _owned(connection, account, session_id)
+
+    path = images.find(settings.image_dir, session_id)
+    if path is None:
+        not_found("이미지를 찾을 수 없습니다.")
+
+    return FileResponse(
+        path,
+        media_type=images.MEDIA_TYPE[path.suffix],
+        headers={"Cache-Control": images.CACHE_CONTROL},
+    )
 
 
 @router.post("/{sessionId}/draft")

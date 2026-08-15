@@ -59,10 +59,13 @@ _GRID_INSTRUCTION = (
     "굵기가 일정한 흰색 경계선을 둔다. 칸의 순서는 왼쪽 위에서 오른쪽으로 읽는다."
 )
 
+_STYLE_BASE = "화풍은 깔끔한 한국 웹툰 스타일."
+
 _STYLE_INSTRUCTION = (
-    "화풍은 깔끔한 한국 웹툰 스타일. 같은 인물이 1번부터 5번 칸까지 동일한 얼굴과 복장으로 "
-    "등장해야 한다."
+    f"{_STYLE_BASE} 같은 인물이 1번부터 5번 칸까지 동일한 얼굴과 복장으로 등장해야 한다."
 )
+"""만화형 전용입니다. 뒷문장이 칸을 전제하므로 **단일 광고형에 그대로 쓰면 안 됩니다** --
+칸이 하나뿐인 그림에 "1번부터 5번 칸까지"를 지시하면 모델에게 없는 구조를 요구하게 됩니다."""
 
 _GROUNDING_INSTRUCTION = (
     f"제품은 '{PRODUCT_NAME}'이고 소구점은 '{SELLING_POINT}'이다. "
@@ -104,7 +107,39 @@ def prompt_fallback() -> str:
     )
 
 
+# 단일 광고형 - 워킹 스켈레톤의 관통 경로입니다 (구현_범위 1절).
+#
+# ⚠️ 만화형만 재고 끝내면 **정작 먼저 실물화할 경로의 숫자가 없습니다.** `image:render` 실물화의
+# 완료 조건이 "단일 광고형 1088 x 1088"이므로 (03 일정), 단가와 지연을 여기서도 재야 합니다.
+# 크기는 기획서 18.1 #8 의 잠정값이며 미확정입니다.
+SINGLE_AD_SIZE = 1088
+
+SINGLE_AD_COPY = "한 장이면 충분해."
+"""이미지에 그릴 카피. 만화형 3번 칸 대사와 같은 문장으로 잡았습니다 - 문장이 달라지면
+렌더링 난이도가 함께 달라져 만화형 결과와 비교할 수 없습니다."""
+
+
+def prompt_single_ad() -> str:
+    """단일 광고형 - 제품 단독 컷 하나에 카피 한 줄."""
+    return (
+        f"정사각형 광고 이미지 한 장. 격자로 나누지 않는다.\n"
+        f"{_STYLE_BASE}\n{_GROUNDING_INSTRUCTION}\n\n"
+        "제품이 화면 가운데에 크게 보이는 제품 단독 컷을 그린다. "
+        f'이미지 위쪽에 한국어 카피 "{SINGLE_AD_COPY}"를 오탈자 없이 정확히 그대로 표기한다. '
+        "그 밖의 문구는 넣지 않는다."
+    )
+
+
 VARIANTS = {
     "main": prompt_main,
     "fallback": prompt_fallback,
+    "single": prompt_single_ad,
 }
+
+DEFAULT_SIZE = {
+    "main": (CANVAS_WIDTH, CANVAS_HEIGHT),
+    "fallback": (CANVAS_WIDTH, CANVAS_HEIGHT),
+    "single": (SINGLE_AD_SIZE, SINGLE_AD_SIZE),
+}
+"""variant 마다 기본 해상도가 다릅니다. 만화형 규격을 단일 광고형에 그대로 쓰면 7배 비싼
+이미지를 만들고도 관통 경로의 숫자는 못 얻습니다."""

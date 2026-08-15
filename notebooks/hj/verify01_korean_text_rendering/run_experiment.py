@@ -147,8 +147,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--size",
-        default=f"{conditions.CANVAS_WIDTH}x{conditions.CANVAS_HEIGHT}",
-        help="요청 해상도. 기본값은 기획서 10.2의 만화형 규격입니다",
+        default=None,
+        help="요청 해상도. 주지 않으면 variant 의 기본 규격을 씁니다 "
+        "(만화형 3456x2304, 단일 광고형 1088x1088)",
     )
     parser.add_argument("--model", default=os.environ.get("ADGEN_IMAGE_MODEL", "gpt-image-2"))
     parser.add_argument(
@@ -168,6 +169,9 @@ def main() -> int:
     args = parser.parse_args()
 
     prompt = conditions.VARIANTS[args.variant]()
+    if args.size is None:
+        width, height = conditions.DEFAULT_SIZE[args.variant]
+        args.size = f"{width}x{height}"
 
     if args.dry_run:
         print(f"[dry-run] model={args.model} size={args.size} variant={args.variant}")

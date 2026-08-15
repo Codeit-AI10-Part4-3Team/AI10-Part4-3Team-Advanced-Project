@@ -41,7 +41,18 @@ def _build(run_dir: Path, judges: list[str]) -> None:
     rows = _read_manifest(run_dir)
     variant = _variant_of(run_dir, rows)
 
-    if variant == "main":
+    if variant == "single":
+        # 단일 광고형은 칸이 없습니다. 6칸 척도를 그대로 쓰면 판정자가 없는 칸을 세게 됩니다.
+        criterion = (
+            "이미지에 그려진 한국어 카피가 아래 정답과 **글자 단위로 완전히 같은지** 봅니다. "
+            "한 글자라도 다르거나, 빠지거나, 깨져 있으면 실패입니다. 정답에 없는 문구가 이미지에 "
+            "추가로 그려져 있어도 실패입니다 (근거에 없는 문구를 넣지 말라고 지시했습니다).\n\n"
+            f"- 카피: `{conditions.SINGLE_AD_COPY}`\n"
+        )
+        count_column = "카피 정확 (1) / 실패 (0)"
+        count_hint = "정확하면 `1`, 한 글자라도 어긋나거나 없는 문구가 추가됐으면 `0`"
+        columns = ["회차", "이미지 파일", count_column, "제품이 주인공 (Y/N)", "메모"]
+    elif variant == "main":
         answer_block = "\n".join(
             f"- {p.index}번 칸: `{p.line}`" for p in conditions.PANELS
         )
@@ -73,7 +84,7 @@ def _build(run_dir: Path, judges: list[str]) -> None:
         "들어가지 않습니다.\n"
         "- 판단이 서지 않는 회차만 비우고 메모에 이유를 적으세요. 추측으로 채운 값이 근거로 "
         "올라가는 것보다는 낫습니다.\n"
-        "- 나머지 두 열(균등 분할, 메모)은 참고용입니다. 비어 있어도 판정은 성립합니다."
+        f"- 나머지 두 열({columns[3]}, 메모)은 참고용입니다. 비어 있어도 판정은 성립합니다."
     )
 
     header = "| " + " | ".join(columns) + " |"
@@ -138,6 +149,15 @@ def _tally(run_dir: Path) -> None:
     total = len(rows)
     print(f"회차 {total}건 / 판정자 {len(sheets)}명 / variant={variant}\n")
 
+    # 단일 광고형은 칸이 없어 척도가 0/1 입니다. 6칸 기준을 그대로 적용하면 정확한 회차가
+    # 전부 실패로 집계됩니다.
+    if variant == "single":
+        threshold, scale, side_label = 1, "카피 정확", "제품이 주인공"
+    else:
+        threshold = conditions.PANELS_OK_THRESHOLD
+        scale = f"{conditions.PANELS_OK_THRESHOLD}칸 이상"
+        side_label = "6칸 균등 분할"
+
     for sheet in sheets:
         judge = sheet.stem[len(SHEET_PREFIX) + 1 :]
         scored = _parse_sheet(sheet)
@@ -146,21 +166,21 @@ def _tally(run_dir: Path) -> None:
             print(f"- {judge}: 채워진 칸이 없습니다 (건너뜀)")
             continue
 
-        ok_runs = sum(1 for panels, _ in filled.values() if panels >= conditions.PANELS_OK_THRESHOLD)
+        ok_runs = sum(1 for panels, _ in filled.values() if panels >= threshold)
         rate = ok_runs / len(filled)
-        grid_ok = sum(1 for _, grid in filled.values() if grid == "Y")
-        grid_rate = grid_ok / len(filled)
+        side_ok = sum(1 for _, grid in filled.values() if grid == "Y")
+        side_rate = side_ok / len(filled)
 
         print(f"- {judge}: 판정 {len(filled)}/{total}건")
         print(
-            f"    1순위 - {conditions.PANELS_OK_THRESHOLD}칸 이상 성공 {ok_runs}건 "
+            f"    성공 판정 - {scale} {ok_runs}건 "
             f"= {rate:.0%} (기준 {conditions.PASS_RATE_THRESHOLD:.0%})"
         )
-        print(f"    2순위 참고 - 6칸 균등 분할 {grid_ok}건 = {grid_rate:.0%} (실패율 {1 - grid_rate:.0%})")
+        print(f"    참고 - {side_label} {side_ok}건 = {side_rate:.0%}")
         if len(filled) < conditions.TARGET_RUNS:
             print(f"    주의: 회차가 {conditions.TARGET_RUNS}회에 못 미쳐 확정 판정이 아닙니다")
         else:
-            verdict = "본안 유지" if rate >= conditions.PASS_RATE_THRESHOLD else "예비안 전환 검토"
+            verdict = "기준 충족" if rate >= conditions.PASS_RATE_THRESHOLD else "기준 미달"
             print(f"    판정: {verdict}")
 
     print(

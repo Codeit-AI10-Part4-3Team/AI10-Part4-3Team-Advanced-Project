@@ -30,6 +30,40 @@ class Settings(BaseSettings):
     # report can never be mistaken for a real render.
     stub_marker: str = "STUB"
 
+    # ---- 외부 이미지 생성 API (ADR-0003) ------------------------------------------------
+
+    model_api_key: str = ""
+    """이미지 생성 API 키.
+
+    ⚠️ **비어 있는 것이 정상 기본값입니다.** 값이 없으면 `generation_mode` 가 `model` 이어도
+    호출 자체가 성립하지 않으므로 렌더가 명시적으로 실패합니다 - 키가 없다고 스텁으로
+    되돌아가면 그 결과가 측정값처럼 보입니다 (구현_범위 1.1절).
+
+    ⚠️ 이 값은 **ai-engine 에만** 둡니다. backend 는 8000 을 외부에 여는 쪽이고, 유료 키를
+    거기 함께 두지 않는 것이 두 앱을 나눈 이유 중 하나입니다 (infra/docker-compose.yml).
+    """
+
+    image_model: str = "gpt-image-2"
+    """검증 1순위가 실제로 통과시킨 모델입니다 (2026-08-14, RESULTS.md).
+
+    문자열로 두는 이유는 벤더가 모델명을 바꿀 때 코드 변경 없이 따라가기 위해서이고,
+    기본값을 실측한 모델로 두는 이유는 **아무도 지정하지 않았을 때 검증된 것이 돌게**
+    하기 위해서입니다.
+    """
+
+    image_quality: str = ""
+    """비우면 API 에 싣지 않습니다.
+
+    ⚠️ 지정하지 않으면 모델이 회차마다 품질 티어를 고릅니다. 같은 조건 10회에서 출력 토큰이
+    1674 와 3826 으로 갈렸고 **비용이 2.3배** 차이났습니다 (2026-08-13 실측). 그럼에도
+    기본값을 비워 두는 것은 받는 값이 확인되지 않았기 때문입니다 - 잘못된 값을 상수로
+    박으면 모든 호출이 400 으로 죽습니다. 예산이 걸린 운영에서는 값을 정해 넣으세요.
+    """
+
+    image_timeout_s: float = 300.0
+    """한 장에 54 ~ 122초가 걸렸습니다 (2026-08-14 실측). 기다리는 쪽은 사용자가 아니라 잡
+    워커이므로 분 단위가 허용됩니다 (ADR-0015, API_계약 2.1절)."""
+
 
 def get_settings() -> Settings:
     """Read settings. Callers cache — see `ai_engine.service`, which holds the instance."""

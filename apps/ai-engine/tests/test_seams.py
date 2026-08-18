@@ -113,15 +113,19 @@ def fill_request() -> BriefFillRequest:
 # ---- 분기가 설정 하나로 갈리는가 ------------------------------------------------
 
 
-def test_model_branch_fails_loudly_on_every_seam(model_settings: Settings) -> None:
+def test_model_branch_fails_loudly_on_the_unwritten_seams(model_settings: Settings) -> None:
     """⚠️ The point of the whole design. An unwritten branch must not degrade politely.
 
     A stub returned from the model branch would be indistinguishable from a real result in
     every log, metric and screenshot.
+
+    ⚠️ `image:render` left this list on 2026-08-15 — its model branch is written now and
+    calls the external API (ADR-0003). It still fails loudly, but for a different reason
+    (no key, or the vendor said no), and `tests/test_render_model.py` covers that.
     """
     # Requests are built outside the blocks: a failure while building one would pass these
     # tests for the wrong reason, and then the branch could stop raising unnoticed.
-    fill, generate, image = fill_request(), draft_request(), render_request()
+    fill, generate = fill_request(), draft_request()
     patch = patch_request(copy="새 카피")
 
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
@@ -130,7 +134,20 @@ def test_model_branch_fails_loudly_on_every_seam(model_settings: Settings) -> No
         draft.generate_draft(generate, model_settings)
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
         draft.patch_draft(patch, model_settings)
-    with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
+
+
+def test_the_render_model_branch_no_longer_pretends_to_be_unwritten(
+    model_settings: Settings,
+) -> None:
+    """`NotImplementedError` 가 아니라 `RenderFailedError` 입니다.
+
+    ⚠️ 둘은 라우트에서 같은 503 이 되지만 뜻이 다릅니다 - "아직 안 만들었다"와 "지금 못
+    만든다" 입니다. 이 구분이 사라지면 배포에서 키가 빠졌을 때 로그가 "미구현" 이라고 말합니다.
+    """
+    # 위와 같은 이유로 요청은 블록 밖에서 만듭니다.
+    image = render_request()
+
+    with pytest.raises(render.RenderFailedError):
         render.render_image(image, model_settings)
 
 

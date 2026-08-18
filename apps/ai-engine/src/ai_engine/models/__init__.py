@@ -42,6 +42,7 @@ from ai_engine.models.patch import (
     DraftPatchEngineRequest,
     PanelPatch,
     PanelPatchMap,
+    check_patch_matches_output_type,
 )
 
 __all__ = [
@@ -72,4 +73,5 @@ __all__ = [
     "SingleAdDraft",
     "check_brief_matches_output_type",
     "check_draft_matches_output_type",
+    "check_patch_matches_output_type",
 ]

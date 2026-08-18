@@ -124,6 +124,11 @@ def _patch_stub(request: DraftPatchEngineRequest, settings: Settings) -> DraftGe
     marker = settings.stub_marker
     # `exclude_unset` and not `exclude_none`: in this family an omitted key and `""` are
     # opposite instructions — "leave it alone" against "empty it" (models/patch.py).
+    # ⚠️ `exclude={"panels"}` is now unreachable — `check_patch_matches_output_type` rejects
+    # a single-ad patch that names `panels`. Kept because `model_copy` below does not
+    # validate: were the check ever removed, this is what stops a stray key from landing on
+    # the draft as an attribute. It must never be the thing deciding the outcome, which is
+    # exactly what it was doing before 2026-08-18 (silent 200, draft unchanged).
     changes = {
         name: f"[{marker}] {value}"
         for name, value in request.patch.model_dump(exclude_unset=True, exclude={"panels"}).items()

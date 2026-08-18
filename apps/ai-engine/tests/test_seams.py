@@ -85,6 +85,25 @@ def patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
     )
 
 
+def comic_patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
+    return DraftPatchEngineRequest(
+        output_type="comic",
+        brief=Brief.model_validate(
+            {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
+        ),
+        draft=ComicDraft(
+            ad_plan="기획안",
+            panels=[
+                Panel(index=index, role=role, scene="장면", dialogue="대사")
+                for index, role in enumerate(
+                    ["hook", "setup", "problem", "solution", "proof", "cta"], start=1
+                )
+            ],
+        ),
+        patch=DraftPatch.model_validate(patch_fields),
+    )
+
+
 def fill_request() -> BriefFillRequest:
     return BriefFillRequest.model_construct(
         product_image=None, product_name="핸드크림", selling_point="하루 종일 촉촉합니다"
@@ -330,25 +349,50 @@ def test_the_patch_cannot_name_the_read_only_fields() -> None:
 def test_the_comic_branch_of_the_patch_stub_raises(stub_settings: Settings) -> None:
     """Comic-blind like `_generate_stub`: patching six panels here would make the comic path
     look finished (구현_범위 1절)."""
-    request = DraftPatchEngineRequest(
-        output_type="comic",
-        brief=Brief.model_validate(
-            {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
-        ),
-        draft=ComicDraft(
-            ad_plan="기획안",
-            panels=[
-                Panel(index=index, role=role, scene="장면", dialogue="대사")
-                for index, role in enumerate(
-                    ["hook", "setup", "problem", "solution", "proof", "cta"], start=1
-                )
-            ],
-        ),
-        patch=DraftPatch.model_validate({"panels": {"4": {"dialogue": "새 대사"}}}),
-    )
+    request = comic_patch_request(panels={"4": {"dialogue": "새 대사"}})
 
     with pytest.raises(NotImplementedError, match="구현_범위"):
         draft.patch_draft(request, stub_settings)
+
+
+def test_a_single_ad_patch_cannot_name_panels() -> None:
+    """⚠️ The combination that used to pass validation and then vanish (2026-08-18 실측).
+
+    `panels` on a single ad satisfies `minProperties: 1`, so nothing above rejected it, and
+    `_patch_stub` excluded `panels` on its way to a `SingleAdDraft` — leaving a 200 whose
+    draft equalled the one the caller sent. Silence is the failure mode this path is
+    least allowed to have (ADR-0005).
+    """
+    with pytest.raises(ValueError, match="panels does not apply to single_ad"):
+        patch_request(panels={"4": {"dialogue": "새 대사"}})
+
+
+def test_a_single_ad_patch_naming_panels_is_rejected_even_when_it_also_names_copy(
+    stub_settings: Settings,
+) -> None:
+    """⚠️ The worse half of the same bug, and the reason the check cannot live in the stub.
+
+    With `copy` alongside it the response *did* change, so the mismatch had no symptom at
+    all: the copy came back patched and the panels instruction was simply gone. A caller
+    reading the 200 has no way to tell which half of its request was applied.
+    """
+    with pytest.raises(ValueError, match="panels does not apply to single_ad"):
+        patch_request(panels={"4": {"dialogue": "새 대사"}}, copy="새 카피")
+
+    # The same patch minus `panels` is the request the caller should have sent — the
+    # rejection is about the pairing, not about `copy`.
+    response = draft.patch_draft(patch_request(copy="새 카피"), stub_settings)
+    assert response.draft is not None
+    assert "새 카피" in response.draft.ad_copy
+
+
+@pytest.mark.parametrize("field", ["copy", "visualPlan"])
+def test_a_comic_patch_cannot_name_the_single_ad_fields(field: str) -> None:
+    """The other direction of the same pairing. It has no silent path today only because
+    `_patch_stub` refuses comic outright — which is a property of the skeleton, not of the
+    contract, and would disappear the moment the comic branch is written."""
+    with pytest.raises(ValueError, match=f"{field} does not apply to comic"):
+        comic_patch_request(**{field: "무엇이든"})
 
 
 def test_draft_patch_route_returns_the_patched_draft(client: TestClient) -> None:
@@ -384,3 +428,19 @@ def test_draft_patch_route_rejects_an_empty_patch(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_draft_patch_route_rejects_panels_on_a_single_ad(client: TestClient) -> None:
+    """The 200 this used to return carried the unchanged draft, so a caller checking only
+    the status code learned nothing (2026-08-18 실측)."""
+    response = client.post(
+        "/v1/draft:patch",
+        json={
+            "outputType": "single_ad",
+            "brief": BRIEF_FIELDS,
+            "draft": {"adPlan": "기획안", "copy": "원래 카피", "visualPlan": "원래 비주얼"},
+            "patch": {"panels": {"4": {"dialogue": "새 대사"}}, "copy": "새 카피"},
+        },
+    )
+
+    assert response.status_code == 422, response.text

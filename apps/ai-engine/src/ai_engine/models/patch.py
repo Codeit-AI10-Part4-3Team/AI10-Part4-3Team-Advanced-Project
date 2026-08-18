@@ -78,6 +78,35 @@ class DraftPatch(AtLeastOneField):
     visual_plan: Omittable[str] = None
 
 
+_PATCH_FIELDS_BY_OUTPUT_TYPE: dict[OutputType, dict[str, str]] = {
+    # attribute -> wire name, for the fields the *other* output type owns.
+    "single_ad": {"panels": "panels"},
+    "comic": {"ad_copy": "copy", "visual_plan": "visualPlan"},
+}
+
+
+def check_patch_matches_output_type(output_type: OutputType, patch: DraftPatch) -> None:
+    """Reject a patch that names fields the output type does not have.
+
+    Lives here rather than on `DraftPatch` for the same reason as its two siblings: the
+    patch has no `outputType` of its own, so every caller holding both is expected to run
+    this. Raises `ValueError` so pydantic reports it as a validation error (422) wherever
+    it is called from a `model_validator`.
+
+    ⚠️ **Without it the mismatch is invisible rather than loud.** `single_ad` with a
+    `panels` patch satisfies `minProperties: 1`, and `_patch_stub` then drops `panels` on
+    its way to a single-ad draft — the caller gets a 200 whose draft is identical to the one
+    it sent. Worse when the patch also names `copy`: the response shows the copy changed and
+    the panels instruction simply gone, which reads as success (2026-08-18 실측).
+
+    ⚠️ Reads `model_fields_set`, not the values, for the reason `AtLeastOneField` gives:
+    `""` is a real instruction here and `None` only ever means the key was absent.
+    """
+    for attribute, wire_name in _PATCH_FIELDS_BY_OUTPUT_TYPE[output_type].items():
+        if attribute in patch.model_fields_set:
+            raise ValueError(f"{wire_name} does not apply to {output_type} output; omit the key")
+
+
 class DraftPatchEngineRequest(Base):
     """Contract: `components.schemas.DraftPatchEngineRequest`. Backend -> this service.
 
@@ -85,9 +114,10 @@ class DraftPatchEngineRequest(Base):
     has to know what the rest is. It is still not asked to rewrite the whole thing — the
     patch says what moves, and everything outside it comes back unchanged.
 
-    ⚠️ The pairing check is the same one `ImageRenderRequest` runs. A `single_ad` request
-    carrying a `ComicDraft` is not a strange-but-workable input; it is a caller bug, and
-    accepting it would have the engine patch panels onto an ad that has none.
+    ⚠️ The pairing check is the same one `ImageRenderRequest` runs, **and the patch is in
+    it.** A `single_ad` request carrying a `ComicDraft` — or a `panels` patch — is not a
+    strange-but-workable input; it is a caller bug, and accepting it would have the engine
+    patch panels onto an ad that has none.
     """
 
     output_type: OutputType
@@ -100,4 +130,5 @@ class DraftPatchEngineRequest(Base):
     def _check_pairing(self) -> Self:
         check_brief_matches_output_type(self.output_type, self.brief)
         check_draft_matches_output_type(self.output_type, self.draft)
+        check_patch_matches_output_type(self.output_type, self.patch)
         return self

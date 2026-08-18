@@ -6,7 +6,14 @@ export type AuthStatus = "checking" | "signed_in" | "signed_out";
 export interface AuthValue {
   status: AuthStatus;
   me: Me | null;
+  /** 실패하면 던집니다. 로그인 화면이 그 오류를 문구로 바꿔야 하기 때문입니다. */
   signIn: (loginId: string, password: string) => Promise<void>;
+  /**
+   * ⚠️ **던지지 않습니다.** `signIn` 과 다른 점이고 의도된 비대칭입니다 - 로그아웃은 요청이
+   * 실패해도 화면에서는 성립하므로(`AuthProvider`) 호출부에 넘길 결정이 남지 않습니다.
+   * 이것이 `void signOut()` 로 불러도 되는 근거입니다. 던지게 바꾸면 그 호출부가 조용히
+   * unhandled rejection 이 됩니다.
+   */
   signOut: () => Promise<void>;
 }
 

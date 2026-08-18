@@ -55,6 +55,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     try {
       await logout();
+    } catch (error: unknown) {
+      // ⚠️ 삼키는 것이 아니라 **여기서 끝내는 것**입니다. 아래 `finally` 가 이미 화면을
+      // 로그아웃 상태로 만들었으므로 이 실패에 사용자가 할 일은 없는데, 다시 던지면 호출부
+      // (`void signOut()`, AppSidebar) 가 받지 않아 unhandled rejection 으로 남습니다 -
+      // 처리를 마친 실패가 콘솔에는 처리되지 않은 오류로 보고됩니다.
+      //
+      // 401 은 토큰이 이미 만료된 경우이고 계약이 그렇게 답하도록 되어 있습니다
+      // (`POST /v1/auth/logout` 은 유효한 세션을 요구합니다). `finally` 주석이 말하는 바로
+      // 그 상황이라 조용히 넘어갑니다. 그 밖의 실패(백엔드 다운, 프록시 없음)는 서버에
+      // 세션이 남아 있을 수 있어 흔적을 남깁니다 - 화면만 로그아웃된 상태이기 때문입니다.
+      if (!(error instanceof ApiError && error.status === 401)) {
+        console.warn("로그아웃 요청이 실패했습니다. 화면에서는 로그아웃합니다.", error);
+      }
     } finally {
       // ⚠️ `finally`. 로그아웃 요청이 실패해도 화면에서는 내보냅니다 - 이미 만료된 토큰이면
       // 401 이 돌아오는데, 그때 로그인 상태로 붙들어 두면 사용자는 아무것도 할 수 없는

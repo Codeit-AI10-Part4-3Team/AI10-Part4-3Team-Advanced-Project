@@ -31,6 +31,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -141,6 +142,50 @@ def compose(panel_paths: list[Path], out_path: Path) -> tuple[int, int]:
     return canvas.size
 
 
+def _generate_set(
+    client: Any, args: Any, size: str, run_dir: Path, set_id: int, panel_paths: list[Path]
+) -> list[tuple]:
+    """한 세트(6칸)를 만들고 (칸, 레퍼런스, 경로, 소요, usage) 목록을 돌려줍니다.
+
+    병렬 경로가 성립하는 이유는 **칸끼리 의존이 없기 때문**입니다. 2번부터 6번 칸은 전부
+    1번 칸만 레퍼런스로 쓰므로, 1번만 먼저 만들면 나머지는 순서가 필요 없습니다.
+    `--reference chain`은 직전 칸을 레퍼런스로 쓰므로 병렬이 성립하지 않습니다.
+
+    호출 수와 비용은 순차와 같습니다. 줄어드는 것은 대기 시간뿐입니다.
+    """
+    results: list[tuple] = []
+
+    def run(panel: conditions.Panel, ref: Path | None) -> tuple:
+        prompt = panel_prompt(panel, with_reference=ref is not None)
+        data, elapsed, usage = _generate(client, args.model, prompt, size, ref, args.quality)
+        path = run_dir / f"set{set_id:02d}-panel{panel.index}.png"
+        path.write_bytes(data)
+        return (panel, ref, path, elapsed, usage)
+
+    if not (args.parallel and args.reference == "first"):
+        for panel in conditions.PANELS:
+            ref: Path | None = None
+            if args.reference == "first" and panel_paths:
+                ref = panel_paths[0]
+            elif args.reference == "chain" and panel_paths:
+                ref = panel_paths[-1]
+            row = run(panel, ref)
+            panel_paths.append(row[2])
+            results.append(row)
+        return results
+
+    head = run(conditions.PANELS[0], None)
+    panel_paths.append(head[2])
+    results.append(head)
+
+    # 네트워크 대기가 지배적이므로 스레드로 충분합니다. GIL은 문제가 되지 않습니다.
+    with ThreadPoolExecutor(max_workers=len(conditions.PANELS) - 1) as pool:
+        for row in pool.map(lambda p: run(p, head[2]), conditions.PANELS[1:]):
+            panel_paths.append(row[2])
+            results.append(row)
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sets", type=int, default=1, help="세트 수. 1세트 = 6회 호출")
@@ -158,6 +203,12 @@ def main() -> int:
         default=None,
         help="주지 않으면 모델이 칸마다 티어를 골라 세트 비용이 흔들립니다 "
         "(실측: 같은 세트 안에서 출력 토큰 213 ~ 1917, 9배)",
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="2번 칸부터를 동시에 요청합니다. 호출 수와 비용은 같고 대기 시간만 줄어듭니다. "
+        "`--reference chain` 과는 함께 쓸 수 없습니다 (직전 칸에 의존하므로)",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
@@ -212,22 +263,11 @@ def main() -> int:
             set_cost = 0.0
             set_time = 0.0
 
-            for panel in conditions.PANELS:
-                ref: Path | None = None
-                if args.reference == "first" and panel_paths:
-                    ref = panel_paths[0]
-                elif args.reference == "chain" and panel_paths:
-                    ref = panel_paths[-1]
+            set_started = time.monotonic()
+            results = _generate_set(client, args, size, run_dir, set_id, panel_paths)
+            set_wall = time.monotonic() - set_started
 
-                prompt = panel_prompt(panel, with_reference=ref is not None)
-                data, elapsed, usage = _generate(
-                    client, args.model, prompt, size, ref, args.quality
-                )
-
-                path = run_dir / f"set{set_id:02d}-panel{panel.index}.png"
-                path.write_bytes(data)
-                panel_paths.append(path)
-
+            for panel, ref, path, elapsed, usage in results:
                 details = usage.get("input_tokens_details") or {}
                 cost = _cost(usage, prices)
                 set_cost += cost or 0.0
@@ -259,9 +299,10 @@ def main() -> int:
             composed = run_dir / f"panels-{set_id:02d}.png"
             width, height = compose(panel_paths, composed)
             grand_total += set_cost
+            mode = "병렬" if (args.parallel and args.reference == "first") else "순차"
             print(
-                f"set{set_id:02d} 합성 -> {composed.name} {width}x{height} "
-                f"/ {set_time:.1f}s / ${set_cost:.4f}\n"
+                f"set{set_id:02d} 합성 -> {composed.name} {width}x{height} / {mode} "
+                f"실측 {set_wall:.1f}s (호출 시간 합 {set_time:.1f}s) / ${set_cost:.4f}\n"
             )
 
     (run_dir / "prompt.txt").write_text(

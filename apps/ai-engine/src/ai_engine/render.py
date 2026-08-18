@@ -129,15 +129,45 @@ def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes
 
 
 def _inline_bytes(response: Any) -> bytes:
-    """응답에서 이미지 바이트를 꺼냅니다. 인라인 base64 만 다룹니다."""
-    payload = response.data[0]
+    """응답에서 이미지 바이트를 꺼냅니다. 인라인 base64 만 다룹니다.
+
+    ⚠️ **응답의 모양을 신뢰하지 않습니다.** 여기서 다루는 것은 우리 자료구조가 아니라 벤더가
+    돌려준 객체이고, 세 군데가 각각 다른 이유로 어긋날 수 있습니다 - `data` 가 비었거나
+    (`IndexError`), 아예 없거나 (`TypeError`), `b64_json` 이 해독되지 않거나
+    (`binascii.Error`). 셋 다 `RenderFailedError` 가 아니므로 라우트의 503 매핑을 지나쳐
+    **500 으로 나갑니다** - 계약이 이 경로에 준 실패 코드는 503 하나뿐인데 말입니다
+    (2026-08-18 실측).
+
+    ⚠️ 여기서 나가는 실패는 전부 "벤더 응답이 예상과 다르다"입니다. 그래서 호출부를 통째로
+    `except Exception` 으로 감싸지 않았습니다 - 그렇게 하면 우리 코드의 결함까지 같은
+    503 이 되어, 고칠 수 있는 버그가 남의 서비스 장애로 보고됩니다.
+    """
+    data = getattr(response, "data", None)
+    if not data:
+        raise RenderFailedError(
+            "응답에 이미지가 없습니다 (data 가 비어 있거나 없음). 요청은 n=1 이므로 "
+            "성공 응답이라면 항상 한 장이 실려 있어야 합니다."
+        )
+
+    payload = data[0]
     encoded = getattr(payload, "b64_json", None)
     if not encoded:
         raise RenderFailedError(
             "응답에 b64_json 이 없습니다. URL 응답이면 내려받는 경로를 따로 만들어야 하며, "
             "검증 1순위가 그 경로를 확인한 적이 없습니다."
         )
-    return base64.b64decode(encoded)
+
+    try:
+        return base64.b64decode(encoded)
+    except (ValueError, TypeError) as exc:
+        # `binascii.Error` 는 `ValueError` 의 하위 클래스입니다. `TypeError` 는 `b64_json` 이
+        # 문자열이 아닌 경우로, 위의 `if not encoded` 를 통과한 뒤에도 남아 있는 갈래입니다.
+        #
+        # ⚠️ `validate=True` 를 주지 않습니다. 기본값은 base64 알파벳이 아닌 문자를 버리므로
+        # 줄바꿈이 섞인 응답도 해독되는데, 엄격하게 바꾸면 지금 동작하는 응답이 거절될 수
+        # 있습니다. 벤더가 무엇을 보내는지는 검증 1순위가 확인한 범위 밖입니다. 버려진
+        # 문자 때문에 깨진 바이트는 `_to_lossless_webp` 가 이어서 잡습니다.
+        raise RenderFailedError(f"b64_json 을 해독하지 못했습니다: {exc}") from exc
 
 
 def _to_lossless_webp(payload: bytes) -> bytes:

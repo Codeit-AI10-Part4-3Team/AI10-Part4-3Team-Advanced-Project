@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import io
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -238,6 +239,40 @@ def test_an_unreadable_response_is_a_failure_not_a_crash(
 
     with pytest.raises(render.RenderFailedError):
         render.render_image(single_ad_request(), model_settings)
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (SimpleNamespace(data=[]), "data 가 비어"),
+        (SimpleNamespace(data=None), "data 가 비어"),
+        (SimpleNamespace(), "data 가 비어"),
+        (SimpleNamespace(data=[SimpleNamespace(b64_json="QUJD1")]), "해독하지 못했습니다"),
+        (SimpleNamespace(data=[SimpleNamespace(b64_json=12345)]), "해독하지 못했습니다"),
+    ],
+    ids=["data=[]", "data=None", "data 없음", "b64 패딩 깨짐", "b64_json 이 문자열이 아님"],
+)
+def test_a_misshapen_response_is_a_failure_not_a_crash(response: Any, expected: str) -> None:
+    """⚠️ **어떤 실패인지보다 어떤 종류의 예외인지가 중요한 자리입니다.**
+
+    라우트는 `RenderFailedError` 와 `NotImplementedError` 만 503 으로 바꿉니다. 전에는 이
+    다섯 갈래가 `IndexError` · `TypeError` · `binascii.Error` 로 새어 나가 **500** 이
+    되었습니다 (2026-08-18 실측) - 계약이 이 경로에 준 실패 코드는 503 하나인데도 말입니다.
+    잡히지 않은 예외는 스택 트레이스까지 함께 나가므로 증상도 "엔진이 터졌다"로 보입니다.
+    """
+    with pytest.raises(render.RenderFailedError, match=expected):
+        render._inline_bytes(response)
+
+
+def test_base64_padding_survives_the_round_trip(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """위의 거절이 정상 응답까지 막지 않는지 봅니다. 거절만 검사하면 전부 거절해도 통과합니다."""
+    install(monkeypatch, FakeImages(payload=png_bytes()))
+
+    payload = render.render_image(single_ad_request(), model_settings)
+
+    assert payload[:4] == b"RIFF"
 
 
 def test_the_stub_branch_never_touches_the_client(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -56,10 +56,15 @@ export function LoginPage() {
 
         <label className="field">
           <span>아이디</span>
+          {/* ⚠️ `maxLength` 는 계약(`LoginRequest.loginId`, maxLength 64)을 따라간 값입니다.
+              없으면 긴 아이디를 붙여넣은 사용자가 422 `INVALID_REQUEST` 를 받는데, 서버는
+              빈 칸과 길이 초과에 같은 코드를 쓰므로 화면은 그 둘을 구분하지 못합니다.
+              비밀번호에는 상한이 없어(계약상 `minLength: 1` 뿐) 여기에만 답니다. */}
           <input
             name="loginId"
             autoComplete="username"
             required
+            maxLength={64}
             value={loginId}
             onChange={(event) => setLoginId(event.target.value)}
           />
@@ -107,7 +112,10 @@ function describe(error: unknown): string {
     return "아이디 또는 비밀번호가 올바르지 않습니다.";
   }
   if (error.code === "INVALID_REQUEST") {
-    return "아이디와 비밀번호를 모두 입력하세요.";
+    // ⚠️ "모두 입력하세요"라고 단정하지 않습니다. 서버는 빈 칸과 길이 초과에 같은
+    // `INVALID_REQUEST` 를 쓰므로, 두 칸을 채운 사용자에게 채우라고 말하는 경우가
+    // 생깁니다. 원인을 특정할 수 없을 때는 특정하지 않는 문구가 정확합니다.
+    return "아이디와 비밀번호를 확인하세요.";
   }
   return error.message;
 }

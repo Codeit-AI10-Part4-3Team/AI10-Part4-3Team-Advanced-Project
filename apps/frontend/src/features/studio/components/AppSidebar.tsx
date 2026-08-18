@@ -47,7 +47,19 @@ export function AppSidebar({ onNewSession }: AppSidebarProps) {
           </span>
           {me?.loginId ?? "계정 확인 중"}
         </button>
-        <button type="button" onClick={() => void signOut()}>
+        {/* ⚠️ 아이콘이 장식이 아닙니다. 좁은 폭에서는 `.sidebar-footer button` 의 글자가
+            `font-size: 0` 이 되므로(styles.css 960px 구간), 이 글리프가 남지 않으면 버튼이
+            빈 상자가 됩니다. `.profile-button` 이 `.avatar` 로 살아남는 것과 같은 방식입니다.
+            `aria-label` 은 그 구간에서도 이름을 잃지 않게 합니다. */}
+        <button
+          type="button"
+          className="logout-button"
+          aria-label="로그아웃"
+          onClick={() => void signOut()}
+        >
+          <span className="logout-mark" aria-hidden="true">
+            ⏻
+          </span>
           로그아웃
         </button>
       </div>

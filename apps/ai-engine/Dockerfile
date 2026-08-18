@@ -17,7 +17,11 @@ WORKDIR /app
 # 의존성 레이어를 소스와 분리해 캐시 적중률을 높인다.
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+# ⚠️ `[model]` extra 를 함께 넣습니다. 배포된 이 컨테이너가 실제로 그림을 그리는 주체라,
+#    SDK 가 없으면 ADGEN_GENERATION_MODE=model 로 켰을 때 **키가 있어도** 렌더가 전부
+#    503 이 됩니다. 증상이 "키를 넣었는데 안 된다"로 나와 키를 의심하게 됩니다.
+#    CI 와 로컬 스텁은 core 만 설치하며, 그쪽에서는 지연 import 라 없어도 기동합니다.
+RUN pip install --no-cache-dir ".[model]"
 
 # 비루트 실행 — 한 호스트에 여러 서비스가 뜨므로 권한 격리를 유지한다.
 RUN useradd --create-home --uid 10001 appuser

@@ -23,6 +23,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Path, status
+from fastapi.responses import FileResponse
 
 from api import deps
 from api.errors import (
@@ -53,6 +54,7 @@ from backend_core.models import (
     FinalizeAccepted,
     Session,
     SessionSummary,
+    check_patch_matches_output_type,
 )
 from backend_core.state import StateConflictError
 
@@ -141,6 +143,43 @@ def get_session(
     """One session in full. 404 if it is not yours (INV-9)."""
     session, _ = _owned(connection, account, session_id)
     return session
+
+
+@router.get(
+    "/{sessionId}/image",
+    response_class=FileResponse,
+    responses={200: {"content": {mime: {} for mime in images.MEDIA_TYPE.values()}}},
+)
+def get_session_image(
+    session_id: SessionId,
+    account: Annotated[Account, Depends(deps.current_user)],
+    connection: Annotated[sqlite3.Connection, Depends(deps.db)],
+    settings: Annotated[Settings, Depends(deps.settings)],
+) -> FileResponse:
+    """The uploaded photo, as bytes. This is what `Brief.productImageUrl` points at.
+
+    ⚠️ **Ownership first, file second.** `_owned` runs before the disk is touched, so a
+    stranger gets the same 404 whether the session exists or not (INV-9) — reading the
+    directory first would answer faster for sessions that exist and turn the timing into the
+    existence oracle that the 404 is there to prevent.
+
+    A missing file is also a 404, and that is the retention gap rather than an error: the
+    photo lives 24 hours and the session seven days (세션_보관_정책.md 2절). The screen is
+    not meant to discover this here — `productImageUrl` is emptied when the cleanup batch
+    removes the file, so `GET /v1/sessions/{id}` already says so before any `<img>` is drawn
+    (API_계약.md 8.4절). No new error code, because an `<img>` never reads the body.
+    """
+    _owned(connection, account, session_id)
+
+    path = images.find(settings.image_dir, session_id)
+    if path is None:
+        not_found("이미지를 찾을 수 없습니다.")
+
+    return FileResponse(
+        path,
+        media_type=images.MEDIA_TYPE[path.suffix],
+        headers={"Cache-Control": images.CACHE_CONTROL},
+    )
 
 
 @router.post("/{sessionId}/draft")
@@ -243,11 +282,23 @@ def patch_draft(
     `adPlan` and `role` cannot be named (INV-8, INV-5). They have no field on `DraftPatch`,
     so naming one is an unknown field and a 422 — enforced by the schema's shape rather than
     by a check that a later edit could forget.
+
+    ⚠️ **The output-type pairing is checked here, before the engine is called**, and the
+    "before" is the point. The engine answers a mismatched patch with a 422, but
+    `ai_client` maps every HTTP failure from the engine to `AiEngineUnavailableError` — so
+    letting it travel would tell the user `503 UPSTREAM_UNAVAILABLE` about a request that
+    was simply wrong, which is the same misdirection `patch_draft`'s docstring records.
     """
     session, was = _owned(connection, account, session_id)
     _require_revision(session, body.revision)
     if session.draft is None or session.state != "draft_ready":
         state_conflict(f"시안이 아직 없습니다. 세션이 {session.state!r} 상태입니다.")
+    try:
+        check_patch_matches_output_type(session.output_type, body.patch)
+    except ValueError as exc:
+        # Same mapping `_guard` applies to the brief patch: the domain check raises a plain
+        # `ValueError` and the contract's answer is 422 `INVALID_REQUEST`.
+        invalid_request(str(exc))
 
     try:
         result = engine.patch_draft(

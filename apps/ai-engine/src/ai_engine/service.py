@@ -34,6 +34,7 @@ from ai_engine.models import (
     BriefFillResponse,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    DraftPatchEngineRequest,
     Error,
     ImageRenderRequest,
 )
@@ -162,6 +163,22 @@ def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
     """
     try:
         return draft.generate_draft(request, settings())
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/v1/draft:patch", responses={503: UPSTREAM_503})
+def patch_draft(request: DraftPatchEngineRequest) -> DraftGenerateResponse:
+    """Rewrite the named parts of a draft. Same response shape as `draft:generate`.
+
+    ⚠️ This route was missing while the contract and the caller both had it, so every
+    `PATCH /v1/sessions/{id}/draft` against a real engine came back as a 404 — which the
+    caller maps like any other HTTP failure and reports as `503 UPSTREAM_UNAVAILABLE`,
+    sending whoever debugs it to look at a service that is running fine. S5 worked only
+    against the test fake until this landed (2026-08-15).
+    """
+    try:
+        return draft.patch_draft(request, settings())
     except NotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

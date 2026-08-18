@@ -38,7 +38,7 @@ dev = [
     # ⚠️ 버전 고정 이유와 함께 올려야 할 파일 목록은 apps/backend/pyproject.toml 참고.
     #    네 곳(여기·backend·.pre-commit-config.yaml·reviewdog.yml의 RUFF_VERSION)이
     #    항상 같은 버전이어야 합니다.
-    "ruff==0.16.2",
+    "ruff==0.16.3",
     "mypy>=1.10.0",
 ]
 # ── 외부 이미지 생성 API 클라이언트 (ADR-0003).

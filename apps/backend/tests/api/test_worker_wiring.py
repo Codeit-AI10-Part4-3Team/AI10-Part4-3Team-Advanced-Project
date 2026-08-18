@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 from argon2 import PasswordHasher
-from conftest import VALID_PNG, FakeAiEngine
+from conftest import RENDERED_WEBP, VALID_PNG, FakeAiEngine
 from fastapi.testclient import TestClient
 
 from api import deps
@@ -109,6 +109,31 @@ def test_polling_reaches_done_the_way_a_client_would(
         # `Retry-After` is only sent while there is a next poll to make.
         assert "Retry-After" not in client.get(f"/v1/jobs/{job_id}").headers
     app.dependency_overrides.clear()
+
+
+def test_the_finished_image_is_fetchable_at_the_url_the_job_reports(
+    configured: None, engine: FakeAiEngine
+) -> None:
+    """N17, end to end: poll to `done`, then follow `imageUrl` and get the picture.
+
+    ⚠️ The URL is taken from the response rather than built here. A test that assembled the
+    path itself would keep passing if the stored reference and the serving route drifted
+    apart, which is exactly the defect this item closed (미결정_대장 N17).
+    """
+    app.dependency_overrides[deps.ai_client] = lambda: engine
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post("/v1/auth/login", json={"loginId": "demo1", "password": PASSWORD})
+        job_id = _finalize(client)
+        finished = _poll_until_done(client, job_id)
+
+        assert finished["result"]["imageUrl"] == f"/v1/jobs/{job_id}/image"
+        image = client.get(finished["result"]["imageUrl"])
+    app.dependency_overrides.clear()
+
+    assert image.status_code == 200
+    assert image.content == RENDERED_WEBP
+    assert image.headers["content-type"] == "image/webp"
+    assert "private" in image.headers["cache-control"]
 
 
 def test_the_worker_is_off_unless_a_test_asks_for_it(

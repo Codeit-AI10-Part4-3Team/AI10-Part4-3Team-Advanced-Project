@@ -108,9 +108,12 @@ def test_the_stored_file_is_byte_identical_to_what_arrived(tmp_path: Path) -> No
     that silently rewrites it changes what the user submitted, and a refusal is the honest
     alternative."""
     payload = png_of(1024, 768)
+    session_id = uuid4()
 
-    stored = Path(images.store(tmp_path, uuid4(), payload))
+    images.store(tmp_path, session_id, payload)
 
+    stored = images.find(tmp_path, session_id)
+    assert stored is not None
     assert stored.read_bytes() == payload
 
 
@@ -120,7 +123,46 @@ def test_the_file_is_named_after_the_session_not_the_upload(tmp_path: Path) -> N
     the original name, so it is not kept."""
     session_id = uuid4()
 
-    stored = Path(images.store(tmp_path, session_id, png_of(1024, 768)))
+    images.store(tmp_path, session_id, png_of(1024, 768))
 
+    stored = images.find(tmp_path, session_id)
+    assert stored is not None
     assert stored.name == f"{session_id}.png"
     assert stored.parent == tmp_path
+
+
+def test_store_returns_the_url_not_the_path(tmp_path: Path) -> None:
+    """⚠️ Regression guard for 미결정_대장 N17. This returned a path until 2026-08-15 and the
+    path went straight into `Brief.productImageUrl`, which the contract declares to be a URL
+    — so the field was a contract violation and no browser could render it."""
+    session_id = uuid4()
+
+    assert (
+        images.store(tmp_path, session_id, png_of(1024, 768)) == f"/v1/sessions/{session_id}/image"
+    )
+
+
+def test_the_url_is_relative_so_no_host_is_baked_in(tmp_path: Path) -> None:
+    """The host is not ours to decide yet: HTTPS termination is undecided (API_계약.md 8.3절)
+    and behind a proxy an absolute URL would be built from the request's own `Host` header."""
+    stored = images.store(tmp_path, uuid4(), png_of(1024, 768))
+
+    assert stored.startswith("/")
+    assert "://" not in stored
+
+
+def test_find_answers_none_once_the_photo_is_gone(tmp_path: Path) -> None:
+    """Not an error. The photo keeps 24 hours and the session seven days
+    (세션_보관_정책.md 2절), so a live session with no photo is a state the design creates."""
+    session_id = uuid4()
+    images.store(tmp_path, session_id, png_of(1024, 768))
+
+    stored = images.find(tmp_path, session_id)
+    assert stored is not None
+    stored.unlink()
+
+    assert images.find(tmp_path, session_id) is None
+
+
+def test_find_result_answers_none_before_the_render_finishes(tmp_path: Path) -> None:
+    assert images.find_result(tmp_path, "no-such-job") is None

@@ -149,29 +149,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # frontend-ci.yml과 같은 규약: apps/frontend 스캐폴딩 전에는 모든 스텝이 건너뛰어집니다.
-      # ⚠️ 스캐폴딩이 끝나면 frontend-ci.yml과 **함께** 이 조건들을 지우세요. 그대로 두면
-      #    package-lock.json이 사라진 뒤에도 잡이 조용히 초록으로 통과합니다.
-      - name: Skip notice (스캐폴딩 전)
-        if: hashFiles('apps/frontend/package.json') == ''
-        run: echo "apps/frontend/package.json이 아직 없습니다 - 프론트엔드 스캐폴딩 전이므로 건너뜁니다."
+      # ⚠️ 스텝에 `if: hashFiles(...)` 게이트를 다시 붙이지 마세요. 예전에는 스캐폴딩 전을
+      #    대비해 package-lock.json 존재 여부로 걸어두었는데, 프론트엔드가 pnpm으로
+      #    스캐폴딩되면서 그 파일이 영영 생기지 않아 **모든 스텝이 skipped인 채 잡만 초록**이
+      #    됐습니다. 조건 없이 항상 도는 지금 형태가 그 무음 통과를 막는 유일한 장치입니다.
+      #    (frontend-ci.yml은 같은 정리를 스캐폴딩 시점에 이미 마쳤습니다.)
+      #
+      # ⚠️ pnpm 버전은 apps/frontend/package.json의 `packageManager`와 한 쌍입니다.
+      #    frontend-ci.yml의 pnpm/action-setup 핀도 같은 값이어야 합니다.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '11.19.0'
 
       - uses: actions/setup-node@v7
-        if: hashFiles('apps/frontend/package-lock.json') != ''
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: apps/frontend/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: apps/frontend/pnpm-lock.yaml
 
       - name: Install
-        if: hashFiles('apps/frontend/package-lock.json') != ''
         working-directory: apps/frontend
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      # ⚠️ 이 액션은 eslint가 devDependencies에 설치돼 있어야 동작합니다.
-      #    패키지 매니저를 pnpm/yarn으로 바꾸면 위 install 스텝과 함께 교체하세요.
+      # ⚠️ 이 액션은 eslint가 node_modules에 이미 설치돼 있어야 합니다. 내부적으로
+      #    `npx --no-install eslint`로 찾고, 못 찾으면 `npm install`로 폴백해 pnpm 레포에
+      #    package-lock.json을 만들어버립니다. 위 Install 스텝을 지우면 그 폴백을 타므로
+      #    두 스텝은 한 쌍으로 취급하세요.
       - uses: reviewdog/action-eslint@v1
-        if: hashFiles('apps/frontend/package-lock.json') != ''
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           reporter: github-pr-review

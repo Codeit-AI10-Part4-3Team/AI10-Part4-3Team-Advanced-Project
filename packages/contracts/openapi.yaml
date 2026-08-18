@@ -307,6 +307,53 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/sessions/{sessionId}/image:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      summary: 업로드한 제품 사진
+      description: |
+        `Brief.productImageUrl`이 가리키는 경로입니다. 화면은 이 값을 `<img src>`에 그대로
+        싣습니다.
+
+        **JSON이 아니라 이미지 바이트를 돌려줍니다.** 올라온 파일을 그대로 내려보내므로
+        `Content-Type`은 업로드한 형식(JPEG / PNG / WebP)을 따라갑니다 - 재인코딩하지
+        않습니다 (이유는 `SessionCreateRequest.productImage`와 같습니다).
+
+        **사진을 세션 하위에 둔 이유**는 소유권 판정이 이미 세션에 있기 때문입니다. 별도의
+        `imageId`를 발급하면 "어느 세션에도 속하지 않은 이미지"라는 상태가 조회 쪽에 생기고,
+        그 상태의 소유자와 보존 기간을 따로 정해야 합니다 - 업로드에서 같은 이유로 거부한
+        구조입니다 (API_계약.md 8.1절).
+
+        보존은 **업로드 후 24시간**입니다 (세션_보관_정책.md 2절). 사진이 만료돼도 세션은
+        7일까지 남으므로 세션은 있는데 사진만 없는 상태가 생기며, 그때 이 경로는 404입니다.
+        **화면이 만료를 알아야 하는 곳은 여기가 아니라 `GET /v1/sessions/{sessionId}`입니다**
+        - 만료된 사진의 `productImageUrl`은 빈 문자열이므로, 깨진 `<img>`를 그리기 전에
+        분기할 수 있습니다. 이미지 응답의 본문은 `<img>` 경로에서 읽히지 않으니 오류 코드를
+        따로 늘려도 화면 분기를 만들지 못합니다 (API_계약.md 5.2절).
+      responses:
+        "200":
+          description: 이미지 바이트. 업로드한 형식 그대로입니다
+          headers:
+            Cache-Control:
+              description: |
+                기본값 `private, max-age=3600`. 업로드 사진은 개인정보일 수 있으므로 공유
+                캐시에 올리지 않습니다 - `private`가 그 선언이며, 프록시나 HTTPS 종단이
+                앞에 붙어도 그쪽에 사본이 남지 않습니다 (API_계약.md 8.3절).
+              schema: { type: string }
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/sessions/{sessionId}/brief:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -484,6 +531,49 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Job" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/jobs/{jobId}/image:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [jobs]
+      summary: 렌더 결과 이미지
+      description: |
+        `JobResult.imageUrl`이 가리키는 경로입니다. `status`가 `done`이 된 뒤에만 존재하며,
+        `queued` / `running` / `failed`인 잡에는 404입니다.
+
+        **결과가 세션이 아니라 잡에 달린 이유**는 파일이 `jobId`로 저장되기 때문입니다.
+        재시도가 같은 경로에 덮어쓰므로 잡 하나에 이미지 하나가 유지됩니다 (ADR-0015).
+        INV-3이 렌더를 세션당 1회로 묶고 있어 지금은 세션당 결과도 하나뿐이지만, 그 불변식은
+        아직 `Proposed`입니다 (ADR-0006) - 뒤집혀 세션에 결과가 여럿 생겨도 이 경로는
+        그대로입니다.
+
+        소유권은 세션과 같은 규칙입니다. 잡이 매달린 세션의 소유자가 아니면 404이며,
+        존재 여부를 알리지 않습니다 (INV-9).
+
+        형식은 내부 홉과 같은 **무손실 WebP**입니다. 화면에 띄우는 것과 사용자가 게시하려고
+        내려받는 것은 다른 결정이고, 후자는 아직 미정입니다 (API_계약.md 8.2절). 그것이
+        정해질 때 이 경로의 형식을 바꿀지 내려받기 경로를 따로 둘지를 함께 정합니다.
+
+        보존은 **7일**이며 만료 시각은 `JobResult.expiresAt`에 있습니다. 만료 후에는
+        404입니다 - 화면은 만료를 응답이 아니라 `expiresAt`으로 미리 알 수 있습니다.
+      responses:
+        "200":
+          description: 무손실 WebP 바이트
+          headers:
+            Cache-Control:
+              description: 기본값 `private, max-age=3600`. 근거는 업로드 사진 쪽과 같습니다
+              schema: { type: string }
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -923,6 +1013,16 @@ components:
             **업로드 필드와 이름이 다릅니다.** 올릴 때는 `productImage`(파일 자체)이고 읽을
             때는 `productImageUrl`(참조)입니다. 같은 것의 두 표현이 아니라 서로 다른 것이라
             이름을 갈랐습니다 - `JobResult.imageUrl` 과 모양을 맞춘 쪽이 이쪽입니다.
+
+            **값은 앱 상대 경로입니다** - `/v1/sessions/{sessionId}/image` 이고 호스트가
+            붙지 않습니다. 절대 URL 로 두면 서버가 자기 외부 주소를 알아야 하는데, HTTPS
+            종단 방식이 아직 미정이라(API_계약.md 8.3절) 그 주소는 프록시 뒤의 `Host`
+            헤더에서 오게 됩니다. 요청이 지어낸 값을 응답에 되싣는 구조이고, 배포에서 종단이
+            바뀌면 이미 저장된 값이 어긋납니다. 상대 경로에는 그 두 문제가 없습니다.
+
+            **사진이 만료되면 빈 문자열입니다.** 세션은 7일, 사진은 24시간이라 세션은 있는데
+            사진만 없는 구간이 생깁니다. 화면은 이 필드가 비었는지로 분기하고, 비어 있으면
+            `<img>` 를 아예 그리지 않습니다. `null` 은 계약 전체에서 금지입니다.
         productName: { type: string, minLength: 1, maxLength: 40 }
         sellingPoint:
           type: string
@@ -1204,7 +1304,15 @@ components:
       type: object
       additionalProperties: false
       properties:
-        imageUrl: { type: string }
+        imageUrl:
+          type: string
+          description: |
+            결과 이미지의 참조 URL. **앱 상대 경로**이며 `/v1/jobs/{jobId}/image` 입니다.
+            호스트를 붙이지 않는 이유는 `Brief.productImageUrl` 과 같습니다.
+
+            `result` 자체가 `status: done` 일 때만 실리므로 이 필드가 빈 문자열이 되는
+            경우는 없습니다. 만료(7일, `expiresAt`)는 잡 조회가 아니라 이 URL 을 실제로
+            부를 때 404 로 나타납니다.
         width: { type: integer, minimum: 1 }
         height: { type: integer, minimum: 1 }
         expiresAt:

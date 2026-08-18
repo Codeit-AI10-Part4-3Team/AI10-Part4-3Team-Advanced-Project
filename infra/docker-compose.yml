@@ -121,6 +121,37 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  frontend:
+    # 정적 번들 + `/v1` 프록시. 브라우저가 보는 유일한 출처입니다.
+    # ⚠️ context 를 레포 루트로 넓히지 마세요 — 다른 앱과 마찬가지로 이 앱도 자기 디렉토리만
+    #    봅니다.
+    build:
+      context: ../apps/frontend
+    image: adgen-frontend:dev
+    ports:
+      # ⚠️ **80 을 여는 것이 이 서비스의 존재 이유입니다.** 브라우저는 여기 하나만 보고,
+      #    `/v1` 은 컨테이너 안에서 backend 로 넘어갑니다 (apps/frontend/nginx.conf).
+      #    다른 출처로 나뉘면 세션 쿠키(`Secure` + `SameSite=Lax`, ADR-0013)가 실리지
+      #    않아 로그인이 성립하지 않습니다.
+      - "80:80"
+    depends_on:
+      # ⚠️ `condition: service_healthy` 를 쓰지 않습니다. backend 가 아직 안 떴어도
+      #    로그인 화면은 떠야 하고, 그때 사용자가 보는 것은 502 가 아니라 "서버에
+      #    연결하지 못했습니다" 입니다 (features/auth/LoginPage.tsx).
+      - backend
+    healthcheck:
+      # ⚠️ `127.0.0.1` 이고 `localhost` 가 아닙니다. 이 이미지 안에서 `localhost` 는 `::1`
+      #    로 먼저 풀리는데 nginx 는 IPv4 만 듣고 있어 **연결 거부**가 납니다. 컨테이너는
+      #    멀쩡히 서빙하는데 헬스체크만 실패하고, compose 의 `--wait` 가 거기서 멈춥니다
+      #    (실측: CI 의 종단 관통 테스트가 `container adgen-frontend-1 is unhealthy` 로
+      #    죽었습니다. 밖에서 보내는 요청은 전부 정상이라 증상이 서비스 장애로 안 보입니다).
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/index.html"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
 volumes:
   # 상태 저장소(SQLite 파일)와 앞으로 들어올 이미지 파일이 사는 곳. 이름 있는 볼륨을
   # 쓰는 이유와 바인드 마운트를 택하지 않은 이유: ADR-0014.
@@ -130,4 +161,5 @@ volumes:
 # vector-db — 지금 검색은 번들 픽스처 기반이라 붙일 대상이 없습니다. 아무도 말을 걸지 않는
 #             컨테이너를 띄우면 "돌아간다"는 착각만 만듭니다. 실제 인덱스가 들어올 때
 #             서비스 + 영속 볼륨을 함께 추가하세요.
-# frontend  — apps/frontend가 아직 스캐폴딩 전입니다.
+#
+# frontend 는 이 목록에서 빠졌습니다 - 위에 서비스가 있습니다.

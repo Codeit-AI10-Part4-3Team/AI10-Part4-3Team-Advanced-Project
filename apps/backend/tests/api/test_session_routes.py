@@ -182,16 +182,79 @@ def test_a_session_survives_a_restart(client: TestClient, env: Path, ai: FakeAiE
     assert response.json()["sessionId"] == session_id
 
 
-def test_the_image_is_written_to_disk_and_only_its_path_is_stored(
+def test_the_image_is_written_to_disk_and_only_its_url_is_stored(
     client: TestClient, env: Path
 ) -> None:
-    """ADR-0010: bytes on disk, path in the row. A photo in a database column would carry
-    the whole file into every backup and every read of the session."""
+    """ADR-0010: bytes on disk, a reference in the row. A photo in a database column would
+    carry the whole file into every backup and every read of the session.
+
+    ⚠️ The reference is the **URL**, not the path. Until 2026-08-15 it was the path and the
+    contract calls the field `productImageUrl` (미결정_대장 N17), so the value was a contract
+    violation that no browser could render."""
+    body = _create(client)
+    session_id = body["sessionId"]
+
+    assert body["brief"]["productImageUrl"] == f"/v1/sessions/{session_id}/image"
+    assert (env / "images" / f"{session_id}.png").read_bytes() == PNG
+
+
+# ---- N17: 이미지 조회 (API_계약.md 8.4절) ------------------------------------------------
+
+
+def test_the_stored_url_is_the_one_that_serves_the_photo(client: TestClient) -> None:
+    """The point of the whole item: the value on the brief is fetchable as-is. A test that
+    built the path itself would still pass if the two ever drifted apart."""
     body = _create(client)
 
-    stored = Path(body["brief"]["productImageUrl"])
-    assert stored.exists()
-    assert stored.read_bytes() == PNG
+    response = client.get(body["brief"]["productImageUrl"])
+
+    assert response.status_code == 200
+    assert response.content == PNG
+    assert response.headers["content-type"] == "image/png"
+
+
+def test_the_photo_is_not_offered_to_a_shared_cache(client: TestClient) -> None:
+    """An uploaded photo may be personal data, and a proxy is going in front of this service
+    before deployment (API_계약.md 8.3절)."""
+    body = _create(client)
+
+    response = client.get(body["brief"]["productImageUrl"])
+
+    assert "private" in response.headers["cache-control"]
+
+
+def test_inv_9_someone_elses_photo_is_404(client: TestClient) -> None:
+    """⚠️ The session route already answers 404 for a stranger, and the image route has to
+    answer the same — a serving route that only checked the file would hand out every photo
+    to anyone who could guess a `sessionId`."""
+    session_id = _create(client)["sessionId"]
+
+    _login(client, "demo2")
+    mine = client.get(f"/v1/sessions/{session_id}/image")
+    invented = client.get("/v1/sessions/00000000-0000-4000-8000-000000000000/image")
+
+    assert mine.status_code == 404
+    assert mine.json() == invented.json()
+
+
+def test_an_expired_photo_is_404_while_the_session_still_answers(
+    client: TestClient, env: Path
+) -> None:
+    """The retention gap, not an error: the photo keeps 24 hours and the session seven days
+    (세션_보관_정책.md 2절), so this state is one the design creates on purpose."""
+    session_id = _create(client)["sessionId"]
+    (env / "images" / f"{session_id}.png").unlink()
+
+    assert client.get(f"/v1/sessions/{session_id}/image").status_code == 404
+    assert client.get(f"/v1/sessions/{session_id}").status_code == 200
+
+
+def test_the_photo_needs_a_login(client: TestClient) -> None:
+    session_id = _create(client)["sessionId"]
+
+    client.post("/v1/auth/logout")
+
+    assert client.get(f"/v1/sessions/{session_id}/image").status_code == 401
 
 
 # ---- INV-9 -----------------------------------------------------------------------------

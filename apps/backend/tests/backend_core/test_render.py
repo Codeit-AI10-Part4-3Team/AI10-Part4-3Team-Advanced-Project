@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from conftest import RENDERED_WEBP, FakeAiEngine, draft_for
 
-from backend_core import jobs, render, session_flow, sessions
+from backend_core import images, jobs, render, session_flow, sessions
 from backend_core.ai_client import AiEngineUnavailableError, GenerationTimeoutError
 from backend_core.models import (
     Brief,
@@ -106,7 +106,12 @@ def test_a_render_takes_the_session_all_the_way_to_completed(
     assert job is not None
     assert job.status == "done"
     assert job.result is not None
-    assert Path(job.result.image_url).read_bytes() == RENDERED_WEBP
+    # ⚠️ The field carries the **URL**, so the bytes are found through `images`, not by
+    # treating the value as a path (미결정_대장 N17).
+    assert job.result.image_url == f"/v1/jobs/{job_id}/image"
+    rendered = images.find_result(tmp_path, job_id)
+    assert rendered is not None
+    assert rendered.read_bytes() == RENDERED_WEBP
 
     found = sessions.for_owner_of_job(connection, session_id)
     assert found is not None

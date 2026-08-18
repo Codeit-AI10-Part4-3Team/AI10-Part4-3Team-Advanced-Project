@@ -16,7 +16,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function send(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     credentials: "include",
     ...init,
@@ -33,5 +33,17 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     );
   }
 
+  return response;
+}
+
+export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await send(path, init);
   return response.json() as Promise<T>;
+}
+
+// ⚠️ 204 는 본문이 없으므로 `response.json()` 이 파싱 오류로 던집니다. 로그아웃이 실제로
+// 성공했는데 화면에는 실패로 보이는 상태가 되고, 사용자는 이미 만료된 쿠키를 들고 다시
+// 시도하게 됩니다. 계약에서 204 를 쓰는 경로(`POST /v1/auth/logout`)는 이쪽으로 부릅니다.
+export async function apiRequestNoContent(path: string, init?: RequestInit): Promise<void> {
+  await send(path, init);
 }

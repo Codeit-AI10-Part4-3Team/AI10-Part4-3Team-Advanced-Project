@@ -57,6 +57,7 @@ from backend_core.models.patch import (
     DraftPatchRequest,
     PanelPatch,
     PanelPatchMap,
+    check_patch_matches_output_type,
 )
 from backend_core.models.session import (
     FinalizeAccepted,
@@ -112,4 +113,5 @@ __all__ = [
     "Visibility",
     "check_brief_matches_output_type",
     "check_draft_matches_output_type",
+    "check_patch_matches_output_type",
 ]

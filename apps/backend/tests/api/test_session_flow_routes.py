@@ -286,6 +286,45 @@ def test_the_read_only_fields_cannot_be_patched(client: TestClient, patch: dict[
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    ("output_type", "patch"),
+    [
+        ("single_ad", {"panels": {"4": {"dialogue": "새 대사"}}}),
+        ("single_ad", {"panels": {"4": {"dialogue": "새 대사"}}, "copy": "새 카피"}),
+        ("comic", {"copy": "새 카피"}),
+        ("comic", {"visualPlan": "새 비주얼"}),
+    ],
+    ids=["single_ad + panels", "single_ad + panels and copy", "comic + copy", "comic + visualPlan"],
+)
+def test_a_patch_naming_the_other_output_types_fields_is_refused(
+    client: TestClient, output_type: str, patch: dict[str, Any]
+) -> None:
+    """⚠️ `DraftPatch` carries every output type's fields and has no `outputType`, so this is
+    a request a client can make while following the contract — the same hole the brief patch
+    had with `character` and `aspectRatio`.
+
+    Two things have to hold, and the second is the reason the check is here rather than only
+    on the engine. **422, not 200**: before 2026-08-18 the engine dropped the field that did
+    not apply and answered 200 with a draft that had not changed, so the caller was told its
+    request succeeded. **422, not 503**: `ai_client` maps every HTTP failure from the engine
+    to `AiEngineUnavailableError`, so a 422 raised over there reaches the user as
+    `UPSTREAM_UNAVAILABLE` — pointing at a healthy service instead of at the request.
+    """
+    session_id = _create(client, output_type=output_type)["sessionId"]
+    client.post(f"/v1/sessions/{session_id}/draft")
+
+    response = client.patch(
+        f"/v1/sessions/{session_id}/draft", json={"revision": 0, "patch": patch}
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "INVALID_REQUEST"
+
+    # The draft is untouched and the revision did not move — a refused patch costs nothing.
+    session = client.get(f"/v1/sessions/{session_id}").json()
+    assert session["revision"] == 0
+
+
 def test_a_stale_revision_is_refused(client: TestClient) -> None:
     """Optimistic locking. Two screens open on one session both hold `revision: 0`; without
     this the second save discards the first person's edit and nobody finds out."""
@@ -368,3 +407,30 @@ def test_inv_9_someone_elses_job_is_404(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["code"] == "NOT_FOUND"
+
+
+def test_inv_9_someone_elses_result_image_is_404(client: TestClient) -> None:
+    """⚠️ The same guard on the image route. The job route refusing a stranger is worth
+    nothing if the picture it describes is served to anyone who asks for it."""
+    session_id = _create(client)["sessionId"]
+    client.post(f"/v1/sessions/{session_id}/draft")
+    job_id = client.post(f"/v1/sessions/{session_id}/finalize").json()["jobId"]
+
+    client.post("/v1/auth/login", json={"loginId": "demo2", "password": PASSWORD})
+    response = client.get(f"/v1/jobs/{job_id}/image")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "NOT_FOUND"
+
+
+def test_a_render_that_has_not_finished_has_no_image_to_serve(client: TestClient) -> None:
+    """`queued`, `running` and `failed` jobs are all 404 here. The worker is off in this
+    suite, so the job stays `queued` and there is no file — and a placeholder in its place
+    would be a picture we invented (API_계약.md 8.4절)."""
+    session_id = _create(client)["sessionId"]
+    client.post(f"/v1/sessions/{session_id}/draft")
+    job_id = client.post(f"/v1/sessions/{session_id}/finalize").json()["jobId"]
+
+    response = client.get(f"/v1/jobs/{job_id}/image")
+
+    assert response.status_code == 404

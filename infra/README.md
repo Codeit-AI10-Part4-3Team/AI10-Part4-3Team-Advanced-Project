@@ -115,7 +115,13 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
 | OS | `common-cu129-ubuntu-2404-nvidia-580-stage` (콘솔 표기 `Deep Learning VM with CUDA M132`) — Ubuntu 24.04, CUDA 12.9, Python 3.12. **PyTorch 미포함 판** |
 | 스냅샷 일정 | 정책 `adcraft-daily-snap`. UTC 18:00 (KST 03:00), **보존 7일**, `apply-retention-policy` |
 | SSH | **22번을 `0.0.0.0/0`에 열어 둡니다(의도된 상태).** 아래 "SSH 접근 경로" 참고 |
-| 외부 노출 포트 | backend `8000`만. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
+| 외부 노출 포트 | frontend `80` + backend `8000`. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
+
+> **2026-08-15: frontend 서비스가 붙으면서 노출 포트가 둘이 됐습니다.** 브라우저는 `80`
+> 하나만 보고 `/v1`은 컨테이너 안에서 backend 로 넘어갑니다 (`apps/frontend/nginx.conf`) --
+> 다른 출처로 나뉘면 세션 쿠키가 실리지 않아 로그인이 성립하지 않기 때문입니다.
+> `8000`을 함께 열어 둔 것은 `curl`로 계약을 직접 두드리는 경로를 남기기 위해서이며,
+> HTTPS 종단이 들어올 때 닫을지 함께 정합니다.
 
 ### 상태는 `adgen-state` 볼륨 안에 있습니다
 

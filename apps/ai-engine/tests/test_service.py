@@ -62,5 +62,6 @@ def test_retrieval_is_not_exposed(client: TestClient) -> None:
         "/v1/generate",
         "/v1/brief:fill",
         "/v1/draft:generate",
+        "/v1/draft:patch",
         "/v1/image:render",
     }

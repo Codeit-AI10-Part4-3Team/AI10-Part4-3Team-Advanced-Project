@@ -113,6 +113,34 @@ class DraftPatch(AtLeastOneField):
     visual_plan: Omittable[str] = None
 
 
+_PATCH_FIELDS_BY_OUTPUT_TYPE: dict[OutputType, dict[str, str]] = {
+    # attribute -> wire name, for the fields the *other* output type owns.
+    "single_ad": {"panels": "panels"},
+    "comic": {"ad_copy": "copy", "visual_plan": "visualPlan"},
+}
+
+
+def check_patch_matches_output_type(output_type: OutputType, patch: DraftPatch) -> None:
+    """Reject a patch that names fields the output type does not have.
+
+    The sibling of `check_brief_matches_output_type`, and needed for the same reason:
+    `DraftPatch` carries every output type's fields and cannot know which one the session
+    is, so a client following the contract can still send a mismatched patch.
+
+    ⚠️ **The mismatch is invisible without this, not loud.** `single_ad` with a `panels`
+    patch satisfies `minProperties: 1`, and the engine's stub drops `panels` on its way to a
+    single-ad draft — so the round trip is a 200 whose draft never changed. Worse when the
+    patch also names `copy`: the copy changes, the panels instruction is gone, and the
+    screen reads it as success (2026-08-18 실측).
+
+    ⚠️ Reads `model_fields_set`, not the values: in this family `""` is a real instruction
+    and `None` only ever means the key was absent.
+    """
+    for attribute, wire_name in _PATCH_FIELDS_BY_OUTPUT_TYPE[output_type].items():
+        if attribute in patch.model_fields_set:
+            raise ValueError(f"{wire_name} does not apply to {output_type} output; omit the key")
+
+
 class BriefPatchRequest(Base):
     """Contract: `components.schemas.BriefPatchRequest`.
 

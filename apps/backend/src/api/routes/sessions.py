@@ -54,6 +54,7 @@ from backend_core.models import (
     FinalizeAccepted,
     Session,
     SessionSummary,
+    check_patch_matches_output_type,
 )
 from backend_core.state import StateConflictError
 
@@ -281,11 +282,23 @@ def patch_draft(
     `adPlan` and `role` cannot be named (INV-8, INV-5). They have no field on `DraftPatch`,
     so naming one is an unknown field and a 422 — enforced by the schema's shape rather than
     by a check that a later edit could forget.
+
+    ⚠️ **The output-type pairing is checked here, before the engine is called**, and the
+    "before" is the point. The engine answers a mismatched patch with a 422, but
+    `ai_client` maps every HTTP failure from the engine to `AiEngineUnavailableError` — so
+    letting it travel would tell the user `503 UPSTREAM_UNAVAILABLE` about a request that
+    was simply wrong, which is the same misdirection `patch_draft`'s docstring records.
     """
     session, was = _owned(connection, account, session_id)
     _require_revision(session, body.revision)
     if session.draft is None or session.state != "draft_ready":
         state_conflict(f"시안이 아직 없습니다. 세션이 {session.state!r} 상태입니다.")
+    try:
+        check_patch_matches_output_type(session.output_type, body.patch)
+    except ValueError as exc:
+        # Same mapping `_guard` applies to the brief patch: the domain check raises a plain
+        # `ValueError` and the contract's answer is 422 `INVALID_REQUEST`.
+        invalid_request(str(exc))
 
     try:
         result = engine.patch_draft(

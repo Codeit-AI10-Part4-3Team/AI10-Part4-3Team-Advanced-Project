@@ -1,4 +1,4 @@
-"""The three walking-skeleton seams: brief:fill, draft:generate, image:render.
+"""The generation seams: brief:fill, draft:generate, draft:patch, image:render.
 
 What these tests are for is not "the stub returns something". It is that the **seam** holds:
 the same function branches on one setting, the stub side is unmistakably a stub, and the
@@ -16,10 +16,15 @@ from ai_engine import brief_fill, draft, render, service
 from ai_engine.config import Settings
 from ai_engine.models import (
     Brief,
+    ComicDraft,
     DraftGenerateRequest,
+    DraftPatch,
+    DraftPatchEngineRequest,
     ImageRenderRequest,
     ImageSpec,
     OutputType,
+    Panel,
+    SingleAdDraft,
 )
 from ai_engine.service_schemas import BriefFillRequest
 
@@ -67,6 +72,38 @@ def draft_request(
     )
 
 
+def single_ad_draft() -> SingleAdDraft:
+    return SingleAdDraft(ad_plan="기획안", ad_copy="원래 카피", visual_plan="원래 비주얼")
+
+
+def patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
+    return DraftPatchEngineRequest(
+        output_type="single_ad",
+        brief=brief(),
+        draft=single_ad_draft(),
+        patch=DraftPatch.model_validate(patch_fields),
+    )
+
+
+def comic_patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
+    return DraftPatchEngineRequest(
+        output_type="comic",
+        brief=Brief.model_validate(
+            {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
+        ),
+        draft=ComicDraft(
+            ad_plan="기획안",
+            panels=[
+                Panel(index=index, role=role, scene="장면", dialogue="대사")
+                for index, role in enumerate(
+                    ["hook", "setup", "problem", "solution", "proof", "cta"], start=1
+                )
+            ],
+        ),
+        patch=DraftPatch.model_validate(patch_fields),
+    )
+
+
 def fill_request() -> BriefFillRequest:
     return BriefFillRequest.model_construct(
         product_image=None, product_name="핸드크림", selling_point="하루 종일 촉촉합니다"
@@ -76,21 +113,41 @@ def fill_request() -> BriefFillRequest:
 # ---- 분기가 설정 하나로 갈리는가 ------------------------------------------------
 
 
-def test_model_branch_fails_loudly_on_every_seam(model_settings: Settings) -> None:
+def test_model_branch_fails_loudly_on_the_unwritten_seams(model_settings: Settings) -> None:
     """⚠️ The point of the whole design. An unwritten branch must not degrade politely.
 
     A stub returned from the model branch would be indistinguishable from a real result in
     every log, metric and screenshot.
+
+    ⚠️ `image:render` left this list on 2026-08-15 — its model branch is written now and
+    calls the external API (ADR-0003). It still fails loudly, but for a different reason
+    (no key, or the vendor said no), and `tests/test_render_model.py` covers that.
     """
     # Requests are built outside the blocks: a failure while building one would pass these
     # tests for the wrong reason, and then the branch could stop raising unnoticed.
-    fill, generate, image = fill_request(), draft_request(), render_request()
+    fill, generate = fill_request(), draft_request()
+    patch = patch_request(copy="새 카피")
 
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
         brief_fill.fill_brief(fill, model_settings)
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
         draft.generate_draft(generate, model_settings)
     with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
+        draft.patch_draft(patch, model_settings)
+
+
+def test_the_render_model_branch_no_longer_pretends_to_be_unwritten(
+    model_settings: Settings,
+) -> None:
+    """`NotImplementedError` 가 아니라 `RenderFailedError` 입니다.
+
+    ⚠️ 둘은 라우트에서 같은 503 이 되지만 뜻이 다릅니다 - "아직 안 만들었다"와 "지금 못
+    만든다" 입니다. 이 구분이 사라지면 배포에서 키가 빠졌을 때 로그가 "미구현" 이라고 말합니다.
+    """
+    # 위와 같은 이유로 요청은 블록 밖에서 만듭니다.
+    image = render_request()
+
+    with pytest.raises(render.RenderFailedError):
         render.render_image(image, model_settings)
 
 
@@ -232,13 +289,13 @@ def test_brief_fill_route_accepts_an_upload(client: TestClient) -> None:
 
 
 def test_every_generation_path_documents_503(client: TestClient) -> None:
-    """계약이 세 경로 모두에 503 을 적고 있으므로 발행 스펙에도 있어야 합니다.
+    """계약이 생성 경로 전부에 503 을 적고 있으므로 발행 스펙에도 있어야 합니다.
 
     ⚠️ FastAPI 는 `raise HTTPException(503)` 을 스펙에 자동으로 넣지 않습니다. 빠지면 계약에는
     있고 발행 스펙에는 없는 상태가 되고, 프론트엔드가 계약을 보고 짠 분기가 근거를 잃습니다.
     """
     spec = client.get("/openapi.json").json()
-    for path in ("/v1/brief:fill", "/v1/draft:generate", "/v1/image:render"):
+    for path in ("/v1/brief:fill", "/v1/draft:generate", "/v1/draft:patch", "/v1/image:render"):
         assert "503" in spec["paths"][path]["post"]["responses"], path
 
 
@@ -255,3 +312,152 @@ def test_unimplemented_model_branch_surfaces_as_503_not_500(
         "/v1/draft:generate", json={"outputType": "single_ad", "brief": BRIEF_FIELDS}
     )
     assert response.status_code == 503
+
+
+# ---- draft:patch (2026-08-15) ---------------------------------------------------------
+
+
+def test_patch_changes_only_what_it_names(stub_settings: Settings) -> None:
+    """⚠️ The property that separates 부분 교체 from regeneration.
+
+    A caller that asked to change the copy has a visual plan the user already approved.
+    Rewriting it too would discard a decision, and would do so invisibly — the response
+    shape is identical either way.
+    """
+    request = patch_request(copy="새 카피")
+
+    response = draft.patch_draft(request, stub_settings)
+
+    assert response.draft is not None
+    assert "새 카피" in response.draft.ad_copy
+    assert response.draft.visual_plan == "원래 비주얼"
+    assert response.draft.ad_plan == "기획안"
+
+
+def test_patch_can_empty_a_field_without_it_meaning_leave_it_alone(
+    stub_settings: Settings,
+) -> None:
+    """⚠️ `""` and an absent key are opposite instructions in this family. A patch built
+    with `exclude_none` would collapse them and "clear this" would become "keep this"."""
+    request = patch_request(visualPlan="")
+
+    response = draft.patch_draft(request, stub_settings)
+
+    assert response.draft is not None
+    assert response.draft.ad_copy == "원래 카피"
+    assert response.draft.visual_plan.endswith("] ")
+
+
+def test_an_empty_patch_is_refused(stub_settings: Settings) -> None:
+    """`minProperties: 1`. A patch that names nothing applies no change and still costs the
+    caller a revision, which invalidates every other open screen's optimistic lock."""
+    with pytest.raises(ValueError, match="at least one field"):
+        patch_request()
+
+
+def test_the_patch_cannot_name_the_read_only_fields() -> None:
+    """`adPlan` is INV-8 and `role` is INV-5; neither exists on the schema, so both are
+    rejected as unknown fields rather than by a rule someone has to remember."""
+    for field in ("adPlan", "role"):
+        with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+            patch_request(**{field: "무엇이든"})
+
+
+def test_the_comic_branch_of_the_patch_stub_raises(stub_settings: Settings) -> None:
+    """Comic-blind like `_generate_stub`: patching six panels here would make the comic path
+    look finished (구현_범위 1절)."""
+    request = comic_patch_request(panels={"4": {"dialogue": "새 대사"}})
+
+    with pytest.raises(NotImplementedError, match="구현_범위"):
+        draft.patch_draft(request, stub_settings)
+
+
+def test_a_single_ad_patch_cannot_name_panels() -> None:
+    """⚠️ The combination that used to pass validation and then vanish (2026-08-18 실측).
+
+    `panels` on a single ad satisfies `minProperties: 1`, so nothing above rejected it, and
+    `_patch_stub` excluded `panels` on its way to a `SingleAdDraft` — leaving a 200 whose
+    draft equalled the one the caller sent. Silence is the failure mode this path is
+    least allowed to have (ADR-0005).
+    """
+    with pytest.raises(ValueError, match="panels does not apply to single_ad"):
+        patch_request(panels={"4": {"dialogue": "새 대사"}})
+
+
+def test_a_single_ad_patch_naming_panels_is_rejected_even_when_it_also_names_copy(
+    stub_settings: Settings,
+) -> None:
+    """⚠️ The worse half of the same bug, and the reason the check cannot live in the stub.
+
+    With `copy` alongside it the response *did* change, so the mismatch had no symptom at
+    all: the copy came back patched and the panels instruction was simply gone. A caller
+    reading the 200 has no way to tell which half of its request was applied.
+    """
+    with pytest.raises(ValueError, match="panels does not apply to single_ad"):
+        patch_request(panels={"4": {"dialogue": "새 대사"}}, copy="새 카피")
+
+    # The same patch minus `panels` is the request the caller should have sent — the
+    # rejection is about the pairing, not about `copy`.
+    response = draft.patch_draft(patch_request(copy="새 카피"), stub_settings)
+    assert response.draft is not None
+    assert "새 카피" in response.draft.ad_copy
+
+
+@pytest.mark.parametrize("field", ["copy", "visualPlan"])
+def test_a_comic_patch_cannot_name_the_single_ad_fields(field: str) -> None:
+    """The other direction of the same pairing. It has no silent path today only because
+    `_patch_stub` refuses comic outright — which is a property of the skeleton, not of the
+    contract, and would disappear the moment the comic branch is written."""
+    with pytest.raises(ValueError, match=f"{field} does not apply to comic"):
+        comic_patch_request(**{field: "무엇이든"})
+
+
+def test_draft_patch_route_returns_the_patched_draft(client: TestClient) -> None:
+    """⚠️ The route this file exists to add. Until 2026-08-15 it did not exist while the
+    contract and the caller both did, so S5 answered 404 against a real engine — which the
+    caller reports as `503 UPSTREAM_UNAVAILABLE`, pointing at a healthy service."""
+    response = client.post(
+        "/v1/draft:patch",
+        json={
+            "outputType": "single_ad",
+            "brief": BRIEF_FIELDS,
+            "draft": {"adPlan": "기획안", "copy": "원래 카피", "visualPlan": "원래 비주얼"},
+            "patch": {"copy": "새 카피"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "새 카피" in body["draft"]["copy"]
+    assert body["draft"]["visualPlan"] == "원래 비주얼"
+    assert body["guardrailApplied"] is True
+
+
+def test_draft_patch_route_rejects_an_empty_patch(client: TestClient) -> None:
+    response = client.post(
+        "/v1/draft:patch",
+        json={
+            "outputType": "single_ad",
+            "brief": BRIEF_FIELDS,
+            "draft": {"adPlan": "기획안", "copy": "원래 카피", "visualPlan": "원래 비주얼"},
+            "patch": {},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_draft_patch_route_rejects_panels_on_a_single_ad(client: TestClient) -> None:
+    """The 200 this used to return carried the unchanged draft, so a caller checking only
+    the status code learned nothing (2026-08-18 실측)."""
+    response = client.post(
+        "/v1/draft:patch",
+        json={
+            "outputType": "single_ad",
+            "brief": BRIEF_FIELDS,
+            "draft": {"adPlan": "기획안", "copy": "원래 카피", "visualPlan": "원래 비주얼"},
+            "patch": {"panels": {"4": {"dialogue": "새 대사"}}, "copy": "새 카피"},
+        },
+    )
+
+    assert response.status_code == 422, response.text

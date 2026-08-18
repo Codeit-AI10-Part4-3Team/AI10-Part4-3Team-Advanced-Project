@@ -25,8 +25,21 @@ services:
       context: ../apps/ai-engine
     image: adgen-ai-engine:dev
     environment:
-      # 값이 없으면 스텁으로 동작합니다. 실제 키가 들어오면 모델 클라이언트가 읽습니다.
+      # ⚠️ 이 스위치 하나가 스텁과 실물을 가릅니다 (구현_범위 1.1절). 기본값이 `stub` 인
+      #    이유는 켜 두는 쪽이 위험하기 때문입니다 - 키가 있으면 요청마다 요금이 나갑니다.
+      #    실물로 돌릴 때는 `model` 로 두고 아래 키를 반드시 함께 채우세요. 키 없이 `model`
+      #    이면 렌더가 503 으로 명시적으로 실패합니다(스텁으로 되돌아가지 않습니다).
+      ADGEN_GENERATION_MODE: ${ADGEN_GENERATION_MODE:-stub}
+      # ⚠️ 유료 키입니다. **backend 에는 넣지 마세요** - 8000 을 외부에 여는 쪽에 키를 함께
+      #    두지 않는 것이 두 앱을 나눈 이유 중 하나입니다.
       ADGEN_MODEL_API_KEY: ${ADGEN_MODEL_API_KEY:-}
+      # 검증 1순위가 실제로 통과시킨 모델입니다 (2026-08-14).
+      ADGEN_IMAGE_MODEL: ${ADGEN_IMAGE_MODEL:-gpt-image-2}
+      # ⚠️ 비우면 모델이 회차마다 품질 티어를 골라 **비용이 2.3배까지** 벌어집니다
+      #    (2026-08-13 실측). 예산이 걸린 운영에서는 값을 정해 넣으세요.
+      ADGEN_IMAGE_QUALITY: ${ADGEN_IMAGE_QUALITY:-}
+      # 한 장에 54 ~ 122초 (2026-08-14 실측). 기다리는 쪽은 사용자가 아니라 잡 워커입니다.
+      ADGEN_IMAGE_TIMEOUT_S: ${ADGEN_IMAGE_TIMEOUT_S:-300.0}
     ports:
       # ⚠️ 배포에서는 이 포트를 외부에 열지 마세요. 내부 계약 경로(/v1/generate)는 인증이
       #    없습니다. 로컬 디버깅 편의로만 노출합니다.

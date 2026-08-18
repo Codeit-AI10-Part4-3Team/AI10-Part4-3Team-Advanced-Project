@@ -34,6 +34,7 @@ from ai_engine.models import (
     BriefFillResponse,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    DraftPatchEngineRequest,
     Error,
     ImageRenderRequest,
 )
@@ -166,6 +167,22 @@ def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@app.post("/v1/draft:patch", responses={503: UPSTREAM_503})
+def patch_draft(request: DraftPatchEngineRequest) -> DraftGenerateResponse:
+    """Rewrite the named parts of a draft. Same response shape as `draft:generate`.
+
+    ⚠️ This route was missing while the contract and the caller both had it, so every
+    `PATCH /v1/sessions/{id}/draft` against a real engine came back as a 404 — which the
+    caller maps like any other HTTP failure and reports as `503 UPSTREAM_UNAVAILABLE`,
+    sending whoever debugs it to look at a service that is running fine. S5 worked only
+    against the test fake until this landed (2026-08-15).
+    """
+    try:
+        return draft.patch_draft(request, settings())
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @app.post(
     "/v1/image:render",
     responses={
@@ -186,6 +203,8 @@ def render_image(request: ImageRenderRequest) -> Response:
     """
     try:
         payload = render.render_image(request, settings())
-    except NotImplementedError as exc:
+    except (NotImplementedError, render.RenderFailedError) as exc:
+        # ⚠️ 둘 다 503 입니다. "아직 안 만들었다"와 "지금 못 만든다"는 우리에게는 다른
+        # 이야기지만 호출자에게는 같은 답이고, 계약이 이 경로에 준 실패 코드는 하나입니다.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(content=payload, media_type="image/webp")

@@ -1,9 +1,10 @@
-"""The rules no single schema can express: output type versus brief, and versus draft.
+"""The rules no single schema can express: output type versus brief, versus draft, versus
+patch.
 
 The contract carries these as prose ("적용되지 않는 유형에서는 필드 자체가 없습니다") because
-`Brief` has no `outputType` and neither draft shape has a discriminator. Nothing in the
-conformance tests would notice if they stopped being enforced — field names would still
-match — so they get their own tests.
+`Brief` has no `outputType`, neither draft shape has a discriminator, and `DraftPatch` holds
+every type's fields at once. Nothing in the conformance tests would notice if they stopped
+being enforced — field names would still match — so they get their own tests.
 """
 
 import pytest
@@ -13,10 +14,13 @@ from backend_core.models import (
     Brief,
     ComicDraft,
     DraftGenerateRequest,
+    DraftPatch,
     ImageRenderRequest,
     ImageSpec,
+    OutputType,
     Panel,
     SingleAdDraft,
+    check_patch_matches_output_type,
 )
 
 BRIEF_FIELDS = {
@@ -120,6 +124,62 @@ def test_single_ad_output_type_rejects_a_comic_draft() -> None:
     brief, spec = single_ad_brief(), ImageSpec(width=1088, height=1088)
     with pytest.raises(ValidationError, match="expected SingleAdDraft"):
         ImageRenderRequest(output_type="single_ad", brief=brief, draft=COMIC_DRAFT, spec=spec)
+
+
+# ---- 유형에 맞지 않는 패치 필드 --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("output_type", "patch_fields", "expected"),
+    [
+        ("single_ad", {"panels": {"4": {"dialogue": "새 대사"}}}, "panels"),
+        ("single_ad", {"panels": {"4": {"dialogue": "새 대사"}}, "copy": "새 카피"}, "panels"),
+        ("comic", {"copy": "새 카피"}, "copy"),
+        ("comic", {"visualPlan": "새 비주얼"}, "visualPlan"),
+    ],
+    ids=["single_ad + panels", "single_ad + panels and copy", "comic + copy", "comic + visualPlan"],
+)
+def test_a_patch_may_not_name_the_other_output_types_fields(
+    output_type: OutputType, patch_fields: dict[str, object], expected: str
+) -> None:
+    """⚠️ The one of the three with no symptom when it is missing.
+
+    A mismatched brief or draft changes the shape of what comes back; a mismatched patch
+    does not. The engine's stub simply skipped the field that did not apply and returned
+    200 with an unchanged draft, so "the patch was ignored" and "the patch was applied"
+    looked identical on the wire (2026-08-18 실측).
+
+    The `panels and copy` case is the one that made it invisible in practice: the copy did
+    change, so the response was not even suspicious.
+    """
+    patch = DraftPatch.model_validate(patch_fields)
+    with pytest.raises(ValueError, match=expected):
+        check_patch_matches_output_type(output_type, patch)
+
+
+@pytest.mark.parametrize(
+    ("output_type", "patch_fields"),
+    [
+        ("single_ad", {"copy": "새 카피", "visualPlan": "새 비주얼"}),
+        ("comic", {"panels": {"4": {"dialogue": "새 대사"}}}),
+    ],
+    ids=["single_ad", "comic"],
+)
+def test_a_patch_naming_only_its_own_types_fields_is_accepted(
+    output_type: OutputType, patch_fields: dict[str, object]
+) -> None:
+    """The other half — without this the check could reject everything and still pass."""
+    patch = DraftPatch.model_validate(patch_fields)
+    check_patch_matches_output_type(output_type, patch)
+
+
+def test_an_empty_string_in_a_patch_is_an_instruction_not_an_absence() -> None:
+    """⚠️ The check reads `model_fields_set`, not the values. `copy: ""` means "empty it" in
+    this family, so a comic patch naming it is still a mismatch — testing for truthiness
+    would let it through."""
+    patch = DraftPatch.model_validate({"copy": ""})
+    with pytest.raises(ValueError, match="copy"):
+        check_patch_matches_output_type("comic", patch)
 
 
 # ---- 컷과 규격 -----------------------------------------------------------------

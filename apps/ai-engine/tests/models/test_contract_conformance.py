@@ -21,6 +21,8 @@ from ai_engine.models import (
     ComicDraft,
     DraftGenerateRequest,
     DraftGenerateResponse,
+    DraftPatch,
+    DraftPatchEngineRequest,
     Error,
     ImageRenderRequest,
     ImageSpec,
@@ -40,6 +42,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "ComicDraft": ComicDraft,
     "DraftGenerateRequest": DraftGenerateRequest,
     "DraftGenerateResponse": DraftGenerateResponse,
+    "DraftPatch": DraftPatch,
+    "DraftPatchEngineRequest": DraftPatchEngineRequest,
     "Error": Error,
     "ImageRenderRequest": ImageRenderRequest,
     "ImageSpec": ImageSpec,
@@ -54,19 +58,23 @@ SCALAR_ALIASES = {"AdPlan", "GuardrailApplied"}
 
 COVERED_IN_TEST_COMMON = {"ErrorCode", "OutputType"}
 
-DEFERRED = {"DraftPatchEngineRequest"}
-"""`POST /v1/draft:patch`, off the walking skeleton's single pass-through path.
+DEFERRED: set[str] = set()
+"""Nothing is deferred any more.
 
-⚠️ Listed rather than ignored: removing a name here without writing the model turns the
-coverage test red, which is what keeps "deferred" and "forgotten" distinguishable.
+`DraftPatchEngineRequest` sat here while `POST /v1/draft:patch` was unserved. It moved to
+`MODELS` on 2026-08-15 with the route — and `DraftPatch` / `PanelPatchMap` came out of
+`NOT_OURS` at the same time, because the engine does receive them.
 """
+
+ROOT_MODELS = {"PanelPatchMap"}
+"""A `RootModel` — an index-keyed map with no named properties, so the field comparisons
+below do not apply to it. `tests/models/test_patch.py` covers its key pattern instead."""
 
 NOT_OURS = {
     "ArtStyle",
     "BriefMeta",
     "BriefPatch",
     "BriefPatchRequest",
-    "DraftPatch",
     "DraftPatchRequest",
     "FieldMeta",
     "FinalizeAccepted",
@@ -76,7 +84,6 @@ NOT_OURS = {
     "LoginRequest",
     "Me",
     "MessageMode",
-    "PanelPatchMap",
     "Session",
     "SessionCreateRequest",
     "SessionState",
@@ -128,6 +135,12 @@ def test_refusal_reason_matches_the_contract(contract_schemas: dict[str, Any]) -
 def test_every_contract_schema_is_accounted_for(contract_schemas: dict[str, Any]) -> None:
     """No contract schema may be silently missing, and none may be silently added."""
     accounted = (
-        set(MODELS) | set(ENUMS) | SCALAR_ALIASES | COVERED_IN_TEST_COMMON | DEFERRED | NOT_OURS
+        set(MODELS)
+        | set(ENUMS)
+        | SCALAR_ALIASES
+        | COVERED_IN_TEST_COMMON
+        | DEFERRED
+        | ROOT_MODELS
+        | NOT_OURS
     )
     assert set(contract_schemas) == accounted

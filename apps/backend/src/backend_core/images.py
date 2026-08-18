@@ -42,6 +42,67 @@ _MAGIC: dict[str, tuple[bytes, ...]] = {
 
 _SUFFIX = {"jpeg": ".jpg", "png": ".png", "webp": ".webp"}
 
+MEDIA_TYPE = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+"""Suffix to `Content-Type`, for serving a stored file back.
+
+⚠️ Read from the suffix we chose at write time, never from the name the user sent. `store`
+below sniffs the format out of the bytes and picks the suffix from that, so this mapping is
+looking at our own decision rather than at attacker-controlled text.
+"""
+
+
+CACHE_CONTROL = "private, max-age=3600"
+"""The header both image routes send (계약: API_계약.md 8.4절).
+
+⚠️ `private` is the load-bearing half. An uploaded photo may be personal data and a render
+may be someone's brand asset, so neither belongs in a shared cache — and a proxy or HTTPS
+terminator is going in front of this service before deployment (API_계약.md 8.3절). A string
+rather than a header object because `backend_core` stays FastAPI-free (apps/backend/AGENTS.md).
+"""
+
+
+def session_image_url(session_id: UUID) -> str:
+    """Where the uploaded photo is served (계약: `Brief.productImageUrl`).
+
+    ⚠️ **An app-relative path, with no host.** Building an absolute URL would mean the server
+    knowing its own external address, and behind a proxy that address comes from the `Host`
+    header — a value the request supplies, echoed back into a response we store. The HTTPS
+    termination is also still undecided (API_계약.md 8.3절), so any host we baked in now
+    would be wrong after deployment. See API_계약.md 8.4절.
+    """
+    return f"/v1/sessions/{session_id}/image"
+
+
+def result_image_url(job_id: str) -> str:
+    """Where a finished render is served (계약: `JobResult.imageUrl`). Relative, as above."""
+    return f"/v1/jobs/{job_id}/image"
+
+
+def find(image_dir: str | Path, session_id: UUID) -> Path | None:
+    """The stored photo, or `None` once it is gone. The route answers 404 for `None`.
+
+    ⚠️ Searched by suffix rather than remembered, because the database holds the **URL** and
+    the URL does not carry the format. Three candidates at most, and only one can exist:
+    `store` names the file after the session, so a second upload would replace rather than
+    accompany the first.
+
+    `None` is a normal answer, not an error — the photo has 24-hour retention while the
+    session has seven days (세션_보관_정책.md 2절), so a live session with no photo is a
+    state the design creates on purpose.
+    """
+    directory = Path(image_dir)
+    for suffix in MEDIA_TYPE:
+        candidate = directory / f"{session_id}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def find_result(image_dir: str | Path, job_id: str) -> Path | None:
+    """The rendered image, or `None` if the job never finished or the file has expired."""
+    candidate = Path(image_dir) / "results" / f"{job_id}.webp"
+    return candidate if candidate.is_file() else None
+
 
 class InvalidImageError(ValueError):
     """The upload is not an image we accept. The route answers 422 `INVALID_IMAGE`.
@@ -70,7 +131,9 @@ def detect_format(payload: bytes) -> str:
 
 
 def store_result(image_dir: str | Path, job_id: str, payload: bytes) -> str:
-    """Write a finished render. Named after the **job**, not the session.
+    """Write a finished render, and return the URL it is served at.
+
+    Named after the **job**, not the session.
 
     ⚠️ That naming is what makes a retried job idempotent (ADR-0015). A process that dies
     mid-render leaves the job `running`; startup requeues it, and the second attempt writes
@@ -84,7 +147,7 @@ def store_result(image_dir: str | Path, job_id: str, payload: bytes) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / f"{job_id}.webp"
     destination.write_bytes(payload)
-    return str(destination)
+    return result_image_url(job_id)
 
 
 def dimensions(payload: bytes, image_format: str) -> tuple[int, int]:
@@ -159,12 +222,10 @@ def _jpeg_dimensions(payload: bytes) -> tuple[int, int]:
 def store(image_dir: str | Path, session_id: UUID, payload: bytes) -> str:
     """Validate and write the image. Returns the reference stored on the brief.
 
-    ⚠️ The returned value is a **path**, and the contract calls the field `productImageUrl`.
-    They do not match yet: the contract has no route that serves an image back, so there is
-    no URL to build. Storing a path keeps the bytes and their reference together until that
-    route exists, and turning it into a URL is then one function, here. Do not invent the
-    serving route to close the gap — that is contract surface, and the contract comes first
-    (AGENTS.md 교체 순서).
+    ⚠️ The returned value is the **URL**, not the path on disk — `find` above goes the other
+    way when the file has to be served. Until 2026-08-15 this returned a path, because the
+    contract had no route to serve an image back and there was no URL to build (미결정_대장
+    N17). The path leaked into `productImageUrl` and no browser could display it.
     """
     if not payload:
         raise InvalidImageError("이미지가 비어 있습니다.")
@@ -185,4 +246,4 @@ def store(image_dir: str | Path, session_id: UUID, payload: bytes) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / f"{session_id}{_SUFFIX[image_format]}"
     destination.write_bytes(payload)
-    return str(destination)
+    return session_image_url(session_id)

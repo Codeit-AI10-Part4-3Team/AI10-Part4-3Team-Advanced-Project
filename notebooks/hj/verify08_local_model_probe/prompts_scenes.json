@@ -1,0 +1,10 @@
+[
+  {
+    "id": "sceneA_same",
+    "prompt": "A single square advertisement image, clean Korean webtoon illustration style. A pack of gentle bamboo wet wipes, large and centered, product-only shot, soft pale green palette, bamboo stalks in the background, flat clean vector-like shading."
+  },
+  {
+    "id": "sceneB_transfer",
+    "prompt": "A single square advertisement image, clean Korean webtoon illustration style. A refill pouch of bamboo wet wipes standing on a light wooden table next to a small potted bamboo plant, product-only shot, flat clean vector-like shading."
+  }
+]

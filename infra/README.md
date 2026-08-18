@@ -139,7 +139,12 @@ ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
 | `bash scripts/deploy-vm.sh` | `origin/main`으로 fast-forward -> 이미지 재빌드 -> 스택 교체 -> 관통 확인 |
 | `bash scripts/deploy-vm.sh --ref <ref>` | 다른 브랜치·태그·커밋으로. **롤백도 이 경로입니다** |
 | `bash scripts/deploy-vm.sh --check` | 점검만. 아무것도 바꾸지 않습니다 |
-| `bash scripts/deploy-vm.sh --no-build` | 재빌드 없이 재기동. `.env`만 고쳤을 때 |
+| `bash scripts/deploy-vm.sh --no-build` | **체크아웃과 이미지를 그대로 두고** 재기동. `.env`만 고쳤을 때 |
+
+> ⚠️ **`--no-build`는 체크아웃을 갱신하지 않습니다**(`--ref`와 함께 쓸 수 없습니다). 코드를
+> 새 커밋으로 옮기면서 이미지를 옛것으로 두면, 실제로 도는 코드와 `git rev-parse HEAD`가
+> 어긋나 "VM에 뭐가 떠 있나"의 답이 조용히 거짓이 됩니다. 코드를 옮기는 경로는 재빌드하는
+> 쪽 하나뿐입니다 — 소스가 그대로면 레이어 캐시가 걸려 재빌드도 몇 초로 끝납니다.
 
 접속 정보(외부 IP · 프로젝트 ID · 인스턴스명)는 **스크립트에도 이 문서에도 적지 않습니다.**
 저장소가 public이기 때문이며, 접속 경로는

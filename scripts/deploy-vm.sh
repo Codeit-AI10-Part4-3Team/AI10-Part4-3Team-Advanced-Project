@@ -17,8 +17,11 @@
 # 사용: bash scripts/deploy-vm.sh                 origin/main 으로 배포 (재빌드 포함)
 #       bash scripts/deploy-vm.sh --ref <ref>     다른 브랜치·태그·커밋으로 배포
 #       bash scripts/deploy-vm.sh --check         점검만 (fetch·빌드·기동 없음)
-#       bash scripts/deploy-vm.sh --no-build      코드 갱신 없이 재기동만 (.env 변경 반영 등)
+#       bash scripts/deploy-vm.sh --no-build      체크아웃·이미지 그대로 재기동 (.env 변경 반영)
 #       bash scripts/deploy-vm.sh --skip-verify   배포 후 관통 확인 생략
+#
+# ⚠️ --no-build 는 체크아웃을 갱신하지 않습니다(--ref 와 함께 쓸 수 없습니다). 코드를 옮기면서
+#    이미지를 그대로 두면 도는 코드와 `git rev-parse HEAD` 가 어긋납니다.
 # ⚠️ -E(errtrace) 가 있어야 ERR 트랩이 함수 안까지 따라갑니다. 없으면 실패한 배포가 로그도
 #    롤백 안내도 없이 조용히 끝납니다 — 이 스크립트의 실패 처리는 전부 함수 안에서 납니다.
 set -Eeuo pipefail
@@ -40,6 +43,7 @@ BACKEND_PORT="${ADCRAFT_BACKEND_PORT:-8000}"
 DISK_WARN_GB=10
 
 REF="main"
+REF_GIVEN=0
 MODE="deploy"
 DO_BUILD=1
 DO_VERIFY=1
@@ -49,16 +53,25 @@ warn() { echo "  ! $*" >&2; }
 die()  { echo "[중단] $*" >&2; exit 1; }
 
 parse_args() {
+  local arg
   while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --ref)         REF="${2:?--ref 뒤에 브랜치·태그·커밋이 필요합니다}"; shift 2 ;;
+    arg="$1"
+    case "$arg" in
+      --ref)         REF="${2:?--ref 뒤에 브랜치·태그·커밋이 필요합니다}"; REF_GIVEN=1; shift 2 ;;
       --check)       MODE="check"; shift ;;
       --no-build)    DO_BUILD=0; shift ;;
       --skip-verify) DO_VERIFY=0; shift ;;
-      -h|--help)     sed -n '1,25p' "$0"; exit 0 ;;
-      *)             die "모르는 인자: $1 (사용법은 --help)" ;;
+      -h|--help)     sed -n '1,27p' "$0"; exit 0 ;;
+      *)             die "모르는 인자: $arg (사용법은 --help)" ;;
     esac
   done
+
+  # ⚠️ 둘을 같이 받으면 "체크아웃은 옮기고 이미지는 그대로"가 되어, 체크아웃의 커밋 SHA 가
+  #    실제로 도는 코드를 가리키지 않게 됩니다. --ff-only 로 지키려는 성질이 바로 그것이라
+  #    조합 자체를 거부합니다 (PR #117 리뷰, Eastar0102).
+  if [[ "$DO_BUILD" -eq 0 && "$REF_GIVEN" -eq 1 ]]; then
+    die "--no-build 와 --ref 는 같이 쓸 수 없습니다. 코드를 옮기려면 재빌드가 필요합니다."
+  fi
 }
 
 compose() {
@@ -153,7 +166,8 @@ bring_up() {
 }
 
 http_code() {
-  curl -s -o /dev/null -m 10 -w '%{http_code}' "$1" 2>/dev/null || echo "000"
+  local url="$1"
+  curl -s -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null || echo "000"
 }
 
 expect_code() {
@@ -234,8 +248,16 @@ main() {
   prev_sha="$(git rev-parse HEAD)"
   trap 'on_failure "$prev_sha"' ERR
 
-  update_checkout
-  show_changes "$prev_sha"
+  # ⚠️ --no-build 은 체크아웃을 건드리지 않습니다. 갱신만 하고 이미지를 그대로 두면 도는 코드는
+  #    옛것인데 `git rev-parse HEAD` 는 새 커밋을 답해, "VM 에 뭐가 떠 있나"가 조용히 거짓이
+  #    됩니다. 코드를 옮기는 경로는 재빌드하는 쪽 하나뿐입니다 (PR #117 리뷰, Eastar0102).
+  if [[ "$DO_BUILD" -eq 1 ]]; then
+    update_checkout
+    show_changes "$prev_sha"
+  else
+    log "체크아웃 유지 ($(git rev-parse --short HEAD)) — 설정만 다시 읽어 재기동합니다."
+  fi
+
   bring_up
 
   if [[ "$DO_VERIFY" -eq 1 ]]; then

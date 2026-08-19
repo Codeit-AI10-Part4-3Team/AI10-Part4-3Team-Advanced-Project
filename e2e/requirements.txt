@@ -5,3 +5,6 @@ pytest>=8.0.0
 httpx>=0.27.0          # 기동된 서비스에 HTTP로만 접근 (앱 파이썬 import 금지 규약)
 playwright>=1.45.0     # 브라우저 시나리오용 (프론트엔드가 없으면 지워도 됩니다)
 pytest-playwright>=0.5.0
+# 제품 사진을 만들어 씁니다 (conftest.product_image). 픽스처 파일을 커밋하지 않는 이유는
+# 루트 .gitignore 가 화이트리스트 방식이라 새 바이너리가 조용히 빠질 수 있기 때문입니다.
+Pillow>=10.0.0

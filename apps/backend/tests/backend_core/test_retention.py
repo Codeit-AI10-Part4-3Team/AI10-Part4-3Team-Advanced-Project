@@ -256,3 +256,100 @@ def test_a_second_pass_finds_nothing_left_to_do(
 
     assert first.touched()
     assert not second.touched()
+
+
+# ---- 워커와의 경합 --------------------------------------------------------------------------
+
+
+def test_a_session_with_a_render_in_flight_is_left_alone(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """⚠️ Deleting it would strand the result file for ever.
+
+    A job still `running` has no `expiresAt` yet, so the deadline cannot see it. If the batch
+    removed the session and its job row, the worker would write the result a moment later
+    with nothing pointing at it -- and no later pass could collect it, because every pass
+    walks rows. The batch would become a source of exactly the unreclaimable files it exists
+    to prevent (PR #132 리뷰에서 신호정 재현).
+    """
+    at = sessions.now()
+    session = _with_photo(connection, tmp_path, at)
+    job_id = jobs.new_job_id()
+    jobs.enqueue(connection, USER, str(session.session_id), job_id, at.isoformat())
+    jobs.mark_running(connection, job_id)
+
+    report = retention.sweep(connection, tmp_path, POLICY, at + timedelta(days=400))
+
+    assert report.sessions == 0
+    assert sessions.for_user(connection, USER, session.session_id) is not None
+    assert jobs.for_user(connection, USER, job_id) is not None
+
+
+def test_a_queued_job_holds_the_session_too(connection: sqlite3.Connection, tmp_path: Path) -> None:
+    """`queued` is the same case as `running`: the render has not happened yet."""
+    at = sessions.now()
+    session = _with_photo(connection, tmp_path, at)
+    jobs.enqueue(connection, USER, str(session.session_id), jobs.new_job_id(), at.isoformat())
+
+    assert retention.sweep(connection, tmp_path, POLICY, at + timedelta(days=400)).sessions == 0
+
+
+# ---- 사용자 편집과의 경합 -------------------------------------------------------------------
+
+
+def test_the_batch_refuses_to_overwrite_an_edit_that_landed_first(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """⚠️ The batch reads every session at the top of its pass and writes much later.
+
+    Without the guard the blanking UPDATE writes the whole document back, and a user edit
+    that landed in between disappears -- with a 200 already returned and the new value on
+    screen. This is the same window `save` takes a `Precondition` for.
+    """
+    at = sessions.now()
+    session = _with_photo(connection, tmp_path, at)
+
+    # 배치가 읽은 시점의 값.
+    candidates = sessions.expired_candidates(connection)
+    _, revision_when_read, seen = candidates[0]
+
+    # 그 사이 사용자가 저장합니다.
+    found = sessions.for_user(connection, USER, session.session_id)
+    assert found is not None
+    current, was = found
+    current.brief.product_name = "사용자가 고친 이름"
+    current.revision += 1
+    sessions.save(connection, USER, current, was)
+
+    # 이제 배치가 쓰려고 하면 거부돼야 합니다.
+    seen.brief.product_image_url = ""
+    assert sessions.overwrite_document(connection, seen, revision_when_read) is False
+
+    stored = sessions.for_user(connection, USER, session.session_id)
+    assert stored is not None
+    assert stored[0].brief.product_name == "사용자가 고친 이름"
+
+
+def test_the_photo_file_survives_when_the_write_is_refused(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Deleting the file after a refused write would strand a live `productImageUrl`.
+
+    The screen branches on the empty string (API_계약.md 8.4절); a non-empty reference to a
+    file that is gone is the broken `<img>` that rule exists to avoid.
+    """
+    at = sessions.now()
+    session = _with_photo(connection, tmp_path, at)
+    _, revision, seen = sessions.expired_candidates(connection)[0]
+
+    found = sessions.for_user(connection, USER, session.session_id)
+    assert found is not None
+    current, was = found
+    current.revision += 1
+    sessions.save(connection, USER, current, was)
+
+    seen.brief.product_image_url = ""
+    refused = not sessions.overwrite_document(connection, seen, revision)
+
+    assert refused
+    assert images.find(tmp_path, session.session_id) is not None

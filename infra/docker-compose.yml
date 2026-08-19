@@ -111,7 +111,14 @@ services:
       # 업로드 사진은 **렌더 도달 여부와 무관하게** 업로드 시점부터 셉니다.
       ADGEN_RETENTION_PHOTO_H: ${ADGEN_RETENTION_PHOTO_H:-24.0}
       ADGEN_RETENTION_SESSION_D: ${ADGEN_RETENTION_SESSION_D:-7.0}
-      ADGEN_SWEEP_INTERVAL_S: ${ADGEN_SWEEP_INTERVAL_S:-86400.0}
+      # ⚠️ 결과 이미지 기간은 `JobResult.expiresAt` 으로 **클라이언트에게 나가는 약속**이기도
+      #    합니다. 배치가 세션 기간보다 이 약속을 우선하므로, 렌더된 세션의 실제 수명은
+      #    `렌더 시각 + 이 값` 입니다 - 세션 기간만 줄이면 렌더된 세션에는 효과가 없습니다.
+      ADGEN_RETENTION_RESULT_D: ${ADGEN_RETENTION_RESULT_D:-7.0}
+      # ⚠️ 주기가 곧 **실제 삭제가 늦어지는 상한**입니다. 기간이 지나도 다음 패스까지는
+      #    남으므로, 세션_보관_정책 2절의 표를 지키려면 주기가 기간보다 충분히 짧아야
+      #    합니다. 1시간이면 사진 24시간 기준으로 최대 25시간입니다 (PR #132 리뷰, 신호정).
+      ADGEN_SWEEP_INTERVAL_S: ${ADGEN_SWEEP_INTERVAL_S:-3600.0}
       # ⚠️ 끄면 만료가 일어나지 않습니다. 화면에는 아무 증상이 없고 디스크와 보존 기간만
       #    조용히 어긋나므로, 배포에서 false 로 두지 마세요. 테스트 스위트만 끕니다.
       ADGEN_SWEEP_ENABLED: ${ADGEN_SWEEP_ENABLED:-true}

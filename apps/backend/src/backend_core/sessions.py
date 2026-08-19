@@ -263,7 +263,7 @@ def _summarise(session: Session) -> SessionSummary:
     )
 
 
-def expired_candidates(connection: sqlite3.Connection) -> list[tuple[str, Session]]:
+def expired_candidates(connection: sqlite3.Connection) -> list[tuple[str, int, Session]]:
     """Every session, for the retention batch to judge. Newest first is irrelevant here.
 
     ⚠️ A full scan on purpose. The deadline is not a column -- `created_at` lives inside the
@@ -272,13 +272,20 @@ def expired_candidates(connection: sqlite3.Connection) -> list[tuple[str, Sessio
     At this size (a few dozen sessions a day) the scan costs nothing; if the table ever grows
     enough to matter, promote `created_at` to a column and index it -- and move the policy
     with it, not just the query.
+
+    ⚠️ The **column** `revision` comes back too, not just the one inside the document. The
+    batch writes back later, and by then a user may have saved; that value is what
+    `overwrite_document` compares against so the write can refuse instead of clobbering.
     """
-    rows = connection.execute("SELECT session_id, document FROM sessions").fetchall()
-    return [(str(row["session_id"]), Session.model_validate_json(row["document"])) for row in rows]
+    rows = connection.execute("SELECT session_id, revision, document FROM sessions").fetchall()
+    return [
+        (str(row["session_id"]), int(row["revision"]), Session.model_validate_json(row["document"]))
+        for row in rows
+    ]
 
 
-def overwrite_document(connection: sqlite3.Connection, session: Session) -> None:
-    """Replace the stored document in place, touching nothing else.
+def overwrite_document(connection: sqlite3.Connection, session: Session, was: int) -> bool:
+    """Replace the stored document in place, touching nothing else. False if someone got there first.
 
     ⚠️ Not `save`: that one takes a `Precondition` and is for user edits. This is the
     retention batch blanking an expired photo reference, and it must **not** bump `revision`
@@ -286,12 +293,20 @@ def overwrite_document(connection: sqlite3.Connection, session: Session) -> None
     the next patch from an open screen fail with a conflict the user cannot explain.
     `updated_at` is "when the user last changed this", and the session list is ordered by it,
     so bumping it would reshuffle somebody's list because a batch ran at 4am.
+
+    ⚠️ **`was` is not optional, and the `WHERE` clause is the point** -- the same reason
+    `save` above has one. The batch reads every session at the top of its pass and writes
+    much later, so a user edit can land in between; without the guard this UPDATE writes the
+    whole document back and **the edit disappears with a 200 already returned**
+    (PR #132 리뷰에서 신호정 재현). Refusing is safe: the photo is still expired, and the
+    next pass picks it up.
     """
-    connection.execute(
-        "UPDATE sessions SET document = ? WHERE session_id = ?",
-        (session.model_dump_json(by_alias=True), str(session.session_id)),
+    cursor = connection.execute(
+        "UPDATE sessions SET document = ? WHERE session_id = ? AND revision = ?",
+        (session.model_dump_json(by_alias=True), str(session.session_id), was),
     )
     connection.commit()
+    return cursor.rowcount == 1
 
 
 def delete(connection: sqlite3.Connection, session_id: str) -> None:

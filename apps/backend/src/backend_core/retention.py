@@ -24,6 +24,11 @@ Three rules shape the code.
   not come, even if the session itself is past its own period -- deleting the session makes
   the result unreachable (INV-9 turns an orphan into a 404), which is the same broken
   promise by a different route. See `_deadline`.
+- **The batch never races the worker.** A session with a job still `queued` or `running` is
+  left alone entirely. Deleting its rows would not stop the render: the worker writes the
+  result file afterwards, and with no row pointing at it **no later pass can ever collect
+  it** -- the batch would become a source of exactly the unreclaimable files it exists to
+  prevent (PR #132 리뷰에서 신호정 재현). See `_unfinished`.
 - **Blanking is not editing.** When a photo expires the brief's reference becomes `""`, and
   that write must not touch `revision` or `updated_at` (`sessions.overwrite_document`).
 
@@ -101,9 +106,9 @@ def sweep(
     """
     report = SweepReport()
 
-    for session_id, session in sessions.expired_candidates(connection):
+    for session_id, _, session in sessions.expired_candidates(connection):
         owned = jobs.for_session(connection, session_id)
-        if _deadline(session, owned, policy) > now:
+        if _unfinished(owned) or _deadline(session, owned, policy) > now:
             continue
         _drop_session(connection, image_dir, session_id, session, owned)
         report.sessions += 1
@@ -114,14 +119,19 @@ def sweep(
         if _unlink(images.find_result(image_dir, job_id)):
             report.results += 1
 
-    for _, session in sessions.expired_candidates(connection):
+    for _, revision, session in sessions.expired_candidates(connection):
         if session.created_at + policy.photo > now:
             continue
         if not session.brief.product_image_url:
             continue
-        _unlink(images.find(image_dir, session.session_id))
         session.brief.product_image_url = ""
-        sessions.overwrite_document(connection, session)
+        # ⚠️ The row first, the file second, and the write may refuse. If a user edit landed
+        # since this pass started, `overwrite_document` writes nothing and we leave the file
+        # alone -- deleting it there would strand a live `productImageUrl` pointing at
+        # nothing, which is the broken `<img>` the contract's empty-string rule avoids.
+        if not sessions.overwrite_document(connection, session, revision):
+            continue
+        _unlink(images.find(image_dir, session.session_id))
         report.photos += 1
 
     if report.touched():
@@ -132,6 +142,19 @@ def sweep(
             report.sessions,
         )
     return report
+
+
+def _unfinished(owned: list[tuple[str, Job]]) -> bool:
+    """True when a render is still queued or in flight for this session.
+
+    ⚠️ Checked **before** the deadline, not folded into it. A job with no result yet has no
+    `expiresAt` to reason about, so `_deadline` cannot see it at all -- it would count the
+    session as expired and `_drop_session` would delete the job row out from under the
+    worker. Skipping the whole session is the cheap correct answer: the next pass takes it,
+    and by then the render is either done (and its promise counted) or failed (and there is
+    nothing to protect).
+    """
+    return any(job.status in ("queued", "running") for _, job in owned)
 
 
 def _deadline(session: Session, owned: list[tuple[str, Job]], policy: Policy) -> datetime:

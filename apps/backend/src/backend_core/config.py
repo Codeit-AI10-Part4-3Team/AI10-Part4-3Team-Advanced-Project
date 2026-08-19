@@ -163,10 +163,20 @@ class Settings(BaseSettings):
     # 브리프와 시안(텍스트), and the session row that carries them.
     retention_session_d: float = 7.0
 
-    # How often the sweep runs. Daily per the policy. It is a period rather than a wall-clock
-    # time because the process restarts on every deploy and a clock-based schedule would
-    # either fire twice or not at all on those days.
-    sweep_interval_s: float = 86400.0
+    # 결과 이미지. ⚠️ This one is also written onto `JobResult.expiresAt` and **sent to the
+    # client**, so it is a promise, not just a period. The batch honours the promise over the
+    # session period (`retention.sweep`), which means a rendered session lives until
+    # `render time + this` -- shortening `retention_session_d` alone has no effect on it.
+    retention_result_d: float = 7.0
+
+    # ⚠️ The period is also **how late a deletion can be**. Nothing expires on the dot: a
+    # photo passes its 24 hours and then waits for the next pass. With a daily sweep the
+    # real retention was up to 48 hours -- twice what 세션_보관_정책 2절's table promises
+    # (PR #132 리뷰, 신호정). An hour keeps the gap under 25 hours, and a pass is a scan of
+    # a few dozen rows, so the cost is nothing next to holding personal data twice as long.
+    # A period rather than a wall-clock time because the process restarts on every deploy and
+    # a clock-based schedule would either fire twice or not at all on those days.
+    sweep_interval_s: float = 3600.0
 
     # ⚠️ **On by default**, for the same reason the worker is: a deployment that forgets it
     # keeps personal data past its period, and nothing on screen says so. The test suite

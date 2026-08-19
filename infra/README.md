@@ -123,18 +123,18 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
 > `8000`을 함께 열어 둔 것은 `curl`로 계약을 직접 두드리는 경로를 남기기 위해서이며,
 > HTTPS 종단이 들어올 때 닫을지 함께 정합니다.
 
-### 배포 체크아웃은 `/app`
+### 배포 체크아웃은 `/srv/adcraft/app`
 
 배포 트리는 **개인 홈이 아니라 `adcraft` 그룹 소유의 공용 경로 하나**입니다.
 
 ```
-/app/                  <- 배포 체크아웃. deploy-vm.sh 가 여기서만 돕니다
-/srv/adcraft/exp/      <- 공용 실험 폴더. 배포와 무관합니다 (GCP_VM_사용_가이드.md 6절)
+/srv/adcraft/
+├── app/     <- 배포 체크아웃. deploy-vm.sh 가 여기서만 돕니다
+└── exp/     <- 공용 실험 폴더. 배포와 무관합니다 (GCP_VM_사용_가이드.md 6절)
 ```
 
-배포 트리와 실험 폴더가 서로 다른 뿌리에 있는 것은 의도된 것입니다. `exp`는 사람이 쌓는
-작업물이고 `/app`은 스크립트만 건드리는 트리라, 섞어 두면 `du`로 디스크를 볼 때도 "지워도
-되는 것"과 "지우면 배포가 죽는 것"이 한 덩어리로 보입니다.
+`/srv/adcraft`에는 `adcraft` 그룹과 setgid, 기본 ACL이 **이미 걸려 있습니다.** `app`을 그
+아래에 두는 이유가 그것입니다 -- 새 경로에 권한을 처음부터 세울 필요 없이 상속받습니다.
 
 홈에 두지 않는 이유는 셋입니다.
 
@@ -147,48 +147,38 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
   갈아끼웁니다.** 옛 체크아웃에서 실행해도 에러 없이 성공하고, 그때부터 배포된 코드는 아무도
   보고 있지 않은 트리가 됩니다. 실패로 드러나지 않는 것이 이 함정의 전부입니다.
 
-마지막 항목 때문에 `deploy-vm.sh`는 **`/app` 밖에서 실행되면 중단합니다.**
+마지막 항목 때문에 `deploy-vm.sh`는 **`/srv/adcraft/app` 밖에서 실행되면 중단합니다.**
 개인 체크아웃에서 시험 배포를 돌릴 때만 `--allow-any-root`나 `ADCRAFT_DEPLOY_ROOT`로 끕니다.
 
 #### 최초 1회 준비
 
-`adcraft` 그룹과 setgid, 기본 ACL은 `exp`와 같은 방식입니다
-([GCP_VM_사용_가이드.md](../docs/공통_가이드/GCP_VM_사용_가이드.md) 6절). `/`에 만들므로
-디렉토리 생성에 `sudo`가 필요합니다.
+`/srv/adcraft`가 이미 `adcraft` 그룹 · setgid · 기본 ACL 상태이므로
+([GCP_VM_사용_가이드.md](../docs/공통_가이드/GCP_VM_사용_가이드.md) 6절), 그 아래에 만들면
+**그룹과 ACL이 상속됩니다.** 그룹에 속한 계정이면 `sudo` 없이 만들어집니다.
 
 ```bash
-sudo mkdir -p /app
-sudo chgrp -R adcraft /app
-sudo chmod -R 2770 /app            # setgid: 새 파일이 그룹을 상속합니다
-sudo setfacl -R -d -m g::rwx /app  # 기본 ACL: umask 가 그룹 쓰기를 지우는 것을 막습니다
+mkdir -p /srv/adcraft/app
+git clone <저장소 URL> /srv/adcraft/app
 
-git clone <저장소 URL> /app
-git -C /app config core.sharedRepository group
-sudo git config --system --add safe.directory /app
+git -C /srv/adcraft/app config core.sharedRepository group
+sudo git config --system --add safe.directory /srv/adcraft/app
 ```
 
-> ⚠️ **`/app`은 부팅 디스크의 100GB를 `/srv`, `/home`과 함께 나눠 씁니다.** 별도 파티션이
-> 아니므로 `df -h /` 하나로 보면 되고(가이드 7-b절), 도커 이미지와 빌드 캐시가 같은 디스크를
-> 먹는다는 점도 그대로입니다.
+만든 뒤 상속이 실제로 됐는지 한 번 봅니다. `drwxrws---` 와 그룹 `adcraft` 가 나와야 합니다.
 
-#### 호스트의 `/app`과 컨테이너의 `/app`은 다른 것입니다
+```bash
+ls -ld /srv/adcraft/app
+```
 
-두 앱의 Dockerfile이 `WORKDIR /app`을 씁니다(`apps/backend/Dockerfile`,
-`apps/ai-engine/Dockerfile`). **이름만 같고 서로 만나지 않습니다** -- 컨테이너의 `/app`은
-이미지에 구워진 코드이고, 호스트의 `/app`은 그 이미지를 빌드하는 체크아웃입니다. compose에
-`/app`을 거는 바인드 마운트는 없습니다(볼륨은 `adgen-state:/data` 하나).
+`s`(setgid)가 없거나 그룹이 다르면 상위 경로 설정이 빠진 것입니다. 그때만 직접 겁니다:
 
-그래서 로그나 에러 메시지의 `/app`을 읽을 때 **컨테이너 안인지 밖인지 먼저 확인하세요.**
-`ADGEN_DB_PATH`를 상대 경로로 두면 컨테이너의 `/app` 기준으로 풀린다는 기존 함정
-([ADR-0014](../docs/adr/0014-상태_파일은_이름_있는_볼륨에_둔다.md))은 그대로이며, 호스트
-경로가 같은 이름이 된 것과는 무관합니다.
+```bash
+sudo chgrp -R adcraft /srv/adcraft/app
+sudo chmod -R 2770 /srv/adcraft/app
+sudo setfacl -R -d -m g::rwx /srv/adcraft/app
+```
 
-> ⚠️ **호스트 `/app`을 컨테이너에 바인드 마운트하지 마세요.** 이름이 같아서 "그럼 연결해
-> 두면 편하지 않나"가 나오기 쉬운 자리인데, 그러면 이미지에 구워진 코드를 체크아웃이 덮어
-> 실제로 도는 코드와 `docker image`의 내용이 갈립니다. `--no-build`를 `--ref`와 함께 쓰지
-> 못하게 막아 둔 것과 같은 이유입니다(아래 절).
-
-마지막 두 줄이 **여러 사람이 같은 체크아웃을 만지기 때문에** 필요한 부분입니다.
+git 설정 두 줄이 **여러 사람이 같은 체크아웃을 만지기 때문에** 필요한 부분입니다.
 
 - `core.sharedRepository=group` 없이 두면 A가 `fetch`로 만든 객체 파일에 그룹 쓰기가 빠져
   B의 다음 `fetch`가 권한 오류로 죽습니다.
@@ -210,11 +200,11 @@ sudo git config --system --add safe.directory /app
 # 1. 위 "최초 1회 준비"를 먼저 끝냅니다.
 
 # 2. .env 는 ignore 파일이라 clone 에 따라오지 않습니다. 손으로 옮기는 유일한 파일입니다.
-cp ~/adcraft/infra/.env /app/infra/.env
-chmod 660 /app/infra/.env          # 그룹은 읽고, 그 밖은 못 읽게
+cp ~/adcraft/infra/.env /srv/adcraft/app/infra/.env
+chmod 660 /srv/adcraft/app/infra/.env          # 그룹은 읽고, 그 밖은 못 읽게
 
 # 3. 새 경로에서 배포합니다. 여기서 계정 건수가 이관 전과 같아야 합니다.
-cd /app && bash scripts/deploy-vm.sh
+cd /srv/adcraft/app && bash scripts/deploy-vm.sh
 
 # 4. 옛 체크아웃을 실행할 수 없게 만듭니다. 남겨 두면 언젠가 거기서 배포합니다.
 #    (스크립트의 경로 검사가 막지만, 막힌 뒤에야 알게 되는 것보다 낫습니다.)
@@ -236,7 +226,7 @@ SA 키를 발급할 수 없어 배포는 **SSH 수동 경로**입니다(아래 "
 **VM 안에서** 실행합니다. 원격에서는 SSH로 감쌉니다:
 
 ```bash
-ssh "$ADCRAFT_VM" 'cd /app && bash scripts/deploy-vm.sh'
+ssh "$ADCRAFT_VM" 'cd /srv/adcraft/app && bash scripts/deploy-vm.sh'
 ```
 
 | 명령 | 하는 일 |
@@ -258,7 +248,7 @@ ssh "$ADCRAFT_VM" 'cd /app && bash scripts/deploy-vm.sh'
 
 스크립트가 사람 대신 지키는 것은 다섯입니다. 손으로 배포할 때도 같은 순서를 지키세요:
 
-- **`/app` 밖에서는 실행되지 않습니다.** 옛 체크아웃에서 돌린 배포는 에러 없이
+- **`/srv/adcraft/app` 밖에서는 실행되지 않습니다.** 옛 체크아웃에서 돌린 배포는 에러 없이
   성공해서, 실패가 아니라 "아무도 안 보는 트리가 떠 있는 상태"로 나타납니다 (위 절).
 - **`infra/.env` 없이 기동하지 않습니다.** 없으면 `ADGEN_ACCOUNTS`가 빈 문자열로 넘어가고,
   `seed([])`는 아무것도 지우지 않으므로 **기동은 성공한 채 로그인만 어긋납니다.** 배포 실패로

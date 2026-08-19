@@ -2,12 +2,13 @@
 # GCP VM 배포 — 체크아웃을 목표 ref 로 올리고 compose 스택을 교체한 뒤 관통 확인까지 합니다.
 # **VM 안에서** 실행합니다. 로컬에서 원격으로 돌릴 때는 SSH 로 감싸세요:
 #
-#     ssh "$ADCRAFT_VM" 'cd /app && bash scripts/deploy-vm.sh'
+#     ssh "$ADCRAFT_VM" 'cd /srv/adcraft/app && bash scripts/deploy-vm.sh'
 #
-# ⚠️ 배포 체크아웃은 `/app` 하나입니다 — 개인 홈이 아닙니다. 홈에 두면 그 계정이 빠질 때 배포
-#    경로가 함께 사라지고, 다른 사람은 남의 홈을 들여다볼 수도 고칠 수도 없습니다. `/app` 은
-#    `adcraft` 그룹 소유의 공용 경로입니다(infra/README.md '배포 체크아웃은 /app').
-#    이 스크립트는 그 경로 밖에서 실행되면 중단합니다 — 아래 check_deploy_root 참고.
+# ⚠️ 배포 체크아웃은 `/srv/adcraft/app` 하나입니다 — 개인 홈이 아닙니다. 홈에 두면 그 계정이
+#    빠질 때 배포 경로가 함께 사라지고, 다른 사람은 남의 홈을 들여다볼 수도 고칠 수도 없습니다.
+#    `/srv/adcraft` 는 `adcraft` 그룹 소유의 공용 경로이고(GCP_VM_사용_가이드.md 6절),
+#    `exp` 와 형제로 `app` 을 둡니다. 이 스크립트는 그 경로 밖에서 실행되면 중단합니다 —
+#    아래 check_deploy_root 참고.
 #
 # ⚠️ 접속 정보(외부 IP·프로젝트 ID·인스턴스명)를 이 파일에 적지 마세요 — 저장소가 public 입니다.
 #    접속 경로는 docs/공통_가이드/GCP_VM_사용_가이드.md, 권한 경계는 ADR-0011 에 있습니다.
@@ -38,16 +39,16 @@ set -Eeuo pipefail
 #    엉뚱한 지점을 실행합니다. 마지막 줄까지 파싱을 끝낸 뒤 실행에 들어가면 그 창이 닫힙니다.
 
 # ⚠️ `-P` 로 심볼릭 링크를 풀어 실제 경로를 씁니다. 아래 배포 경로 검사는 문자열 비교인데,
-#    링크를 안 풀면 같은 트리가 들어온 문으로 통과했다 막혔다 합니다. 특히 `/app` 이 누군가의
-#    홈을 가리키는 링크로 바뀌어 있으면, 링크를 안 푼 검사는 그것을 통과시킵니다.
+#    링크를 안 풀면 같은 트리가 들어온 문으로 통과했다 막혔다 합니다. 특히 배포 경로가
+#    누군가의 홈을 가리키는 링크로 바뀌어 있으면, 링크를 안 푼 검사는 그것을 통과시킵니다.
 ROOT="$(cd -P "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILE="infra/docker-compose.yml"
 ENV_FILE="infra/.env"
 
-# 배포 체크아웃의 정본 경로. 개인 홈이 아니라 `adcraft` 그룹 소유의 공용 경로입니다
-# (infra/README.md '배포 체크아웃은 /app'). 다른 곳에 체크아웃해 두고 시험 배포를 돌리려면
-# 이 변수를 넘기거나 --allow-any-root 를 쓰세요.
-DEPLOY_ROOT="${ADCRAFT_DEPLOY_ROOT:-/app}"
+# 배포 체크아웃의 정본 경로. 개인 홈이 아니라 `adcraft` 그룹 소유의 공용 경로이며
+# `/srv/adcraft/exp` 와 형제입니다 (GCP_VM_사용_가이드.md 6절). 다른 곳에 체크아웃해 두고
+# 시험 배포를 돌리려면 이 변수를 넘기거나 --allow-any-root 를 쓰세요.
+DEPLOY_ROOT="${ADCRAFT_DEPLOY_ROOT:-/srv/adcraft/app}"
 
 # compose 의 포트 매핑과 같아야 합니다. 바꿀 일이 생기면 compose 쪽이 정본입니다.
 FRONTEND_PORT="${ADCRAFT_FRONTEND_PORT:-80}"
@@ -113,15 +114,15 @@ check_deploy_root() {
   echo "       지금 위치: $ROOT" >&2
   echo "       정본 경로: $DEPLOY_ROOT" >&2
   if [[ "$ROOT" == "$HOME"/* || "$ROOT" == /home/* ]]; then
-    echo "       개인 홈의 체크아웃입니다. 배포는 /app 에서만 합니다 —" >&2
-    echo "       이관 절차는 infra/README.md '배포 체크아웃은 /app' 절." >&2
+    echo "       개인 홈의 체크아웃입니다. 배포는 /srv/adcraft/app 에서만 합니다 —" >&2
+    echo "       이관 절차는 infra/README.md '배포 체크아웃은 /srv/adcraft/app' 절." >&2
   fi
   echo "       시험 목적이면: --allow-any-root, 또는 ADCRAFT_DEPLOY_ROOT=$ROOT" >&2
   exit 1
 }
 
-# `/app` 은 여러 사람이 같은 체크아웃을 만지는 그룹 공유 경로입니다. 여기서 나는 두 가지
-# 실패는 증상만 보면 코드 문제로 보이므로 먼저 진단해 둡니다.
+# `/srv/adcraft` 는 여러 사람이 같은 체크아웃을 만지는 그룹 공유 경로입니다. 여기서 나는
+# 두 가지 실패는 증상만 보면 코드 문제로 보이므로 먼저 진단해 둡니다.
 check_shared_checkout() {
   # git 2.35.2+ 는 소유자가 다른 저장소를 거부합니다("dubious ownership"). A 가 클론하고
   # B 가 배포하는 순간 첫 git 명령에서 터지는데, 메시지가 배포와 무관해 보입니다.

@@ -308,23 +308,18 @@ verify() {
 
   if [[ -n "$host" ]]; then
     echo "    INFO 공개 호스트: ${host} (HTTPS)"
+
+    # 80 이 리다이렉트로 살아 있는지 **먼저** 봅니다. 닫으면 인증서 갱신 검증이 못
+    # 들어옵니다 (ADR-0016). Caddy 는 Host 와 무관하게 308 입니다 (2026-08-19 실측).
+    # 아래에서 CURL_RESOLVE 를 채우기 전에 두는 것은 이 확인만 평문이기 때문입니다.
+    expect_code "http://127.0.0.1:${PROXY_HTTP_PORT}/" 308 "80 -> HTTPS 리다이렉트" || ok=1
+
     base="https://${host}"
     # ⚠️ **--resolve 로 loopback 에 붙입니다.** GCP VM 은 자기 외부 IP 로 되돌아오지 못하므로
     #    이름을 그대로 쓰면 배포는 멀쩡한데 이 확인만 실패합니다. SNI 와 Host 에는 진짜
     #    이름이 그대로 실리므로 **인증서 검증을 건너뛰는 것이 아닙니다** - 발급이 실패했으면
     #    여기서 걸립니다. 그것이 이 확인의 목적입니다.
     CURL_RESOLVE=(--resolve "${host}:${PROXY_HTTPS_PORT}:127.0.0.1")
-
-    # 80 이 리다이렉트로 살아 있는지. **닫으면 인증서 갱신 검증이 못 들어옵니다** (ADR-0016).
-    # Caddy 는 Host 와 무관하게 308 을 돌려줍니다 (2026-08-19 실측).
-    local redirect
-    redirect="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://127.0.0.1:${PROXY_HTTP_PORT}/" 2>/dev/null || echo "000")"
-    if [[ "$redirect" == "308" ]]; then
-      echo "    OK   80 -> HTTPS 리다이렉트 (308)"
-    else
-      echo "    실패 80 -> HTTPS 리다이렉트 (기대 308, 실제 $redirect)"
-      ok=1
-    fi
   else
     base="http://127.0.0.1:${PROXY_HTTP_PORT}"
     warn "평문 HTTP 로 떠 있습니다 (ADGEN_PUBLIC_HOST 미설정) — 아래 확인은 통과해도 브라우저 로그인은 성립하지 않습니다."

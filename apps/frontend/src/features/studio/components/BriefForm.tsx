@@ -1,29 +1,72 @@
-import { useState, type FormEvent } from "react";
-import type { BriefInput, OutputType } from "../types";
+import { useEffect, useState, type FormEvent } from "react";
+import { listArtStyles } from "../api";
+import { OUTPUT_TYPE_LABEL } from "../labels";
+import type { ArtStyle, OutputType, SessionCreateInput } from "../types";
 
 interface BriefFormProps {
-  onPreview: (brief: BriefInput) => void;
+  onSubmit: (input: SessionCreateInput) => void;
+  pending: boolean;
 }
 
-const initialBrief: BriefInput = {
+/** 계약의 `SessionCreateRequest.productImage` 가 정한 상한입니다. */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+type TextFields = Omit<SessionCreateInput, "productImage">;
+
+const INITIAL: TextFields = {
   outputType: "single_ad",
   productName: "",
   sellingPoint: "",
   note: "",
   artStyle: "",
-  productImageName: "",
 };
 
-export function BriefForm({ onPreview }: BriefFormProps) {
-  const [brief, setBrief] = useState(initialBrief);
+export function BriefForm({ onSubmit, pending }: BriefFormProps) {
+  const [fields, setFields] = useState<TextFields>(INITIAL);
+  const [image, setImage] = useState<File | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [artStyles, setArtStyles] = useState<ArtStyle[]>([]);
 
-  const update = <K extends keyof BriefInput>(key: K, value: BriefInput[K]) => {
-    setBrief((current) => ({ ...current, [key]: value }));
+  // ⚠️ **후보 목록은 지금 비어 있는 것이 정상입니다** (미결정_대장 A절 3번, 차단). 그래서
+  // 화면에 그럴듯한 값을 적어 두지 않습니다 - 여기에 손으로 적은 값은 그대로 브리프에 실려
+  // 세션에 저장되고, 나중에 진짜 후보가 정해지면 어느 세션이 무엇으로 생성됐는지 알 수 없게
+  // 됩니다. 비어 있으면 미선택으로 보내고 서버가 채웁니다.
+  useEffect(() => {
+    let cancelled = false;
+
+    listArtStyles()
+      .then((next) => {
+        if (!cancelled) setArtStyles(next);
+      })
+      .catch((error: unknown) => {
+        // 화풍은 선택 항목입니다. 목록을 못 읽었다고 입력 자체를 막으면 필수도 아닌 것이
+        // 관통을 세웁니다.
+        if (!cancelled) console.warn("화풍 목록을 불러오지 못했습니다.", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const update = <K extends keyof TextFields>(key: K, value: TextFields[K]) => {
+    setFields((current) => ({ ...current, [key]: value }));
+  };
+
+  const pickImage = (file: File | undefined) => {
+    setImage(file ?? null);
+    // 크기만 먼저 봅니다. 형식과 짧은 변 512px 은 서버가 판정하며(422 `INVALID_IMAGE`),
+    // 여기서 다시 구현하면 두 판정이 어긋날 때 어느 쪽이 맞는지 정할 근거가 없습니다.
+    // 크기를 예외로 둔 이유는 10MB 를 올려 보내고 나서 거절당하는 왕복이 아깝기 때문입니다.
+    setImageError(
+      file !== undefined && file.size > MAX_IMAGE_BYTES ? "이미지가 10MB 를 넘습니다." : null,
+    );
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onPreview(brief);
+    if (image === null || imageError !== null) return;
+    onSubmit({ ...fields, productImage: image });
   };
 
   return (
@@ -43,11 +86,11 @@ export function BriefForm({ onPreview }: BriefFormProps) {
               key={type}
               type="button"
               role="tab"
-              aria-selected={brief.outputType === type}
-              className={brief.outputType === type ? "active" : ""}
+              aria-selected={fields.outputType === type}
+              className={fields.outputType === type ? "active" : ""}
               onClick={() => update("outputType", type)}
             >
-              {type === "single_ad" ? "단일 광고" : "6컷 광고 만화"}
+              {OUTPUT_TYPE_LABEL[type]}
             </button>
           ))}
         </div>
@@ -59,15 +102,16 @@ export function BriefForm({ onPreview }: BriefFormProps) {
             type="file"
             accept="image/png,image/jpeg,image/webp"
             required
-            onChange={(event) => update("productImageName", event.target.files?.[0]?.name ?? "")}
+            onChange={(event) => pickImage(event.target.files?.[0])}
           />
           <small>JPEG, PNG, WebP · 최대 10MB · 짧은 변 512px 이상</small>
         </label>
+        {imageError !== null && <p className="form-error">{imageError}</p>}
 
         <label className="field">
           <span>제품명 *</span>
           <input
-            value={brief.productName}
+            value={fields.productName}
             maxLength={40}
             required
             placeholder="예: 행복 블렌드 커피"
@@ -78,31 +122,43 @@ export function BriefForm({ onPreview }: BriefFormProps) {
         <label className="field">
           <span>핵심 소구점 *</span>
           <textarea
-            value={brief.sellingPoint}
+            value={fields.sellingPoint}
             maxLength={200}
             required
             rows={3}
             placeholder="광고가 근거로 사용할 제품의 실제 특징을 적어주세요."
             onChange={(event) => update("sellingPoint", event.target.value)}
           />
-          <small>{brief.sellingPoint.length}/200</small>
+          {/* 여기 적은 것이 가드레일의 **근거 원문**입니다. 없는 효능과 수치는 생성물에
+              등장할 수 없으므로, 비어 있을수록 시안이 거절될 확률이 올라갑니다. */}
+          <small>{fields.sellingPoint.length}/200</small>
         </label>
 
         <label className="field">
           <span>화풍</span>
-          <select value={brief.artStyle} onChange={(event) => update("artStyle", event.target.value)}>
+          <select
+            value={fields.artStyle}
+            disabled={artStyles.length === 0}
+            onChange={(event) => update("artStyle", event.target.value)}
+          >
             <option value="">무작위 추천</option>
-            <option value="minimal">미니멀</option>
-            <option value="warm-daily">따뜻한 일상</option>
-            <option value="bold-pop">선명한 팝</option>
+            {artStyles.map((style) => (
+              <option key={style.artStyleId} value={style.artStyleId}>
+                {style.name}
+              </option>
+            ))}
           </select>
-          <small>실제 목록은 `GET /v1/art-styles` 응답으로 교체합니다.</small>
+          <small>
+            {artStyles.length === 0
+              ? "화풍 후보가 아직 정해지지 않았습니다. 서버가 무작위로 채웁니다."
+              : "고르지 않으면 서버가 후보군에서 무작위로 채웁니다."}
+          </small>
         </label>
 
         <label className="field">
           <span>추가 메모</span>
           <textarea
-            value={brief.note}
+            value={fields.note}
             maxLength={500}
             rows={3}
             placeholder="캐릭터, 금지 표현, 꼭 포함할 문구 등을 적어주세요."
@@ -110,7 +166,9 @@ export function BriefForm({ onPreview }: BriefFormProps) {
           />
         </label>
 
-        <button className="submit-button" type="submit">브리프 확인하기</button>
+        <button className="submit-button" type="submit" disabled={pending || imageError !== null}>
+          {pending ? "세션을 만드는 중..." : "광고 만들기 시작"}
+        </button>
       </form>
     </section>
   );

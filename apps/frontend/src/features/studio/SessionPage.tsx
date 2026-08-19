@@ -47,7 +47,14 @@ function SessionView({ sessionId }: { sessionId: string }) {
 
   // 잡이 끝나면 세션을 다시 읽습니다. 잡의 `done` 과 세션의 `completed` 는 다른 층이고
   // (용어_사전.md 1.4절), 세션 쪽 전이는 서버가 별도로 기록하므로 화면이 추측하지 않습니다.
-  const { job, error: jobError, retry: retryJob } = useRenderJob(session?.jobId, reload);
+  //
+  // ⚠️ 조회 실패는 `report` 로 넘깁니다. 폴링만 따로 문구를 만들면 401 이 로그아웃을 거치지
+  // 않고 배너로 남아, 만료된 사용자가 `다시 시도` 를 눌러도 같은 화면만 다시 봅니다.
+  const {
+    job,
+    stopped: pollingStopped,
+    retry: retryJob,
+  } = useRenderJob(session?.jobId, reload, report);
 
   const run = async (kind: "draft" | "finalize") => {
     clear();
@@ -101,19 +108,22 @@ function SessionView({ sessionId }: { sessionId: string }) {
         </div>
       </header>
 
-      {message !== null && (
+      {/* 배너는 하나입니다. 문구는 `report` 가 만들고(401 은 여기 오지 않고 로그아웃됩니다),
+          폴링이 멈췄을 때만 되살릴 길을 덧붙입니다. 둘로 나누면 같은 실패에 빨간 상자가 두 개
+          뜹니다. `pollingStopped` 를 조건에 함께 둔 것은 `clear()` 로 문구가 지워져도 복구
+          버튼은 남아야 하기 때문입니다. */}
+      {(message !== null || pollingStopped) && (
         <p className="workspace-error" role="alert">
           {message}
-        </p>
-      )}
-      {jobError !== null && (
-        <p className="workspace-error" role="alert">
-          {describe(jobError)} 상태 조회가 멈췄습니다.{" "}
-          {/* 멈춘 폴링을 되살리는 유일한 경로입니다. 새로고침으로도 되지만 그것은 사용자가
-              알아내야 하는 방법이라, 화면이 물어야 할 자리를 여기서 만듭니다. */}
-          <button type="button" className="link-button" onClick={retryJob}>
-            다시 시도
-          </button>
+          {pollingStopped && (
+            <>
+              {message !== null && " "}
+              상태 조회가 멈췄습니다.{" "}
+              <button type="button" className="link-button" onClick={retryJob}>
+                다시 시도
+              </button>
+            </>
+          )}
         </p>
       )}
 

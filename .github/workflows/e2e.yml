@@ -50,7 +50,11 @@ jobs:
         run: |
           cp infra/.env.example infra/.env 2>/dev/null || true
           docker compose -f infra/docker-compose.yml up -d --wait
-          echo "E2E_BASE_URL=http://localhost:8000" >> "$GITHUB_ENV"
+          # ⚠️ 8000 이 아니라 80 입니다. backend 는 더 이상 호스트에 발행되지 않고, 스택의
+          #    진입점은 앞단 프록시 하나입니다 (ADR-0016). `.env.example` 에
+          #    `ADGEN_PUBLIC_HOST` 가 비어 있으므로 여기서는 평문 HTTP 로 뜹니다 - 인증서
+          #    발급은 CI 에서 일어나지 않습니다.
+          echo "E2E_BASE_URL=http://localhost" >> "$GITHUB_ENV"
 
       # 브라우저 시나리오(딥링크 진입 → 위치 1회 확인)는 chromium만 설치해 잡 시간을 줄입니다.
       - name: Install browser

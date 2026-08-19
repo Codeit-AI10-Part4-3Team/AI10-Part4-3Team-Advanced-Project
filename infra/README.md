@@ -11,7 +11,8 @@ docker compose -f infra/docker-compose.yml up --build
 
 | 파일 | 역할 |
 |---|---|
-| `docker-compose.yml` | 전체 스택(backend + ai-engine). 로컬과 배포가 같은 파일을 씁니다 |
+| `docker-compose.yml` | 전체 스택(caddy + frontend + backend + ai-engine). 로컬과 배포가 같은 파일을 씁니다 |
+| `Caddyfile` | 앞단 프록시 설정. **HTTPS 종단 지점**입니다 ([ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md)) |
 | `.env.example` | **키 이름만** 담은 템플릿. 값은 절대 넣지 마세요 |
 | `.env` | 실제 값 — `.gitignore` 대상. 존재해도 커밋되지 않습니다 |
 
@@ -115,13 +116,36 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
 | OS | `common-cu129-ubuntu-2404-nvidia-580-stage` (콘솔 표기 `Deep Learning VM with CUDA M132`) — Ubuntu 24.04, CUDA 12.9, Python 3.12. **PyTorch 미포함 판** |
 | 스냅샷 일정 | 정책 `adcraft-daily-snap`. UTC 18:00 (KST 03:00), **보존 7일**, `apply-retention-policy` |
 | SSH | **22번을 `0.0.0.0/0`에 열어 둡니다(의도된 상태).** 아래 "SSH 접근 경로" 참고 |
-| 외부 노출 포트 | frontend `80` + backend `8000`. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
+| 외부 노출 포트 | 프록시의 `80` + `443` 둘뿐. **ai-engine `8100`은 절대 열지 마세요** (내부 계약 경로에 인증이 없습니다) |
 
-> **2026-08-15: frontend 서비스가 붙으면서 노출 포트가 둘이 됐습니다.** 브라우저는 `80`
-> 하나만 보고 `/v1`은 컨테이너 안에서 backend 로 넘어갑니다 (`apps/frontend/nginx.conf`) --
-> 다른 출처로 나뉘면 세션 쿠키가 실리지 않아 로그인이 성립하지 않기 때문입니다.
-> `8000`을 함께 열어 둔 것은 `curl`로 계약을 직접 두드리는 경로를 남기기 위해서이며,
-> HTTPS 종단이 들어올 때 닫을지 함께 정합니다.
+> **2026-08-19: HTTPS 종단이 들어오면서 호스트에 열리는 포트가 프록시의 것 둘만 남았습니다**
+> ([ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md)). frontend `80`과
+> backend `8000`은 더 이상 발행되지 않습니다 -- 브라우저도 `curl`도 프록시를 거칩니다.
+> `8000`을 닫는 쪽을 택한 이유는 열어 두면 **로그인 비밀번호를 평문으로 받는 문이 하나
+> 남기** 때문입니다 (ADR-0008). 한 출처라는 성질은 그대로이고(`/v1`은 여전히 컨테이너
+> 안에서 backend 로 넘어갑니다), 그것이 세션 쿠키가 실리는 조건입니다.
+
+### HTTPS (2026-08-19, ADR-0016)
+
+앞단의 `caddy` 서비스가 TLS 를 종단하고, 인증서는 Let's Encrypt 에서 자동 발급받습니다.
+**켜고 끄는 것은 환경변수 하나입니다.**
+
+| `ADGEN_PUBLIC_HOST` | 결과 |
+|---|---|
+| 비어 있음 | 프록시가 `:80` 평문으로 뜹니다. 로컬 개발과 CI 가 이 상태입니다 |
+| 호스트명 | 그 이름으로 인증서를 자동 발급하고 HTTPS 를 켭니다. `80`은 리다이렉트가 됩니다 |
+
+- ⚠️ **배포에서 이 값을 비워 두지 마세요.** 세션 쿠키가 `Secure` 라 브라우저가 버리고,
+  증상은 "로그인은 되는데 새로고침하면 풀림" 입니다 (2026-08-18 실측).
+- ⚠️ **값을 커밋하지 마세요.** `<외부 IP>.sslip.io` 형태라 그 문자열 자체가 외부 IP 입니다
+  ([GCP_VM_사용_가이드.md](../docs/공통_가이드/GCP_VM_사용_가이드.md) 2-b절).
+  값은 `infra/.env`, 이름만 `.env.example`.
+- ⚠️ **`80`을 닫지 마세요.** HTTPS 를 켜면 리다이렉트만 하는 것처럼 보이지만 **인증서 발급과
+  갱신 검증이 그 포트로 들어옵니다.**
+- 인증서와 ACME 계정 키는 `adgen-caddy-data` 볼륨에 있습니다. `docker compose down -v` 는
+  이것도 지우고, 지우면 다음 기동이 재발급을 시도해 발급 한도를 먹습니다.
+- 발급이 실패하면 `docker compose logs caddy` 에 즉시 드러납니다. 한도로 막히면 ADR-0016 의
+  선택지 B(자체 서명)로 내려가고 그 ADR 을 갱신합니다.
 
 ### 상태는 `adgen-state` 볼륨 안에 있습니다
 
@@ -188,9 +212,19 @@ VPC 는 **학원이 여러 팀에 함께 배정한 `default` 네트워크**입�
 
 여기서 나오는 결론이 둘입니다.
 
-- **8000 용 방화벽 규칙을 새로 만들 필요가 없습니다.** `allow-backend`(tcp:8000) 와
-  `allow-ai-services`(tcp:3000,5432,8000,8890,8891,8892) 가 둘 다 태그 없이 열려 있어 배포하면
-  바로 외부에서 닿습니다.
+- **80 용 방화벽 규칙을 새로 만들 필요가 없습니다.** 태그 없는 규칙이 이미 열어 두고 있습니다.
+  **443 은 확인이 필요합니다** -- 없으면 우리가 만듭니다(규칙 생성 권한은 위 표에서 확인됨):
+
+  ```bash
+  gcloud compute firewall-rules list --filter="allowed[].ports~'443'" --format='table(name,sourceRanges.list(),allowed[].map().firewall_rule().list())'
+  # 없으면
+  gcloud compute firewall-rules create allow-https --allow=tcp:443 --source-ranges=0.0.0.0/0 --description='ADR-0016 HTTPS 종단'
+  ```
+
+- **8000 이 열려 있다는 사실 자체는 그대로입니다.** `allow-backend`(tcp:8000) 와
+  `allow-ai-services`(tcp:3000,5432,8000,8890,8891,8892) 가 태그 없이 열려 있고 우리는 그
+  규칙을 지울 수 없습니다. **그래서 compose 가 8000 을 발행하지 않는 것이 방어선입니다**
+  (ADR-0016) -- `ports:` 한 줄을 되살리면 그 순간 평문 로그인 창구가 인터넷에 공개됩니다.
 - **⚠️ 태그 없이 열려 있는 포트에 `0.0.0.0` 으로 바인딩하지 마세요.** 2026-08-12 기준
   `3000 · 5432 · 8000 · 8003 · 8501 · 8888 · 8890~8893 · 3389` 입니다. 여기에 붙이는 순간
   인터넷에 공개됩니다. Jupyter 를 `--ip=0.0.0.0` 으로 띄우지 말라는 규칙(사용 가이드 4-e절)이

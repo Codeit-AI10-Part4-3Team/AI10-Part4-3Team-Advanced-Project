@@ -163,7 +163,7 @@ ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
 | `bash scripts/deploy-vm.sh` | `origin/main`으로 fast-forward -> 이미지 재빌드 -> 스택 교체 -> 관통 확인 |
 | `bash scripts/deploy-vm.sh --ref <ref>` | 다른 브랜치·태그·커밋으로. **롤백도 이 경로입니다** |
 | `bash scripts/deploy-vm.sh --check` | 점검만. 아무것도 바꾸지 않습니다 |
-| `bash scripts/deploy-vm.sh --no-build` | **체크아웃과 이미지를 그대로 두고** 재기동. `.env`만 고쳤을 때 |
+| `bash scripts/deploy-vm.sh --no-build` | **체크아웃과 이미지를 그대로 두고** 재기동. `.env`만 고쳤을 때 (예: `ADGEN_PUBLIC_HOST`) |
 
 > ⚠️ **`--no-build`는 체크아웃을 갱신하지 않습니다**(`--ref`와 함께 쓸 수 없습니다). 코드를
 > 새 커밋으로 옮기면서 이미지를 옛것으로 두면, 실제로 도는 코드와 `git rev-parse HEAD`가
@@ -186,14 +186,20 @@ ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
   성공으로 보고하지 않기 위해서입니다.
 
 배포 후 확인 항목도 스크립트가 함께 찍습니다: 컨테이너 상태, `/data/adgen.sqlite` 보존,
-시드된 계정 건수(0건이면 로그인이 무조건 401), 생성 모드(`stub` / `model`), backend `/health`,
-frontend `/`, 그리고 프론트 프록시를 거친 `/v1/sessions`가 미인증 401을 돌려주는지.
-마지막 항목 하나가 라우팅 · 인증 · 에러 계약 셋을 한 번에 봅니다.
+시드된 계정 건수(0건이면 로그인이 무조건 401), 생성 모드(`stub` / `model`), 그리고 **프록시를
+거친** `/health` · `/` · `/v1/sessions`(미인증 401). 마지막 항목 하나가 라우팅 · 인증 · 에러
+계약 셋을 한 번에 봅니다.
 
-> ⚠️ **HTTPS 종단이 붙기 전까지 브라우저 로그인은 성립하지 않습니다.** 세션 쿠키가 `Secure`
-> 고정인데(`apps/backend/src/api/routes/auth.py`) 평문 HTTP 응답의 쿠키는 브라우저가 저장하지
-> 않습니다. 이 배포의 검증 수단은 `curl`이며, 스크립트의 확인 항목도 그 전제로 짜여 있습니다
-> ([API_계약.md](../docs/기술문서/API_계약.md) 8.3절).
+> **2026-08-19: 확인 경로가 프록시 하나로 모였습니다** (ADR-0016). backend `8000`이 더 이상
+> 발행되지 않아 직접 두드릴 수 없고, 프록시를 거치는 편이 실제 사용자 경로와 같습니다.
+> `ADGEN_PUBLIC_HOST`가 채워져 있으면 스크립트는 **HTTPS로** 확인하고 `80`이 308 리다이렉트로
+> 살아 있는지도 함께 봅니다. 비어 있으면 평문으로 확인하면서 **"브라우저 로그인은 성립하지
+> 않는다"고 경고합니다** — 세션 쿠키가 `Secure` 고정이라 평문 응답의 쿠키를 브라우저가
+> 저장하지 않기 때문입니다 ([API_계약.md](../docs/기술문서/API_계약.md) 8.3절).
+
+> ⚠️ HTTPS 확인은 `curl --resolve`로 **loopback에 붙여서** 합니다. GCP VM은 자기 외부 IP로
+> 되돌아오지 못해, 이름을 그대로 쓰면 배포는 멀쩡한데 확인만 실패합니다. SNI와 Host에는 진짜
+> 이름이 실리므로 인증서 검증을 건너뛰는 것이 아닙니다 — 발급이 실패했으면 여기서 걸립니다.
 
 ### 상태는 `adgen-state` 볼륨 안에 있습니다
 

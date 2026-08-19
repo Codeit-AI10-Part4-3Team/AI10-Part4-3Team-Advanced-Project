@@ -5,6 +5,8 @@ import App from "./App";
 import { AuthProvider } from "./features/auth/AuthProvider";
 import { LoginPage } from "./features/auth/LoginPage";
 import { RequireAuth } from "./features/auth/RequireAuth";
+import { NewSessionPage } from "./features/studio/NewSessionPage";
+import { SessionPage } from "./features/studio/SessionPage";
 import "./styles.css";
 
 // 경로 계획의 정본은 apps/frontend/README.md 입니다. 여기에는 그중 지금 존재하는 것만
@@ -17,13 +19,15 @@ createRoot(document.getElementById("root")!).render(
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route
-            path="/"
             element={
               <RequireAuth>
                 <App />
               </RequireAuth>
             }
-          />
+          >
+            <Route path="/" element={<NewSessionPage />} />
+            <Route path="/sessions/:sessionId" element={<SessionPage />} />
+          </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

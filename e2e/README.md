@@ -24,8 +24,9 @@ export ADGEN_SESSION_SECRET=$(python -c "import secrets; print(secrets.token_url
 export ADGEN_ACCOUNTS='[{"login_id":"e2e1","password_hash":"$argon2id$..."}, {"login_id":"e2e2","password_hash":"$argon2id$..."}]'
 docker compose -f infra/docker-compose.yml up -d --wait --build
 
-export E2E_BASE_URL=http://localhost:8000   # API 가 답하는 곳
-export E2E_WEB_URL=http://localhost         # 브라우저가 보는 곳 (프론트엔드)
+# 둘 다 앞단 프록시입니다 (ADR-0016). backend 의 8000 은 더 이상 호스트에 게시되지 않습니다.
+export E2E_BASE_URL=http://localhost        # API 가 답하는 곳
+export E2E_WEB_URL=http://localhost         # 브라우저가 보는 곳
 export E2E_LOGIN_ID=e2e1        E2E_PASSWORD=...
 export E2E_OTHER_LOGIN_ID=e2e2  E2E_OTHER_PASSWORD=...
 cd e2e && pytest -v      # ⚠️ cwd가 e2e여야 pyproject.toml의 testpaths/markers를 집습니다
@@ -48,10 +49,12 @@ cd e2e && pytest -v      # ⚠️ cwd가 e2e여야 pyproject.toml의 testpaths/m
 | `E2E_LOGIN_ID` · `E2E_PASSWORD` | 로그인이 필요한 시나리오 skip | 광고 경로 전 구간 |
 | `E2E_OTHER_LOGIN_ID` · `E2E_OTHER_PASSWORD` | INV-9(남의 세션 404)만 skip | 소유권 판정까지 |
 
-**`E2E_BASE_URL` 과 `E2E_WEB_URL` 은 일부러 다른 변수입니다.** 같은 호스트가 될 수는 있어도
-(프록시가 앞에 서면, [ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md)) 묻는
-질문이 다릅니다 - 하나는 "API 가 어디서 답하는가", 다른 하나는 "사람이 브라우저에 무엇을
-치는가"입니다. 합쳐 두면 둘이 갈라지는 날이 가려지고, 그날이 바로 로그인이 멈추는 날입니다.
+**`E2E_BASE_URL` 과 `E2E_WEB_URL` 은 지금 같은 값이지만 일부러 다른 변수입니다.**
+[ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md) 이후 앞단 프록시 하나가
+둘을 다 받으므로 값이 겹칩니다. 그래도 묻는 질문이 다릅니다 - 하나는 "API 가 어디서
+답하는가", 다른 하나는 "사람이 브라우저에 무엇을 치는가"입니다. 하나로 합쳐 두면 둘이
+갈라지는 날이 가려지고, **그날이 바로 로그인이 멈추는 날입니다** (08-18 배포가 정확히 그
+경우였습니다 - 화면은 떴는데 쿠키가 실리지 않았습니다).
 
 ### 계정이 필요한 이유, 그리고 커밋하지 않는 이유
 

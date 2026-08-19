@@ -94,11 +94,15 @@ jobs:
         run: |
           cp infra/.env.example infra/.env 2>/dev/null || true
           docker compose -f infra/docker-compose.yml up -d --wait
-          echo "E2E_BASE_URL=http://localhost:8000" >> "$GITHUB_ENV"
+          # ⚠️ 8000 이 아니라 80 입니다. backend 는 더 이상 호스트에 발행되지 않고, 스택의
+          #    진입점은 앞단 프록시 하나입니다 (ADR-0016). `.env.example` 에
+          #    `ADGEN_PUBLIC_HOST` 가 비어 있으므로 여기서는 평문 HTTP 로 뜹니다 - 인증서
+          #    발급은 CI 에서 일어나지 않습니다.
+          echo "E2E_BASE_URL=http://localhost" >> "$GITHUB_ENV"
 
-      # 브라우저가 보는 출처는 backend 가 아니라 **프론트엔드**입니다 — `/v1` 은 그 안에서
-      # 프록시됩니다 (apps/frontend/nginx.conf). 두 값을 하나로 합치지 않는 이유는
-      # e2e/conftest.py 의 `web_url` 주석에 있습니다.
+      # ADR-0016 이후 앞단 프록시 하나가 API 와 화면을 다 받으므로 위 값과 같아집니다.
+      # 그래도 **변수를 합치지 않습니다** — 묻는 질문이 다르고(어디서 답하는가 / 무엇을 치는가),
+      # 합쳐 두면 둘이 갈라지는 날이 가려집니다. 근거: e2e/conftest.py 의 `web_url` 주석.
       - name: Point the browser at the frontend
         if: hashFiles('infra/docker-compose.yml') != ''
         run: echo "E2E_WEB_URL=http://localhost" >> "$GITHUB_ENV"

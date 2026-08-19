@@ -51,8 +51,11 @@ ENV_FILE="infra/.env"
 DEPLOY_ROOT="${ADCRAFT_DEPLOY_ROOT:-/srv/adcraft/app}"
 
 # compose 의 포트 매핑과 같아야 합니다. 바꿀 일이 생기면 compose 쪽이 정본입니다.
-FRONTEND_PORT="${ADCRAFT_FRONTEND_PORT:-80}"
-BACKEND_PORT="${ADCRAFT_BACKEND_PORT:-8000}"
+# ⚠️ 2026-08-19 부터 호스트에 열리는 것은 **앞단 프록시의 둘뿐**입니다 (ADR-0016).
+#    frontend 80 은 발행되지 않고 backend 8000 은 루프백에만 있으므로, 밖에서 오는 확인은
+#    전부 프록시를 거칩니다. 그편이 실제 사용자 경로와 같아서 검증으로서도 낫습니다.
+PROXY_HTTP_PORT="${ADCRAFT_HTTP_PORT:-80}"
+PROXY_HTTPS_PORT="${ADCRAFT_HTTPS_PORT:-443}"
 
 # 이 아래로 여유가 없으면 빌드 도중 죽습니다. 이미지 3종 재빌드에 수 GB 가 듭니다.
 DISK_WARN_GB=10
@@ -138,6 +141,16 @@ check_shared_checkout() {
   [[ -w "$ROOT/.git" ]] || warn "$ROOT/.git 에 쓸 수 없습니다 — 그룹 퍼미션을 확인하세요 (infra/README.md)."
 }
 
+# infra/.env 의 ADGEN_PUBLIC_HOST. **이 값 하나가 평문과 HTTPS 를 가릅니다** (ADR-0016).
+# 값이 비면 compose 가 Caddy 에 `:80` 을 넘기므로, 콜론으로 시작하는 값은 "호스트명 없음"
+# 으로 읽습니다. 따옴표와 CRLF 를 털어내는 것은 .env 를 편집기로 만든 경우 대비입니다.
+public_host() {
+  local v
+  v="$(sed -n 's/^ADGEN_PUBLIC_HOST=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]' | tr -d "'" | tr -d '"')"
+  [[ "$v" == :* ]] && v=""
+  printf '%s' "$v"
+}
+
 preflight() {
   log "사전 점검"
 
@@ -155,6 +168,12 @@ preflight() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE 이 없습니다. 이 파일 없이 배포하면 인증이 조용히 어긋납니다."
   grep -q '^ADGEN_ACCOUNTS=' "$ENV_FILE" || warn "$ENV_FILE 에 ADGEN_ACCOUNTS 가 없습니다 — 로그인이 성립하지 않습니다."
   grep -q '^ADGEN_SESSION_SECRET=' "$ENV_FILE" || warn "$ENV_FILE 에 ADGEN_SESSION_SECRET 이 없습니다 — 계정이 있으면 기동이 거부됩니다."
+
+  # ⚠️ 비어 있으면 프록시가 평문 HTTP 로 뜹니다. 기동은 성공하고 curl 도 전부 통과하는데
+  #    **브라우저 로그인만 성립하지 않습니다** - 세션 쿠키가 `Secure` 고정이라 브라우저가
+  #    평문 응답의 쿠키를 저장하지 않기 때문입니다 (ADR-0016, API_계약.md 8.3절).
+  #    ADGEN_ACCOUNTS 와 같은 종류의 함정입니다: 배포 실패로 보이지 않습니다.
+  [[ -n "$(public_host)" ]] || warn "$ENV_FILE 의 ADGEN_PUBLIC_HOST 가 비어 있습니다 — 평문 HTTP 로 뜨고 브라우저 로그인이 성립하지 않습니다."
 
   # 추적 파일이 수정돼 있으면 중단합니다. "VM 에 뭐가 떠 있나"의 답이 SHA 로 성립하지 않게
   # 되고, 뒤이어 부를 `merge --ff-only` 도 그 변경을 덮거나 실패합니다.
@@ -228,9 +247,17 @@ bring_up() {
   compose up -d "${build_args[@]}" --wait
 }
 
+# HTTPS 확인에서 --resolve 를 실어야 하므로 배열로 받습니다. 비어 있을 때 set -u 에 걸리지
+# 않도록 `${arr[@]+...}` 형태로 펼칩니다.
+CURL_RESOLVE=()
+
 http_code() {
-  local url="$1"
-  curl -s -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null || echo "000"
+  # ⚠️ curl 은 연결에 실패해도 `%{http_code}` 로 이미 `000` 을 씁니다. 그 상태에서 `|| echo`
+  #    를 붙이면 코드가 두 번 찍혀 `000000` 이라는 없는 상태 코드가 보고됩니다 (실측).
+  #    출력을 받아 두었다가 비었을 때만 채웁니다.
+  local url="$1" code
+  code="$(curl -s -o /dev/null -m 10 -w '%{http_code}' ${CURL_RESOLVE[@]+"${CURL_RESOLVE[@]}"} "$url" 2>/dev/null || true)"
+  printf '%s' "${code:-000}"
 }
 
 expect_code() {
@@ -276,12 +303,49 @@ verify() {
     return 0
   fi
 
-  local ok=0
-  expect_code "http://127.0.0.1:${BACKEND_PORT}/health" 200 "backend /health" || ok=1
-  expect_code "http://127.0.0.1:${FRONTEND_PORT}/" 200 "frontend /" || ok=1
-  # 프론트(80)를 거쳐 backend 로 넘어가는 프록시 경로까지 한 번에 봅니다. 401 이 정답입니다 —
-  # 라우팅·인증·에러 계약이 셋 다 살아 있어야 이 코드가 나옵니다.
-  expect_code "http://127.0.0.1:${FRONTEND_PORT}/v1/sessions" 401 "프록시 /v1/sessions (미인증)" || ok=1
+  local ok=0 host base
+  host="$(public_host)"
+
+  if [[ -n "$host" ]]; then
+    echo "    INFO 공개 호스트: ${host} (HTTPS)"
+
+    # 80 이 리다이렉트로 살아 있는지 **먼저** 봅니다. 닫으면 인증서 갱신 검증이 못
+    # 들어옵니다 (ADR-0016). Caddy 는 Host 와 무관하게 308 입니다 (2026-08-19 실측).
+    # 아래에서 CURL_RESOLVE 를 채우기 전에 두는 것은 이 확인만 평문이기 때문입니다.
+    expect_code "http://127.0.0.1:${PROXY_HTTP_PORT}/" 308 "80 -> HTTPS 리다이렉트" || ok=1
+
+    # ⚠️ **주소에 포트를 함께 적습니다.** `--resolve` 는 `호스트:포트` 로 일치를 보므로,
+    #    주소에서 포트를 빼면 기본값 443 일 때만 우연히 맞고 `ADCRAFT_HTTPS_PORT` 를 바꾸는
+    #    순간 항목이 통째로 무시됩니다. 그러면 curl 이 진짜 DNS 로 나가고, 바로 아래에
+    #    적어 둔 "자기 외부 IP 로 되돌아오지 못한다" 에 그대로 걸립니다 - 켜는 순간 자기가
+    #    막으려던 실패를 부르는 변수가 됩니다 (PR #126 리뷰, 신호정).
+    #    2026-08-19 실측: 포트를 8443 으로 두고 재니 포트 없는 주소는 `000`(연결 실패),
+    #    포트를 붙인 주소는 `200` 이었습니다. 기본값 443 에서는 두 형태 모두 `200` 이라
+    #    이 변경으로 지금 동작이 바뀌지는 않습니다.
+    base="https://${host}:${PROXY_HTTPS_PORT}"
+    # ⚠️ **--resolve 로 loopback 에 붙입니다.** GCP VM 은 자기 외부 IP 로 되돌아오지 못하므로
+    #    이름을 그대로 쓰면 배포는 멀쩡한데 이 확인만 실패합니다. SNI 와 Host 에는 진짜
+    #    이름이 그대로 실리므로 **인증서 검증을 건너뛰는 것이 아닙니다** - 발급이 실패했으면
+    #    여기서 걸립니다. 그것이 이 확인의 목적입니다.
+    CURL_RESOLVE=(--resolve "${host}:${PROXY_HTTPS_PORT}:127.0.0.1")
+  else
+    base="http://127.0.0.1:${PROXY_HTTP_PORT}"
+    warn "평문 HTTP 로 떠 있습니다 (ADGEN_PUBLIC_HOST 미설정) — 아래 확인은 통과해도 브라우저 로그인은 성립하지 않습니다."
+  fi
+
+  # 셋 다 프록시를 거칩니다. backend 8000 은 루프백에만 있고, 무엇보다 프록시를 거치는 편이
+  # 실제 사용자 경로와 같습니다 (ADR-0016).
+  expect_code "${base}/health" 200 "프록시 -> backend /health" || ok=1
+  expect_code "${base}/" 200 "화면 진입" || ok=1
+  # 라우팅·인증·에러 계약이 셋 다 살아 있어야 401 이 나옵니다.
+  expect_code "${base}/v1/sessions" 401 "프록시 /v1/sessions (미인증)" || ok=1
+
+  # HTTPS 인데 전부 `000` 이면 TLS 가 서지 않은 것이고, 그 원인은 대개 인증서 발급입니다.
+  # 컨테이너는 healthy 로 남아 있어(80 은 살아 있으므로) 증상만 보고는 알기 어렵습니다.
+  if [[ "$ok" -ne 0 && -n "$host" ]]; then
+    warn "HTTPS 확인이 실패했습니다. 인증서 발급부터 보세요: docker compose -f $COMPOSE_FILE logs caddy | tail -50"
+    warn "발급 한도로 막힌 경우의 대응은 ADR-0016 '재검토 신호' 에 있습니다."
+  fi
   return "$ok"
 }
 
@@ -331,10 +395,14 @@ main() {
   log "완료: $(git rev-parse --abbrev-ref HEAD) $(git rev-parse --short HEAD)"
   echo "    롤백이 필요하면: bash scripts/deploy-vm.sh --ref $(git rev-parse --short "$prev_sha")"
 
-  # ⚠️ 브라우저 로그인은 HTTPS 종단이 붙기 전까지 성립하지 않습니다 — 세션 쿠키가 `Secure`
-  #    고정인데(apps/backend/src/api/routes/auth.py) 평문 HTTP 응답의 쿠키는 브라우저가
-  #    저장하지 않습니다. 이 배포의 검증 수단은 curl 입니다 (API_계약.md 8.3절).
-  echo "    참고: HTTPS 종단 전까지 브라우저 로그인은 성립하지 않습니다 (curl 검증용)."
+  # ⚠️ 브라우저 로그인의 전제가 HTTPS 입니다 — 세션 쿠키가 `Secure` 고정인데
+  #    (apps/backend/src/api/routes/auth.py) 평문 HTTP 응답의 쿠키는 브라우저가 저장하지
+  #    않습니다 (ADR-0016, API_계약.md 8.3절). 종단은 붙었으므로 남은 변수는 설정값입니다.
+  if [[ -n "$(public_host)" ]]; then
+    echo "    참고: 인증서 발급 결과는 'docker compose logs caddy' 에서 확인하세요."
+  else
+    echo "    참고: ADGEN_PUBLIC_HOST 가 비어 평문입니다 — 브라우저 로그인은 성립하지 않습니다."
+  fi
 }
 
 main "$@"

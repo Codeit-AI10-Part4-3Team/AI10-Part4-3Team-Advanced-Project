@@ -52,7 +52,7 @@ DEPLOY_ROOT="${ADCRAFT_DEPLOY_ROOT:-/srv/adcraft/app}"
 
 # compose 의 포트 매핑과 같아야 합니다. 바꿀 일이 생기면 compose 쪽이 정본입니다.
 # ⚠️ 2026-08-19 부터 호스트에 열리는 것은 **앞단 프록시의 둘뿐**입니다 (ADR-0016).
-#    backend 8000 과 frontend 80 은 발행되지 않으므로 직접 두드릴 수 없습니다 - 확인은
+#    frontend 80 은 발행되지 않고 backend 8000 은 루프백에만 있으므로, 밖에서 오는 확인은
 #    전부 프록시를 거칩니다. 그편이 실제 사용자 경로와 같아서 검증으로서도 낫습니다.
 PROXY_HTTP_PORT="${ADCRAFT_HTTP_PORT:-80}"
 PROXY_HTTPS_PORT="${ADCRAFT_HTTPS_PORT:-443}"
@@ -333,8 +333,8 @@ verify() {
     warn "평문 HTTP 로 떠 있습니다 (ADGEN_PUBLIC_HOST 미설정) — 아래 확인은 통과해도 브라우저 로그인은 성립하지 않습니다."
   fi
 
-  # 셋 다 프록시를 거칩니다. backend 8000 은 발행되지 않으므로 직접 두드릴 수 없고,
-  # 프록시를 거치는 편이 실제 사용자 경로와 같습니다 (ADR-0016).
+  # 셋 다 프록시를 거칩니다. backend 8000 은 루프백에만 있고, 무엇보다 프록시를 거치는 편이
+  # 실제 사용자 경로와 같습니다 (ADR-0016).
   expect_code "${base}/health" 200 "프록시 -> backend /health" || ok=1
   expect_code "${base}/" 200 "화면 진입" || ok=1
   # 라우팅·인증·에러 계약이 셋 다 살아 있어야 401 이 나옵니다.

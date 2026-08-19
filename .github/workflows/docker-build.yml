@@ -106,7 +106,7 @@ jobs:
       #
       # 파싱 대상이 원본 YAML이 아니라 `config` 출력인 이유: 변수 치환이 끝난 최종값을
       # 봐야 `${BIND:-0.0.0.0}:8100:8100` 같은 우회가 잡힙니다.
-      - name: ai-engine이 루프백에만 묶여 있는지 확인
+      - name: ai-engine과 backend가 루프백에만 묶여 있는지 확인
         if: hashFiles('infra/docker-compose.yml') != ''
         run: |
           # Actions 의 기본 셸에 이미 -e 가 걸려 있지만 명시합니다 — 이 블록을 로컬에서
@@ -138,28 +138,37 @@ jobs:
               )
 
           services = json.loads(Path(os.environ["CONFIG_JSON"]).read_text())["services"]
-          if "ai-engine" not in services:
-              # 서비스 이름이 바뀌면 이 검사는 아무것도 보지 않으면서 계속 초록입니다.
-              # 통과하지 않는 편이 낫습니다 — 조용히 비어버린 검사가 검사 없음보다 나쁩니다.
-              sys.exit("compose에 ai-engine 서비스가 없습니다. 이름을 바꿨다면 이 검사도 함께 고치세요.")
 
-          if services["ai-engine"].get("network_mode") == "host":
-              # host 모드에서는 ports 가 무시되고 컨테이너가 호스트 인터페이스에 그대로
-              # 붙습니다. `127.0.0.1:8100:8100` 줄은 남아 있으므로 아래 검사만으로는
-              # 초록이 되고, 실제로는 8100 이 인터넷에 열립니다.
-              sys.exit(
-                  "ai-engine이 host 네트워크 모드입니다. ports의 127.0.0.1 바인딩이 무시됩니다.\n"
-                  "  고치는 법: network_mode: host 를 지우고 ports 로만 노출하세요."
-              )
+          # ⚠️ backend 가 2026-08-19 에 이 목록에 들어왔습니다 (ADR-0016). 그때까지 8000 은
+          #    전 인터페이스에 발행돼 있었고, HTTPS 종단이 붙으면서 루프백으로 좁혔습니다.
+          #    ai-engine 보다 오히려 이쪽이 급한데 **로그인 비밀번호를 받는 경로**이기 때문
+          #    입니다. 두 서비스의 `127.0.0.1:` 은 같은 종류의 한 줄이고, 지웠을 때 diff 에서
+          #    눈에 잘 띄지 않는 것도 같습니다.
+          LOOPBACK_ONLY = {"ai-engine": 8100, "backend": 8000}
 
-          # ports 자체가 없으면 호스트에 발행되지 않은 것이므로 가장 안전한 상태입니다.
-          # 발행된 경우에만 host_ip를 봅니다 — 바인딩을 지정하지 않으면 이 키가 아예
-          # 없으므로(= 전 인터페이스), `!= 127.0.0.1` 비교가 그대로 잡아냅니다.
-          exposed = [p for p in services["ai-engine"].get("ports") or [] if p.get("host_ip") != "127.0.0.1"]
-          if exposed:
-              sys.exit(
-                  f"ai-engine 포트가 루프백 밖에 열려 있습니다: {exposed}\n"
-                  '  고치는 법: infra/docker-compose.yml의 ports를 "127.0.0.1:8100:8100" 형태로 되돌리세요.\n'
-                  "  이유: infra/README.md \"방화벽은 우리 통제 밖입니다\" / docs/adr/0011-배포_환경_스펙과_권한_경계.md"
-              )
+          for name, port in LOOPBACK_ONLY.items():
+              if name not in services:
+                  # 서비스 이름이 바뀌면 이 검사는 아무것도 보지 않으면서 계속 초록입니다.
+                  # 통과하지 않는 편이 낫습니다 — 조용히 비어버린 검사가 검사 없음보다 나쁩니다.
+                  sys.exit(f"compose에 {name} 서비스가 없습니다. 이름을 바꿨다면 이 검사도 함께 고치세요.")
+
+              if services[name].get("network_mode") == "host":
+                  # host 모드에서는 ports 가 무시되고 컨테이너가 호스트 인터페이스에 그대로
+                  # 붙습니다. `127.0.0.1:` 줄은 남아 있으므로 아래 검사만으로는 초록이 되고,
+                  # 실제로는 그 포트가 인터넷에 열립니다.
+                  sys.exit(
+                      f"{name}이 host 네트워크 모드입니다. ports의 127.0.0.1 바인딩이 무시됩니다.\n"
+                      "  고치는 법: network_mode: host 를 지우고 ports 로만 노출하세요."
+                  )
+
+              # ports 자체가 없으면 호스트에 발행되지 않은 것이므로 가장 안전한 상태입니다.
+              # 발행된 경우에만 host_ip를 봅니다 — 바인딩을 지정하지 않으면 이 키가 아예
+              # 없으므로(= 전 인터페이스), `!= 127.0.0.1` 비교가 그대로 잡아냅니다.
+              exposed = [p for p in services[name].get("ports") or [] if p.get("host_ip") != "127.0.0.1"]
+              if exposed:
+                  sys.exit(
+                      f"{name} 포트가 루프백 밖에 열려 있습니다: {exposed}\n"
+                      f'  고치는 법: infra/docker-compose.yml의 ports를 "127.0.0.1:{port}:{port}" 형태로 되돌리세요.\n'
+                      "  이유: infra/README.md \"방화벽은 우리 통제 밖입니다\" / docs/adr/0011-배포_환경_스펙과_권한_경계.md"
+                  )
           PY

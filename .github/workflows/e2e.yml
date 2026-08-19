@@ -35,7 +35,7 @@ jobs:
     #    멈춘 것이고, 실패로 떨어져야 사람이 알아봅니다.
     #    실측 사고: PR #124 의 런이 `playwright install` 에서 2시간 14분 멈춰 있었고,
     #    같은 브랜치의 직전 런은 같은 단계를 포함해 1분 7초에 끝났습니다 (2026-08-19).
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 

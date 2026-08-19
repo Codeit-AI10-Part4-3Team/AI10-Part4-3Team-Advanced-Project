@@ -31,10 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     # ⚠️ 기본값 6시간을 쓰지 않는 이유는 시간이 아니라 **신호**입니다. 한 단계가 걸리면
     #    그동안 체크는 계속 `pending` 이고, PR 화면에서는 "도는 중"과 "죽었음"이 구분되지
-    #    않습니다. 평소 1~2분에 끝나는 잡이라 15분을 넘겼다면 그것은 느린 것이 아니라
+    #    않습니다. 평소 1~2분에 끝나는 잡이라 이 값을 넘겼다면 그것은 느린 것이 아니라
     #    멈춘 것이고, 실패로 떨어져야 사람이 알아봅니다.
     #    실측 사고: PR #124 의 런이 `playwright install` 에서 2시간 14분 멈춰 있었고,
     #    같은 브랜치의 직전 런은 같은 단계를 포함해 1분 7초에 끝났습니다 (2026-08-19).
+    #    ⚠️ 값을 올릴 때는 **왜 느려졌는지를 먼저 확인하세요.** 상한을 늘리는 것은 원인을
+    #    찾는 일이 아니라 미루는 일이고, 이 잡의 존재 이유가 "멈춘 것을 빨리 알기"입니다.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -48,6 +50,41 @@ jobs:
       - name: Install harness
         run: pip install -r e2e/requirements.txt
 
+      # ⚠️ **자격 증명을 잡 안에서 만들어 씁니다. 저장소에는 아무것도 커밋되지 않습니다.**
+      #    가입 경로가 501이라 계정은 `ADGEN_ACCOUNTS` 시드로만 들어오는데(ADR-0008), 이
+      #    저장소는 public 이라 해시도 평문도 커밋 대상이 아닙니다. secrets 로 두지 않는
+      #    이유는 fork PR 에서 값이 비어 관통 테스트만 조용히 skip 되기 때문입니다.
+      #
+      #    ⚠️ 값을 `.env` 파일이 아니라 **프로세스 환경**으로 넘깁니다. argon2 해시에는 `$`가
+      #    들어가고 compose 는 `.env` 안의 `$`를 변수 참조로 해석해 값을 조용히 뭉갭니다
+      #    (infra/README.md). 환경변수로 넘기면 그 해석 단계를 아예 지나가지 않습니다.
+      #
+      #    **계정이 둘인 것은 최소값입니다.** 하나면 "남의 세션"이 존재하지 않아 INV-9의
+      #    404 경로를 한 번도 지나지 않습니다 (구현_범위.md 1절).
+      - name: Seed throwaway accounts
+        if: hashFiles('infra/docker-compose.yml') != ''
+        run: |
+          pip install argon2-cffi
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json, secrets
+          from argon2 import PasswordHasher
+
+          hasher = PasswordHasher()
+          accounts, exported = [], []
+          for slot, prefix in (("", ""), ("OTHER_", "other_")):
+              login_id = f"e2e_{prefix}{secrets.token_hex(4)}"
+              password = secrets.token_urlsafe(24)
+              accounts.append({"login_id": login_id, "password_hash": hasher.hash(password)})
+              exported.append((f"E2E_{slot}LOGIN_ID", login_id))
+              exported.append((f"E2E_{slot}PASSWORD", password))
+
+          # 여러 줄이 될 수 있으므로 구분자 형식으로 씁니다.
+          print(f"ADGEN_ACCOUNTS<<EOF\n{json.dumps(accounts)}\nEOF")
+          print(f"ADGEN_SESSION_SECRET={secrets.token_urlsafe(32)}")
+          for name, value in exported:
+              print(f"{name}={value}")
+          PY
+
       # 스택 기동: infra/docker-compose.yml이 생기는 순간 자동으로 활성화됩니다.
       # 그 전까지는 E2E_BASE_URL이 비어 있어 모든 테스트가 skip → 잡은 초록입니다.
       # ⚠️ .env.example의 더미 값으로 뜨는 범위까지만 검증됩니다. 실제 외부 API 키가 필요한
@@ -58,6 +95,13 @@ jobs:
           cp infra/.env.example infra/.env 2>/dev/null || true
           docker compose -f infra/docker-compose.yml up -d --wait
           echo "E2E_BASE_URL=http://localhost:8000" >> "$GITHUB_ENV"
+
+      # 브라우저가 보는 출처는 backend 가 아니라 **프론트엔드**입니다 — `/v1` 은 그 안에서
+      # 프록시됩니다 (apps/frontend/nginx.conf). 두 값을 하나로 합치지 않는 이유는
+      # e2e/conftest.py 의 `web_url` 주석에 있습니다.
+      - name: Point the browser at the frontend
+        if: hashFiles('infra/docker-compose.yml') != ''
+        run: echo "E2E_WEB_URL=http://localhost" >> "$GITHUB_ENV"
 
       # 브라우저 시나리오(딥링크 진입 → 위치 1회 확인)는 chromium만 설치해 잡 시간을 줄입니다.
       #

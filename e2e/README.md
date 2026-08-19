@@ -17,16 +17,81 @@
 
 ```bash
 pip install -r e2e/requirements.txt
-playwright install --with-deps chromium     # 브라우저 시나리오를 쓸 때만
+playwright install chromium                 # 브라우저 시나리오를 쓸 때만
 
-# 스택 기동 후
-docker compose -f infra/docker-compose.yml up -d --wait
-export E2E_BASE_URL=http://localhost:8000
+# 계정을 시드해 스택을 띄웁니다 (아래 "계정이 필요한 이유")
+export ADGEN_SESSION_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+export ADGEN_ACCOUNTS='[{"login_id":"e2e1","password_hash":"$argon2id$..."}, {"login_id":"e2e2","password_hash":"$argon2id$..."}]'
+docker compose -f infra/docker-compose.yml up -d --wait --build
+
+export E2E_BASE_URL=http://localhost:8000   # API 가 답하는 곳
+export E2E_WEB_URL=http://localhost         # 브라우저가 보는 곳 (프론트엔드)
+export E2E_LOGIN_ID=e2e1        E2E_PASSWORD=...
+export E2E_OTHER_LOGIN_ID=e2e2  E2E_OTHER_PASSWORD=...
 cd e2e && pytest -v      # ⚠️ cwd가 e2e여야 pyproject.toml의 testpaths/markers를 집습니다
 ```
 
-`E2E_BASE_URL`이 없으면 **모든 테스트가 skip** 됩니다. 하네스가 "연결은 돼 있고 대상만 아직
-없는" 상태를 초록으로 유지하기 위한 설계이며, 스택이 뜨면 자동으로 실제 검증에 들어갑니다.
+> ⚠️ **`--build` 를 빼면 이전에 빌드된 이미지가 그대로 뜹니다.** `up -d` 는 이미지가 있으면
+> 다시 빌드하지 않으므로, 화면을 고치고 돌리면 **옛날 프론트엔드**를 상대로 테스트하게 됩니다
+> (실측: 2026-08-19에 이미 지운 mock 화면이 떠서 브라우저 테스트가 실패했습니다).
+> CI 는 러너가 매번 비어 있어 이 문제가 없습니다.
+
+### 환경변수와 skip 규칙
+
+**아무것도 없으면 전부 skip 됩니다.** "연결은 돼 있고 대상만 아직 없는" 상태를 초록으로
+유지하기 위한 설계이며, 값이 채워지는 만큼 실제 검증이 켜집니다.
+
+| 변수 | 없으면 | 있으면 |
+|---|---|---|
+| `E2E_BASE_URL` | 전부 skip | HTTP 시나리오 실행 |
+| `E2E_WEB_URL` | 브라우저 시나리오만 skip | 프론트엔드까지 관통 |
+| `E2E_LOGIN_ID` · `E2E_PASSWORD` | 로그인이 필요한 시나리오 skip | 광고 경로 전 구간 |
+| `E2E_OTHER_LOGIN_ID` · `E2E_OTHER_PASSWORD` | INV-9(남의 세션 404)만 skip | 소유권 판정까지 |
+
+**`E2E_BASE_URL` 과 `E2E_WEB_URL` 은 일부러 다른 변수입니다.** 같은 호스트가 될 수는 있어도
+(프록시가 앞에 서면, [ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md)) 묻는
+질문이 다릅니다 - 하나는 "API 가 어디서 답하는가", 다른 하나는 "사람이 브라우저에 무엇을
+치는가"입니다. 합쳐 두면 둘이 갈라지는 날이 가려지고, 그날이 바로 로그인이 멈추는 날입니다.
+
+### 계정이 필요한 이유, 그리고 커밋하지 않는 이유
+
+가입 경로가 501이라 계정은 `ADGEN_ACCOUNTS` 시드로만 들어옵니다
+([ADR-0008](../docs/adr/0008-로그인_수단과_스켈레톤_범위.md)). **둘이 최소값입니다** - 하나면
+"남의 세션"이 존재하지 않아 INV-9의 404 경로를 한 번도 지나지 않습니다.
+
+**저장소는 public 이므로 해시도 평문도 커밋하지 않습니다.** CI 는 잡 안에서 임시 계정을 만들어
+프로세스 환경으로 넘깁니다 (`.github/workflows/e2e.yml`의 `Seed throwaway accounts`).
+GitHub secrets 로 두지 않은 이유는 fork PR 에서 값이 비어 관통 시나리오만 조용히 skip 되기
+때문입니다 - 초록인데 아무것도 검증하지 않는 상태가 이 하네스가 막으려는 바로 그것입니다.
+
+⚠️ 값을 `infra/.env` 에 적을 때는 argon2 해시의 `$` 를 `$$` 로 이스케이프하세요. compose 가
+`.env` 안의 `$` 를 변수 참조로 읽어 값을 조용히 뭉갭니다 (`infra/README.md`). 위 예시처럼
+**환경변수로 넘기면** 그 단계를 지나가지 않습니다.
+
+## 무엇이 들어 있나
+
+| 파일 | 무엇을 지키나 |
+|---|---|
+| `tests/test_harness.py` | 하네스 배선 자체. `/health` 와 템플릿 질의응답(`/v1/ask`) |
+| `tests/test_ad_flow.py` | **광고 경로 관통** (HTTP). 입력 -> 브리프 -> 시안 -> 확정 -> 폴링 -> 결과. 그리고 INV-9(남의 세션 404)와 미인증 401 |
+| `tests/test_browser_flow.py` | **브라우저 관통.** 로그인부터 파일 다운로드까지. 구현_범위 1절의 전체 DoD 문장 그대로 |
+
+⚠️ **`test_harness.py` 가 초록이라고 관통이 검증된 것이 아닙니다.** 그 파일이 지나는 것은
+템플릿 질의응답 경로이고 광고 경로와는 한 줄도 겹치지 않습니다. 2026-08-19 이전까지 "종단 관통
+테스트 통과"가 이 상태였습니다 - 루트 `AGENTS.md` 가 말하는 "게이트 통과 ≠ 관통 경로 검증"의
+실제 사례입니다.
+
+관통 경로는 **단일 광고형 하나**입니다 (구현_범위 1절). 만화형은 분기만 둔 스텁이므로 통과를
+요구하지 않습니다 - 요구하면 스텁의 현재 동작이 계약으로 굳습니다.
+
+### 아직 자동화하지 않은 것
+
+- **열화 경로**(ai-engine 정지 -> 201 + `brief_filling` + `degraded`)는 컨테이너를 죽였다
+  살리는 조작이 필요해 넣지 않았습니다. 2026-08-19에 05가 손으로 쟀습니다
+  ([05 일정](../docs/역할_일정/05-백엔드_인프라.md)). 넣는다면 이 하네스가 docker 를 직접
+  다루게 되므로, 그 결합을 감수할지가 먼저 정해져야 합니다.
+- **가드레일 거절**(`CONTENT_POLICY_REJECTED`)은 스텁이 거절하지 않아 재현할 조건이 없습니다.
+  실물 이음매가 붙은 뒤에 들어갈 자리입니다.
 
 ## 작성 규칙
 

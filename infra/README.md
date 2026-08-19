@@ -123,6 +123,109 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
 > `8000`을 함께 열어 둔 것은 `curl`로 계약을 직접 두드리는 경로를 남기기 위해서이며,
 > HTTPS 종단이 들어올 때 닫을지 함께 정합니다.
 
+### 배포 체크아웃은 `/srv/adcraft/app`
+
+배포 트리는 **개인 홈이 아니라 `adcraft` 그룹 소유의 공용 경로 하나**입니다.
+
+```
+/srv/adcraft/
+├── app/     <- 배포 체크아웃. deploy-vm.sh 가 여기서만 돕니다
+└── exp/     <- 공용 실험 폴더. 배포와 무관합니다 (GCP_VM_사용_가이드.md 6절)
+```
+
+> **2026-08-19 이관 완료 (실측).** `~/adcraft`에서 옮겼고 아래를 확인했습니다.
+> `drwxrws---+ spai1032 adcraft` (setgid + ACL 상속됨), `core.sharedRepository=group`,
+> `--system safe.directory` 등록됨, `infra/.env`는 `-rw-rw----`, 컨테이너 3종 healthy,
+> backend `/health` 200 · frontend `/` 200 · 프록시 `/v1/sessions` 401.
+> **볼륨 `adgen_adgen-state`의 `CreatedAt`이 `2026-08-15T02:28:18Z`로 이관 전과 같고**
+> 계정 2건이 그대로입니다 -- 경로를 옮겨도 상태가 따라오지 않는다는 것이 실제로 확인됐습니다.
+> 옛 체크아웃은 `~/adcraft.retired-20260819`로 무력화했습니다.
+
+`/srv/adcraft`에는 `adcraft` 그룹과 setgid, 기본 ACL이 **이미 걸려 있습니다.** `app`을 그
+아래에 두는 이유가 그것입니다 -- 새 경로에 권한을 처음부터 세울 필요 없이 상속받습니다.
+
+홈에 두지 않는 이유는 셋입니다.
+
+- **소유자 한 명에게 묶입니다.** 그 계정이 빠지거나 잠기면 배포 경로가 함께 사라지고, 다른
+  사람은 남의 홈을 읽지도 고치지도 못합니다. 배포는 한 사람의 자산이 아닙니다.
+- **경로가 사람마다 달라집니다.** `~`는 실행하는 계정에 따라 다른 곳을 가리키므로, 문서에
+  `~/adcraft`라고 적으면 그 문서는 쓴 사람에게만 맞습니다.
+- **어느 트리가 떠 있는지 알 수 없게 됩니다.** compose 프로젝트 이름이 `adgen`으로 고정이라
+  (`docker-compose.yml`의 `name:`) **어느 체크아웃에서 올리든 같은 컨테이너와 같은 볼륨을
+  갈아끼웁니다.** 옛 체크아웃에서 실행해도 에러 없이 성공하고, 그때부터 배포된 코드는 아무도
+  보고 있지 않은 트리가 됩니다. 실패로 드러나지 않는 것이 이 함정의 전부입니다.
+
+마지막 항목 때문에 `deploy-vm.sh`는 **`/srv/adcraft/app` 밖에서 실행되면 중단합니다.**
+개인 체크아웃에서 시험 배포를 돌릴 때만 `--allow-any-root`나 `ADCRAFT_DEPLOY_ROOT`로 끕니다.
+
+#### 최초 1회 준비
+
+`/srv/adcraft`가 이미 `adcraft` 그룹 · setgid · 기본 ACL 상태이므로
+([GCP_VM_사용_가이드.md](../docs/공통_가이드/GCP_VM_사용_가이드.md) 6절), 그 아래에 만들면
+**그룹과 ACL이 상속됩니다.** 그룹에 속한 계정이면 `sudo` 없이 만들어집니다.
+
+```bash
+mkdir -p /srv/adcraft/app
+git clone <저장소 URL> /srv/adcraft/app
+
+git -C /srv/adcraft/app config core.sharedRepository group
+sudo git config --system --add safe.directory /srv/adcraft/app
+```
+
+만든 뒤 상속이 실제로 됐는지 한 번 봅니다. `drwxrws---` 와 그룹 `adcraft` 가 나와야 합니다.
+
+```bash
+ls -ld /srv/adcraft/app
+```
+
+`s`(setgid)가 없거나 그룹이 다르면 상위 경로 설정이 빠진 것입니다. 그때만 직접 겁니다:
+
+```bash
+sudo chgrp -R adcraft /srv/adcraft/app
+sudo chmod -R 2770 /srv/adcraft/app
+sudo setfacl -R -d -m g::rwx /srv/adcraft/app
+```
+
+git 설정 두 줄이 **여러 사람이 같은 체크아웃을 만지기 때문에** 필요한 부분입니다.
+
+- `core.sharedRepository=group` 없이 두면 A가 `fetch`로 만든 객체 파일에 그룹 쓰기가 빠져
+  B의 다음 `fetch`가 권한 오류로 죽습니다.
+- `safe.directory` 없이 두면 git 2.35.2+가 **소유자가 다른 저장소를 통째로 거부합니다**
+  (`dubious ownership`). A가 클론하고 B가 배포하는 순간 첫 git 명령에서 터지는데, 메시지가
+  배포와 무관해 보여 원인을 찾는 데 시간이 갑니다. `--global`이 아니라 `--system`인 이유는
+  **배포를 누가 돌릴지 정해져 있지 않기 때문**입니다. `--global`은 실행한 사람에게만 걸립니다.
+
+`deploy-vm.sh`의 사전 점검이 이 둘을 각각 진단해 주지만, 진단은 위 명령을 안내할 뿐입니다.
+
+#### 홈 디렉토리에 있던 체크아웃 이관
+
+기존 배포는 개인 홈(`~/adcraft`)에 있었습니다. 옮길 때 확인할 것은 하나뿐입니다 --
+**상태 볼륨은 따라 움직이지 않습니다.** `adgen-state`는 호스트 경로가 아니라 이름 있는
+볼륨이고 compose 프로젝트 이름도 `adgen`으로 고정이므로, 새 경로에서 스택을 올려도 **계정과
+세션은 그대로 살아 있습니다**(ADR-0014). 볼륨을 백업하거나 옮기는 절차는 필요 없습니다.
+
+```bash
+# 1. 위 "최초 1회 준비"를 먼저 끝냅니다.
+
+# 2. .env 는 ignore 파일이라 clone 에 따라오지 않습니다. 손으로 옮기는 유일한 파일입니다.
+cp ~/adcraft/infra/.env /srv/adcraft/app/infra/.env
+chmod 660 /srv/adcraft/app/infra/.env          # 그룹은 읽고, 그 밖은 못 읽게
+
+# 3. 새 경로에서 배포합니다. 여기서 계정 건수가 이관 전과 같아야 합니다.
+cd /srv/adcraft/app && bash scripts/deploy-vm.sh
+
+# 4. 옛 체크아웃을 실행할 수 없게 만듭니다. 남겨 두면 언젠가 거기서 배포합니다.
+#    (스크립트의 경로 검사가 막지만, 막힌 뒤에야 알게 되는 것보다 낫습니다.)
+mv ~/adcraft ~/adcraft.retired-YYYYMMDD
+```
+
+4번을 `rm -rf`가 아니라 `mv`로 두는 것은 **옛 트리에만 있는 손댄 파일이 없는지 확인할 시간을
+남기기 위해서**입니다. 새 경로에서 배포가 한 번 성공하고 며칠 지난 뒤 지우세요.
+
+> ⚠️ **`docker compose down -v`로 정리하지 마세요.** 옛 경로를 치우는 작업과 볼륨을 비우는
+> 작업은 전혀 다른 일이고, `-v`는 계정과 세션을 지웁니다. 컨테이너는 새 경로의 `up`이 알아서
+> 갈아끼웁니다 -- 옛 경로에서 내릴 필요가 없습니다.
+
 ### 배포 실행 절차 (`scripts/deploy-vm.sh`)
 
 SA 키를 발급할 수 없어 배포는 **SSH 수동 경로**입니다(아래 "배포 자동화" 참고). 그 절차를
@@ -131,7 +234,7 @@ SA 키를 발급할 수 없어 배포는 **SSH 수동 경로**입니다(아래 "
 **VM 안에서** 실행합니다. 원격에서는 SSH로 감쌉니다:
 
 ```bash
-ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
+ssh "$ADCRAFT_VM" 'cd /srv/adcraft/app && bash scripts/deploy-vm.sh'
 ```
 
 | 명령 | 하는 일 |
@@ -140,6 +243,7 @@ ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
 | `bash scripts/deploy-vm.sh --ref <ref>` | 다른 브랜치·태그·커밋으로. **롤백도 이 경로입니다** |
 | `bash scripts/deploy-vm.sh --check` | 점검만. 아무것도 바꾸지 않습니다 |
 | `bash scripts/deploy-vm.sh --no-build` | **체크아웃과 이미지를 그대로 두고** 재기동. `.env`만 고쳤을 때 |
+| `bash scripts/deploy-vm.sh --allow-any-root` | 배포 경로 검사를 끕니다. 개인 체크아웃에서 시험할 때만 |
 
 > ⚠️ **`--no-build`는 체크아웃을 갱신하지 않습니다**(`--ref`와 함께 쓸 수 없습니다). 코드를
 > 새 커밋으로 옮기면서 이미지를 옛것으로 두면, 실제로 도는 코드와 `git rev-parse HEAD`가
@@ -150,8 +254,10 @@ ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
 저장소가 public이기 때문이며, 접속 경로는
 [GCP_VM_사용_가이드.md](../docs/공통_가이드/GCP_VM_사용_가이드.md)에 있습니다.
 
-스크립트가 사람 대신 지키는 것은 넷입니다. 손으로 배포할 때도 같은 순서를 지키세요:
+스크립트가 사람 대신 지키는 것은 다섯입니다. 손으로 배포할 때도 같은 순서를 지키세요:
 
+- **`/srv/adcraft/app` 밖에서는 실행되지 않습니다.** 옛 체크아웃에서 돌린 배포는 에러 없이
+  성공해서, 실패가 아니라 "아무도 안 보는 트리가 떠 있는 상태"로 나타납니다 (위 절).
 - **`infra/.env` 없이 기동하지 않습니다.** 없으면 `ADGEN_ACCOUNTS`가 빈 문자열로 넘어가고,
   `seed([])`는 아무것도 지우지 않으므로 **기동은 성공한 채 로그인만 어긋납니다.** 배포 실패로
   보이지 않는 것이 이 함정의 전부입니다 (`apps/backend/tests/api/test_startup.py`).

@@ -67,7 +67,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
 
 
-app = FastAPI(title="adgen-backend", lifespan=lifespan)
+# ⚠️ `redirect_slashes=False` is a **security** setting here, not a style choice.
+# Starlette's slash redirect builds an *absolute* URL from `scope["scheme"]`, and behind our
+# proxy chain that scheme is always `http`: the frontend nginx overwrites `X-Forwarded-Proto`
+# with its own (plaintext) `$scheme`, and uvicorn runs without `--proxy-headers` anyway. So
+# once TLS terminates at the front proxy (ADR-0016), `POST https://host/v1/auth/login/`
+# answers `307 Location: http://host/v1/auth/login` — and 307 preserves method and body, so
+# the password goes out in the clear once before the proxy redirects it back to HTTPS. The
+# request succeeds, so nothing shows on screen (issue #129).
+# Turning the redirect off is safe: no route and no contract path ends in a slash, and the
+# router's own 404 already carries the contract error shape (see the handler below).
+app = FastAPI(title="adgen-backend", lifespan=lifespan, redirect_slashes=False)
 
 # The contract's error shape is {code, message}; FastAPI's default is {"detail": ...}.
 # ⚠️ Register on *Starlette's* HTTPException, not FastAPI's. FastAPI's is a subclass, and

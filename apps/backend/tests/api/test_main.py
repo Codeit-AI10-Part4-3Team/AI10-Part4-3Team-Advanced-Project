@@ -43,3 +43,29 @@ def test_error_body_uses_the_contract_shape(client: TestClient) -> None:
     assert response.status_code == 404
     assert set(response.json()) == {"code", "message"}
     assert response.json()["code"] == "NOT_FOUND"
+
+
+def test_a_trailing_slash_is_404_and_never_a_redirect(client: TestClient) -> None:
+    """A slash redirect would hand the caller an absolute `http://` URL, downgrading TLS.
+
+    Starlette builds that redirect from `scope["scheme"]`, which is always `http` behind our
+    proxy chain: the frontend nginx overwrites `X-Forwarded-Proto` with its own plaintext
+    `$scheme`, and uvicorn runs without `--proxy-headers`. With TLS terminating at the front
+    proxy (ADR-0016), `POST /v1/auth/login/` would answer `307 Location: http://.../login`,
+    and 307 preserves method and body — so the password leaves once in the clear. The proxy
+    redirects it back to HTTPS and the request succeeds, which is why nothing shows on
+    screen (issue #129).
+
+    ⚠️ This asserts the *absence* of a redirect, so it fails the moment someone restores
+    `redirect_slashes`. Checking only the 404 would not: a 307 followed by the redirect would
+    also end at a 404 for an unauthenticated caller.
+    """
+    response = client.post(
+        "/v1/auth/login/",
+        json={"loginId": "demo1", "password": "pw"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 404
+    assert "location" not in response.headers
+    assert response.json()["code"] == "NOT_FOUND"

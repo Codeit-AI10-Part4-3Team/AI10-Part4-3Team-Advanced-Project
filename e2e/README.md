@@ -21,7 +21,7 @@ playwright install --with-deps chromium     # 브라우저 시나리오를 쓸 �
 
 # 스택 기동 후
 docker compose -f infra/docker-compose.yml up -d --wait
-export E2E_BASE_URL=http://localhost:8000
+export E2E_BASE_URL=http://localhost
 cd e2e && pytest -v      # ⚠️ cwd가 e2e여야 pyproject.toml의 testpaths/markers를 집습니다
 ```
 

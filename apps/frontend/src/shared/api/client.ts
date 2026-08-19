@@ -41,6 +41,20 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   return response.json() as Promise<T>;
 }
 
+// 본문과 응답 헤더를 함께 돌려줍니다.
+//
+// ⚠️ 지금 이것을 쓰는 곳은 잡 폴링 하나뿐이고, 그것으로 충분합니다. **폴링 간격은 서버가
+// `Retry-After` 로 정하고 클라이언트는 따르기만 합니다** - 간격을 화면에 하드코딩하면 큐가
+// 밀려 서버가 간격을 늘려도 따라오지 않고, 조회 부하가 가장 나쁜 시점에 그대로 유지됩니다.
+// 헤더를 읽으려면 파싱된 본문만으로는 안 되므로 경계에 이 문 하나를 냅니다.
+export async function apiRequestWithHeaders<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ data: T; headers: Headers }> {
+  const response = await send(path, init);
+  return { data: (await response.json()) as T, headers: response.headers };
+}
+
 // ⚠️ 204 는 본문이 없으므로 `response.json()` 이 파싱 오류로 던집니다. 로그아웃이 실제로
 // 성공했는데 화면에는 실패로 보이는 상태가 되고, 사용자는 이미 만료된 쿠키를 들고 다시
 // 시도하게 됩니다. 계약에서 204 를 쓰는 경로(`POST /v1/auth/logout`)는 이쪽으로 부릅니다.

@@ -7,8 +7,8 @@ needs a filled-in .env before it moves is not a walking skeleton.
 ⚠️ The auth fields below have empty defaults, and that emptiness is *not* a usable value.
 A committed default signing key is a published signing key (ADR-0013), and the fixed
 accounts only exist in infra/.env anyway (ADR-0008). The check that rejects an empty
-secret lives in the auth wiring, not here: this class is also read by /health and /v1/ask,
-which must keep working on a fresh clone with no .env at all.
+secret lives in the auth wiring, not here: this class is also read by /health, which must
+keep working on a fresh clone with no .env at all.
 """
 
 import json
@@ -77,8 +77,8 @@ def _json_list(value: Any, variable: str, example: str) -> Any:
     CI 의 종단 관통 테스트가 여기서 unhealthy 로 떨어졌습니다).
 
     An unconfigured stack is a supported state. Nobody can log in and the catalog is empty,
-    while `/health` and `/v1/ask` still answer — which is exactly the "빈 스택이어도 충족"
-    deployment the 08-14 일정 항목 asks for.
+    while `/health` still answers — which is exactly the "빈 스택이어도 충족" deployment the
+    08-14 일정 항목 asks for.
 
     Genuinely broken JSON still fails, loudly and **with the shape in the message**: whoever
     hits it is looking at a container that will not start, and the value is one long line in

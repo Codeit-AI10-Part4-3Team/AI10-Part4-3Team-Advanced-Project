@@ -19,10 +19,10 @@ from api.main import app
 
 BACKEND_TAGS = {"auth", "sessions", "jobs", "catalog"}
 
-# The template question-and-answer path predates the ad contract and is scheduled for
-# replacement, not documentation (API_계약.md 7.1절).
-NOT_IN_THE_AD_CONTRACT = {"/v1/ask"}
-
+# ⚠️ There is no exemption list, and that is deliberate. One used to sit here for the
+# template's `/v1/ask` (API_계약.md 7.1절); it was removed with the route. Do not add
+# another — an exemption here is exactly how an undocumented route survives CI, and this
+# repo's rule is contract first (AGENTS.md).
 METHODS = ("get", "post", "patch", "delete", "put")
 
 
@@ -42,7 +42,7 @@ def _published_operations() -> set[str]:
         f"{method.upper()} {path}"
         for path, operations in published.items()
         for method in operations
-        if method in METHODS and path not in NOT_IN_THE_AD_CONTRACT
+        if method in METHODS
     }
 
 

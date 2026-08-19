@@ -20,7 +20,6 @@ from backend_core.models.generation import (
     DraftGenerateResponse,
     ImageRenderRequest,
 )
-from backend_core.models.legacy_qa import Answer, Source
 from backend_core.models.patch import DraftPatchEngineRequest
 
 
@@ -37,8 +36,6 @@ class AiEngineUnavailableError(RuntimeError):
 
 class AiEngineClient(Protocol):
     """Seam between the real HTTP client and the test fake."""
-
-    def generate(self, question: str, locale: str) -> Answer | None: ...
 
     def fill_brief(
         self, product_name: str, selling_point: str, note: str, image: bytes, filename: str
@@ -193,28 +190,3 @@ class HttpAiEngineClient:
         except httpx.HTTPError as exc:
             raise AiEngineUnavailableError(str(exc)) from exc
         return response.content
-
-    def generate(self, question: str, locale: str) -> Answer | None:
-        """Return the grounded answer, or None when the engine honestly refused.
-
-        Raises AiEngineUnavailableError for transport failures and 5xx. The distinction
-        matters: a refusal means "we could have written something and declined to invent
-        it", an outage means "we never got to ask".
-        """
-        payload = {"question": question, "locale": locale}
-        try:
-            response = httpx.post(
-                f"{self._base_url}/v1/generate", json=payload, timeout=self._timeout_s
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise AiEngineUnavailableError(str(exc)) from exc
-
-        body = response.json()
-        if body.get("answer") is None:
-            return None
-        return Answer(
-            text=body["answer"],
-            message_mode="grounded",
-            sources=[Source.model_validate(s) for s in body.get("sources", [])],
-        )

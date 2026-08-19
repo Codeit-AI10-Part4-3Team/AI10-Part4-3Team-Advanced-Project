@@ -184,6 +184,7 @@ IAM 역할은 커스텀 역할 `sprinter_vm_role_v1` **하나뿐**이고, **그 
 | 2026-08-10 | `compute.instances.setMetadata` · `compute.disks.addResourcePolicies` | 있음 |
 | 2026-08-10 | **`iap.tunnelInstances.accessViaIAP`** | **없음** (`4033: not authorized`). API를 켜도 동일 |
 | 2026-08-12 | **8100 을 여는 방화벽 규칙** (확인자: 임동규) | **0건.** `--filter="allowed[].ports~8100"` 조회 결과 없음. ingress 는 default-deny 이므로 규칙이 없으면 닫힌 상태입니다 |
+| 2026-08-19 | **443 이 밖에서 닿는지** (확인자: 임동규) | **닿습니다.** 연결 거부(refused)이지 타임아웃이 아니므로 방화벽은 통과하고 듣는 쪽만 없는 상태입니다. HTTPS 용 규칙을 새로 만들 필요가 없습니다 |
 | 2026-08-12 | 방화벽 규칙의 적용 범위 (확인자: 임동규) | **우리만의 네트워크가 아닙니다.** 아래 "방화벽은 우리 통제 밖입니다" 참고 |
 
 **결론: 컴퓨트 계열에는 제약이 없습니다. 남은 제약은 SA 키 발급 금지와 IAP 터널 접근 불가
@@ -212,14 +213,11 @@ VPC 는 **학원이 여러 팀에 함께 배정한 `default` 네트워크**입�
 
 여기서 나오는 결론이 둘입니다.
 
-- **80 용 방화벽 규칙을 새로 만들 필요가 없습니다.** 태그 없는 규칙이 이미 열어 두고 있습니다.
-  **443 은 확인이 필요합니다** -- 없으면 우리가 만듭니다(규칙 생성 권한은 위 표에서 확인됨):
-
-  ```bash
-  gcloud compute firewall-rules list --filter="allowed[].ports~'443'" --format='table(name,sourceRanges.list(),allowed[].map().firewall_rule().list())'
-  # 없으면
-  gcloud compute firewall-rules create allow-https --allow=tcp:443 --source-ranges=0.0.0.0/0 --description='ADR-0016 HTTPS 종단'
-  ```
+- **80 과 443 모두 방화벽 규칙을 새로 만들 필요가 없습니다.** 태그 없는 규칙이 이미 열어
+  두고 있습니다. 443 은 2026-08-19 에 밖에서 확인했습니다 -- **연결이 거부(refused)되었지
+  타임아웃이 아닙니다.** 이 구분이 판정의 근거입니다: 차단된 포트는 패킷을 조용히 버려
+  타임아웃이 나고, 거부는 패킷이 VM 까지 닿아 듣는 프로세스가 없다는 뜻입니다.
+  즉 규칙은 이미 있고 프록시만 올리면 됩니다.
 
 - **8000 이 열려 있다는 사실 자체는 그대로입니다.** `allow-backend`(tcp:8000) 와
   `allow-ai-services`(tcp:3000,5432,8000,8890,8891,8892) 가 태그 없이 열려 있고 우리는 그

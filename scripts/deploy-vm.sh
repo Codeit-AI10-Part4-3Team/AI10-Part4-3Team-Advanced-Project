@@ -2,7 +2,12 @@
 # GCP VM 배포 — 체크아웃을 목표 ref 로 올리고 compose 스택을 교체한 뒤 관통 확인까지 합니다.
 # **VM 안에서** 실행합니다. 로컬에서 원격으로 돌릴 때는 SSH 로 감싸세요:
 #
-#     ssh "$ADCRAFT_VM" 'cd ~/adcraft && bash scripts/deploy-vm.sh'
+#     ssh "$ADCRAFT_VM" 'cd /app && bash scripts/deploy-vm.sh'
+#
+# ⚠️ 배포 체크아웃은 `/app` 하나입니다 — 개인 홈이 아닙니다. 홈에 두면 그 계정이 빠질 때 배포
+#    경로가 함께 사라지고, 다른 사람은 남의 홈을 들여다볼 수도 고칠 수도 없습니다. `/app` 은
+#    `adcraft` 그룹 소유의 공용 경로입니다(infra/README.md '배포 체크아웃은 /app').
+#    이 스크립트는 그 경로 밖에서 실행되면 중단합니다 — 아래 check_deploy_root 참고.
 #
 # ⚠️ 접속 정보(외부 IP·프로젝트 ID·인스턴스명)를 이 파일에 적지 마세요 — 저장소가 public 입니다.
 #    접속 경로는 docs/공통_가이드/GCP_VM_사용_가이드.md, 권한 경계는 ADR-0011 에 있습니다.
@@ -19,6 +24,7 @@
 #       bash scripts/deploy-vm.sh --check         점검만 (fetch·빌드·기동 없음)
 #       bash scripts/deploy-vm.sh --no-build      체크아웃·이미지 그대로 재기동 (.env 변경 반영)
 #       bash scripts/deploy-vm.sh --skip-verify   배포 후 관통 확인 생략
+#       bash scripts/deploy-vm.sh --allow-any-root  배포 경로 검사를 끕니다 (아래 참고)
 #
 # ⚠️ --no-build 는 체크아웃을 갱신하지 않습니다(--ref 와 함께 쓸 수 없습니다). 코드를 옮기면서
 #    이미지를 그대로 두면 도는 코드와 `git rev-parse HEAD` 가 어긋납니다.
@@ -31,9 +37,17 @@ set -Eeuo pipefail
 #    파일 오프셋 기준으로 이어 읽기 때문에, 평범하게 위에서 아래로 쓴 스크립트는 그 순간
 #    엉뚱한 지점을 실행합니다. 마지막 줄까지 파싱을 끝낸 뒤 실행에 들어가면 그 창이 닫힙니다.
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# ⚠️ `-P` 로 심볼릭 링크를 풀어 실제 경로를 씁니다. 아래 배포 경로 검사는 문자열 비교인데,
+#    링크를 안 풀면 같은 트리가 들어온 문으로 통과했다 막혔다 합니다. 특히 `/app` 이 누군가의
+#    홈을 가리키는 링크로 바뀌어 있으면, 링크를 안 푼 검사는 그것을 통과시킵니다.
+ROOT="$(cd -P "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILE="infra/docker-compose.yml"
 ENV_FILE="infra/.env"
+
+# 배포 체크아웃의 정본 경로. 개인 홈이 아니라 `adcraft` 그룹 소유의 공용 경로입니다
+# (infra/README.md '배포 체크아웃은 /app'). 다른 곳에 체크아웃해 두고 시험 배포를 돌리려면
+# 이 변수를 넘기거나 --allow-any-root 를 쓰세요.
+DEPLOY_ROOT="${ADCRAFT_DEPLOY_ROOT:-/app}"
 
 # compose 의 포트 매핑과 같아야 합니다. 바꿀 일이 생기면 compose 쪽이 정본입니다.
 FRONTEND_PORT="${ADCRAFT_FRONTEND_PORT:-80}"
@@ -47,6 +61,7 @@ REF_GIVEN=0
 MODE="deploy"
 DO_BUILD=1
 DO_VERIFY=1
+ALLOW_ANY_ROOT=0
 
 log()  { echo "==> $*"; }
 warn() { echo "  ! $*" >&2; }
@@ -61,7 +76,10 @@ parse_args() {
       --check)       MODE="check"; shift ;;
       --no-build)    DO_BUILD=0; shift ;;
       --skip-verify) DO_VERIFY=0; shift ;;
-      -h|--help)     sed -n '1,27p' "$0"; exit 0 ;;
+      --allow-any-root) ALLOW_ANY_ROOT=1; shift ;;
+      # 헤더 주석 전체를 그대로 씁니다. 줄 번호로 자르면 주석을 한 줄 고칠 때마다 --help 가
+      # 조용히 어긋납니다 (실제로 어긋났습니다).
+      -h|--help)     awk 'NR>1 && /^set -/{exit} NR>1' "$0"; exit 0 ;;
       *)             die "모르는 인자: $arg (사용법은 --help)" ;;
     esac
   done
@@ -78,8 +96,52 @@ compose() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
+# ⚠️ 이 검사가 막는 것은 "옛 체크아웃에서 돌린 배포"입니다. compose 프로젝트 이름이
+#    `adgen` 으로 고정돼 있어(infra/docker-compose.yml 의 `name:`) 어느 체크아웃에서 올리든
+#    같은 컨테이너·같은 볼륨을 갈아끼웁니다. 즉 홈에 남은 옛 체크아웃에서 실행해도 **아무
+#    에러 없이 성공**하고, 그때부터 배포된 코드는 아무도 보고 있지 않은 트리가 됩니다.
+#    실패로 드러나지 않는 것이 이 함정의 전부라 경고가 아니라 중단으로 둡니다.
+check_deploy_root() {
+  [[ "$ROOT" == "$DEPLOY_ROOT" ]] && return 0
+
+  if [[ "$ALLOW_ANY_ROOT" -eq 1 ]]; then
+    warn "배포 경로 검사를 껐습니다: $ROOT (정본은 $DEPLOY_ROOT)"
+    return 0
+  fi
+
+  echo "[중단] 배포 체크아웃이 아닙니다." >&2
+  echo "       지금 위치: $ROOT" >&2
+  echo "       정본 경로: $DEPLOY_ROOT" >&2
+  if [[ "$ROOT" == "$HOME"/* || "$ROOT" == /home/* ]]; then
+    echo "       개인 홈의 체크아웃입니다. 배포는 /app 에서만 합니다 —" >&2
+    echo "       이관 절차는 infra/README.md '배포 체크아웃은 /app' 절." >&2
+  fi
+  echo "       시험 목적이면: --allow-any-root, 또는 ADCRAFT_DEPLOY_ROOT=$ROOT" >&2
+  exit 1
+}
+
+# `/app` 은 여러 사람이 같은 체크아웃을 만지는 그룹 공유 경로입니다. 여기서 나는 두 가지
+# 실패는 증상만 보면 코드 문제로 보이므로 먼저 진단해 둡니다.
+check_shared_checkout() {
+  # git 2.35.2+ 는 소유자가 다른 저장소를 거부합니다("dubious ownership"). A 가 클론하고
+  # B 가 배포하는 순간 첫 git 명령에서 터지는데, 메시지가 배포와 무관해 보입니다.
+  if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "[중단] git 이 이 체크아웃을 거부했습니다 (소유자가 다를 때 나는 증상입니다)." >&2
+    echo "       한 번만: sudo git config --system --add safe.directory $ROOT" >&2
+    echo "       ('--global' 은 실행한 사람에게만 걸립니다. 배포는 누가 돌릴지 모릅니다.)" >&2
+    exit 1
+  fi
+
+  # 그룹 쓰기가 빠져 있으면 fetch 는 되는데 다음 사람의 fetch 가 권한 오류로 죽습니다.
+  # setgid + 기본 ACL 이 걸린 경로에서는 나지 않아야 하는 상태입니다(infra/README.md).
+  [[ -w "$ROOT/.git" ]] || warn "$ROOT/.git 에 쓸 수 없습니다 — 그룹 퍼미션을 확인하세요 (infra/README.md)."
+}
+
 preflight() {
   log "사전 점검"
+
+  check_deploy_root
+  check_shared_checkout
 
   [[ -f "$COMPOSE_FILE" ]] || die "$COMPOSE_FILE 이 없습니다. 레포 루트에서 실행하세요."
   command -v docker >/dev/null 2>&1 || die "docker 가 없습니다."

@@ -187,6 +187,16 @@ gcloud compute instances add-metadata $VM --zone=$ZONE --metadata-from-file ssh-
 ## 6. 공용 작업 폴더
 
 여러 사람이 같은 폴더를 쓸 때는 홈 디렉토리가 아니라 공용 경로를 그룹 소유로 만듭니다.
+`/srv/adcraft` 아래에 두 개가 있습니다.
+
+```
+/srv/adcraft/
+├── app/     <- 배포 체크아웃. 서비스 스택이 여기서 뜹니다 (infra/README.md)
+└── exp/     <- 공용 실험 폴더. 학습, 스크래치, 산출물 (이 절)
+```
+
+`exp`는 사람이 쌓는 작업물이고 `app`은 `deploy-vm.sh`만 건드리는 트리입니다. 아래 설정은
+`/srv/adcraft` 자체에 거는 것이라 **두 폴더 모두에 상속됩니다.**
 
 ```bash
 sudo groupadd -f adcraft
@@ -200,6 +210,11 @@ sudo setfacl -R -d -m g::rwx /srv/adcraft/exp  # 기본 ACL: umask 가 그룹 �
 setgid와 기본 ACL을 빠뜨리면 각자 만든 파일의 그룹과 퍼미션이 갈려서 **서로의 산출물을 지우지도
 덮지도 못하는 상태**가 며칠 안에 생깁니다. 그때 고치려면 이미 쌓인 파일 전부를 다시
 `chown` 해야 하므로 처음에 걸어 두는 편이 쌉니다.
+
+`app`은 그룹·setgid·기본 ACL을 위에서 상속받지만 **git 저장소라서 두 줄이 더 붙습니다**
+(`core.sharedRepository`와 `safe.directory`). 그 절차와 이유는
+[infra/README.md](../../infra/README.md)의 "배포 체크아웃은 `/srv/adcraft/app`" 절이 정본입니다.
+여기에 복제하지 않습니다.
 
 ## 7. 접속한 다음에 지켜야 할 것
 
@@ -244,7 +259,17 @@ docker system df             # 이미지와 빌드 캐시
 
 배포는 SSH 접속 후 `git pull`과 `docker compose up`의 수동 경로입니다. 서비스 계정 키 발급이
 조직 정책으로 금지되어 GitHub Actions 자동 배포가 성립하지 않기 때문입니다(ADR-0011).
-compose 파일과 절차는 [infra/README.md](../../infra/README.md)를 따릅니다.
+그 절차는 `scripts/deploy-vm.sh`에 고정돼 있고, compose 파일과 함께
+[infra/README.md](../../infra/README.md)를 따릅니다.
+
+```bash
+cd /srv/adcraft/app && bash scripts/deploy-vm.sh
+```
+
+**개인 홈에 체크아웃을 만들어 거기서 배포하지 마세요.** 배포 트리는 `/srv/adcraft/app` 하나이고,
+스크립트는 그 밖에서 실행되면 중단합니다. 홈에 두면 그 계정에 배포가 묶이고, compose 프로젝트
+이름이 고정이라 **옛 체크아웃에서 올려도 에러 없이 성공**해서 어느 트리가 떠 있는지 알 수 없게
+됩니다. 근거는 infra/README.md의 "배포 체크아웃은 `/srv/adcraft/app`" 절입니다.
 
 `docker` 명령이 `permission denied`로 거부되면 그룹 반영이 안 된 것입니다.
 `sudo usermod -aG docker $USER` 후 **재로그인**해야 적용됩니다.
@@ -279,5 +304,6 @@ gcloud compute connect-to-serial-port $VM --zone=$ZONE
 - **`ssh-keys` 메타데이터를 읽지 않고 덮어쓰지 않습니다** (5절)
 - **backend 8000 외의 포트를 방화벽에 열지 않습니다.** 필요하면 포트 포워딩입니다 (4-e절)
 - **서비스 계정 키를 발급해 반출하려 하지 않습니다** (조직 정책으로 금지, ADR-0011)
+- **개인 홈의 체크아웃에서 배포하지 않습니다.** 배포 트리는 `/srv/adcraft/app` 하나입니다 (7-d절)
 - **비용을 이유로 VM을 정지하지 않습니다** (절감 대상이 우리 비용이 아닙니다, ADR-0011)
 - **외부 IP와 프로젝트 ID를 저장소에 적지 않습니다** (2-b절)

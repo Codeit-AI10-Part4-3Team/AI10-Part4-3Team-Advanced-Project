@@ -133,6 +133,14 @@ ADGEN_ACCOUNTS=[{"loginId":"demo1","passwordHash":"$$argon2id$$v=19$$m=65536,t=3
 └── exp/     <- 공용 실험 폴더. 배포와 무관합니다 (GCP_VM_사용_가이드.md 6절)
 ```
 
+> **2026-08-19 이관 완료 (실측).** `~/adcraft`에서 옮겼고 아래를 확인했습니다.
+> `drwxrws---+ spai1032 adcraft` (setgid + ACL 상속됨), `core.sharedRepository=group`,
+> `--system safe.directory` 등록됨, `infra/.env`는 `-rw-rw----`, 컨테이너 3종 healthy,
+> backend `/health` 200 · frontend `/` 200 · 프록시 `/v1/sessions` 401.
+> **볼륨 `adgen_adgen-state`의 `CreatedAt`이 `2026-08-15T02:28:18Z`로 이관 전과 같고**
+> 계정 2건이 그대로입니다 -- 경로를 옮겨도 상태가 따라오지 않는다는 것이 실제로 확인됐습니다.
+> 옛 체크아웃은 `~/adcraft.retired-20260819`로 무력화했습니다.
+
 `/srv/adcraft`에는 `adcraft` 그룹과 setgid, 기본 ACL이 **이미 걸려 있습니다.** `app`을 그
 아래에 두는 이유가 그것입니다 -- 새 경로에 권한을 처음부터 세울 필요 없이 상속받습니다.
 

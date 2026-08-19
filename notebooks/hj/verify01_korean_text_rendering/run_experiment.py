@@ -39,6 +39,12 @@ DEFAULT_RUNS = 1
 # (구현_범위 4.2절: 예산 상한은 실측 뒤에 정합니다).
 PRICE_ENV_INPUT = "ADGEN_PRICE_INPUT_PER_MTOK"
 PRICE_ENV_OUTPUT = "ADGEN_PRICE_OUTPUT_PER_MTOK"
+PRICE_ENV_IMAGE_INPUT = "ADGEN_PRICE_IMAGE_INPUT_PER_MTOK"
+"""이미지를 입력으로 넣으면 요금이 텍스트와 다릅니다 (2026-08-13 확인: text $5 / image $8).
+
+⚠️ 이 값을 주지 않으면 이미지 입력 토큰이 **텍스트 단가로 계산되어 과소 집계**됩니다.
+`--input-image` 를 쓸 때는 반드시 함께 넣으세요.
+"""
 
 
 def _api_key() -> str:
@@ -55,12 +61,16 @@ def _api_key() -> str:
     )
 
 
-def _prices() -> tuple[float | None, float | None]:
+def _prices() -> dict[str, float | None]:
     def read(name: str) -> float | None:
         raw = os.environ.get(name, "").strip()
         return float(raw) if raw else None
 
-    return read(PRICE_ENV_INPUT), read(PRICE_ENV_OUTPUT)
+    return {
+        "text_in": read(PRICE_ENV_INPUT),
+        "image_in": read(PRICE_ENV_IMAGE_INPUT),
+        "out": read(PRICE_ENV_OUTPUT),
+    }
 
 
 def _usage_dict(usage: Any) -> dict[str, Any]:
@@ -74,18 +84,38 @@ def _usage_dict(usage: Any) -> dict[str, Any]:
     return {"raw": repr(usage)}
 
 
-def _cost(usage: dict[str, Any], price_in: float | None, price_out: float | None) -> float | None:
-    if price_in is None or price_out is None:
-        return None
+def _cost(usage: dict[str, Any], prices: dict[str, float | None]) -> float | None:
+    """텍스트 입력과 이미지 입력의 단가가 다르므로 나눠서 곱합니다.
+
+    ⚠️ 합쳐서 텍스트 단가로 곱하면 제품컷을 넣는 경로에서 비용이 과소 집계됩니다.
+    """
     tok_in = usage.get("input_tokens")
     tok_out = usage.get("output_tokens")
-    if tok_in is None or tok_out is None:
+    if tok_in is None or tok_out is None or prices["text_in"] is None or prices["out"] is None:
         return None
-    return (tok_in / 1_000_000) * price_in + (tok_out / 1_000_000) * price_out
+
+    details = usage.get("input_tokens_details") or {}
+    image_in = details.get("image_tokens") or 0
+    text_in = details.get("text_tokens")
+    if text_in is None:
+        text_in = tok_in - image_in
+
+    # 이미지 입력 단가를 안 주면 텍스트 단가로 떨어뜨리되, 호출부가 경고를 찍습니다.
+    price_image_in = prices["image_in"] if prices["image_in"] is not None else prices["text_in"]
+    return (
+        (text_in / 1_000_000) * prices["text_in"]
+        + (image_in / 1_000_000) * price_image_in
+        + (tok_out / 1_000_000) * prices["out"]
+    )
 
 
 def _call_once(
-    client: Any, model: str, prompt: str, size: str, quality: str | None
+    client: Any,
+    model: str,
+    prompt: str,
+    size: str,
+    quality: str | None,
+    input_image: Path | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     """이미지 1장. 실패는 삼키지 않고 올립니다 - 규격 거절 자체가 이 실험의 발견입니다.
 
@@ -99,7 +129,13 @@ def _call_once(
         kwargs["quality"] = quality
 
     started = time.monotonic()
-    response = client.images.generate(**kwargs)
+    if input_image is None:
+        response = client.images.generate(**kwargs)
+    else:
+        # 제품 사진을 입력으로 넣는 경로는 generate 가 아니라 edit 입니다. 파일 핸들을
+        # with 로 닫는 이유는 회차가 20번 돌면 핸들이 그만큼 열리기 때문입니다.
+        with input_image.open("rb") as fp:
+            response = client.images.edit(image=[fp], **kwargs)
     elapsed = time.monotonic() - started
 
     payload = response.data[0]
@@ -147,14 +183,22 @@ def main() -> int:
     )
     parser.add_argument(
         "--size",
-        default=f"{conditions.CANVAS_WIDTH}x{conditions.CANVAS_HEIGHT}",
-        help="요청 해상도. 기본값은 기획서 10.2의 만화형 규격입니다",
+        default=None,
+        help="요청 해상도. 주지 않으면 variant 의 기본 규격을 씁니다 "
+        "(만화형 3456x2304, 단일 광고형 1088x1088)",
     )
     parser.add_argument("--model", default=os.environ.get("ADGEN_IMAGE_MODEL", "gpt-image-2"))
     parser.add_argument(
         "--quality",
         default=None,
         help="지정하면 그대로 전달합니다. 주지 않으면 모델이 회차마다 티어를 골라 조건이 흔들립니다",
+    )
+    parser.add_argument(
+        "--input-image",
+        type=Path,
+        default=None,
+        help="제품 사진을 입력으로 넣습니다 (images.edit 경로). 요금이 달라지므로 "
+        f"{PRICE_ENV_IMAGE_INPUT} 도 함께 주세요",
     )
     parser.add_argument("--dry-run", action="store_true", help="프롬프트만 출력하고 호출하지 않음")
     parser.add_argument("--yes", action="store_true", help="비용 확인 프롬프트를 건너뜀")
@@ -168,6 +212,9 @@ def main() -> int:
     args = parser.parse_args()
 
     prompt = conditions.VARIANTS[args.variant]()
+    if args.size is None:
+        width, height = conditions.DEFAULT_SIZE[args.variant]
+        args.size = f"{width}x{height}"
 
     if args.dry_run:
         print(f"[dry-run] model={args.model} size={args.size} variant={args.variant}")
@@ -186,12 +233,20 @@ def main() -> int:
     except ImportError:
         sys.exit("openai 패키지가 없습니다: pip install -r requirements.txt")
 
+    if args.input_image is not None and not args.input_image.is_file():
+        sys.exit(f"입력 이미지가 없습니다: {args.input_image}")
+
     client = OpenAI(api_key=_api_key())
-    price_in, price_out = _prices()
-    if price_in is None or price_out is None:
+    prices = _prices()
+    if prices["text_in"] is None or prices["out"] is None:
         print(
             f"주의: {PRICE_ENV_INPUT} / {PRICE_ENV_OUTPUT}가 없어 비용 열이 비어 있습니다. "
             "토큰 수는 그대로 남으므로 요금표 확인 후 곱하면 됩니다."
+        )
+    elif args.input_image is not None and prices["image_in"] is None:
+        print(
+            f"주의: {PRICE_ENV_IMAGE_INPUT}가 없어 이미지 입력 토큰을 텍스트 단가로 계산합니다. "
+            "비용이 과소 집계됩니다."
         )
 
     run_dir = RUNS_ROOT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.variant}"
@@ -208,6 +263,7 @@ def main() -> int:
         "actual_height",
         "elapsed_sec",
         "input_tokens",
+        "input_image_tokens",
         "output_tokens",
         "cost_usd",
         "image_file",
@@ -225,7 +281,7 @@ def main() -> int:
             row["requested_size"] = args.size
             try:
                 image_bytes, meta = _call_once(
-                    client, args.model, prompt, args.size, args.quality
+                    client, args.model, prompt, args.size, args.quality, args.input_image
                 )
             except Exception as exc:  # noqa: BLE001 - 벤더 예외 계층에 의존하지 않습니다
                 row["error"] = f"{type(exc).__name__}: {exc}"
@@ -241,7 +297,7 @@ def main() -> int:
             image_file = f"{args.variant}-{run_id:02d}.png"
             width, height = _write_image(run_dir / image_file, image_bytes)
             usage = meta["usage"]
-            cost = _cost(usage, price_in, price_out)
+            cost = _cost(usage, prices)
             if cost is not None:
                 total_cost += cost
                 priced_calls += 1
@@ -251,6 +307,7 @@ def main() -> int:
                 actual_height=height,
                 elapsed_sec=meta["elapsed_sec"],
                 input_tokens=usage.get("input_tokens"),
+                input_image_tokens=(usage.get("input_tokens_details") or {}).get("image_tokens"),
                 output_tokens=usage.get("output_tokens"),
                 cost_usd=f"{cost:.4f}" if cost is not None else "",
                 image_file=image_file,

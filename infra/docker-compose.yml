@@ -104,6 +104,17 @@ services:
       #    영원히 도는 스피너로 보이므로, 배포에서 이 값을 false 로 두지 마세요.
       ADGEN_WORKER_ENABLED: ${ADGEN_WORKER_ENABLED:-true}
       ADGEN_WORKER_POLL_INTERVAL_S: ${ADGEN_WORKER_POLL_INTERVAL_S:-1.0}
+      # ── 보존 기간 정리 배치 (세션_보관_정책 2절) ──────────────────────────
+      # ⚠️ 이 값들은 튜닝 손잡이가 아니라 **정책의 숫자**입니다. 줄이면 사용자가 작업을
+      #    되찾을 시간이 줄고, 늘리면 문서가 약속한 것보다 오래 개인정보를 들고 있게
+      #    됩니다. 바꾸려면 세션_보관_정책.md 를 먼저 고치세요.
+      # 업로드 사진은 **렌더 도달 여부와 무관하게** 업로드 시점부터 셉니다.
+      ADGEN_RETENTION_PHOTO_H: ${ADGEN_RETENTION_PHOTO_H:-24.0}
+      ADGEN_RETENTION_SESSION_D: ${ADGEN_RETENTION_SESSION_D:-7.0}
+      ADGEN_SWEEP_INTERVAL_S: ${ADGEN_SWEEP_INTERVAL_S:-86400.0}
+      # ⚠️ 끄면 만료가 일어나지 않습니다. 화면에는 아무 증상이 없고 디스크와 보존 기간만
+      #    조용히 어긋나므로, 배포에서 false 로 두지 마세요. 테스트 스위트만 끕니다.
+      ADGEN_SWEEP_ENABLED: ${ADGEN_SWEEP_ENABLED:-true}
       # 클라이언트에게 `Retry-After` 로 알려 주는 값. 위의 워커 주기와 다릅니다 - 이쪽은
       # 네트워크 너머의 폴링이고, 저쪽은 같은 파일을 보는 폴링입니다.
       ADGEN_JOB_POLL_INTERVAL_S: ${ADGEN_JOB_POLL_INTERVAL_S:-3}

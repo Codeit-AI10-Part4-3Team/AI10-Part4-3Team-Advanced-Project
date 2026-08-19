@@ -261,3 +261,45 @@ def _summarise(session: Session) -> SessionSummary:
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
+
+
+def expired_candidates(connection: sqlite3.Connection) -> list[tuple[str, Session]]:
+    """Every session, for the retention batch to judge. Newest first is irrelevant here.
+
+    ⚠️ A full scan on purpose. The deadline is not a column -- `created_at` lives inside the
+    JSON document, and the real deadline also depends on a session's job results (계약이
+    `expiresAt` 으로 약속한 시각). Encoding that in SQL would put the policy in two places.
+    At this size (a few dozen sessions a day) the scan costs nothing; if the table ever grows
+    enough to matter, promote `created_at` to a column and index it -- and move the policy
+    with it, not just the query.
+    """
+    rows = connection.execute("SELECT session_id, document FROM sessions").fetchall()
+    return [(str(row["session_id"]), Session.model_validate_json(row["document"])) for row in rows]
+
+
+def overwrite_document(connection: sqlite3.Connection, session: Session) -> None:
+    """Replace the stored document in place, touching nothing else.
+
+    ⚠️ Not `save`: that one takes a `Precondition` and is for user edits. This is the
+    retention batch blanking an expired photo reference, and it must **not** bump `revision`
+    or `updated_at`. `revision` is the client's optimistic-lock token -- moving it would make
+    the next patch from an open screen fail with a conflict the user cannot explain.
+    `updated_at` is "when the user last changed this", and the session list is ordered by it,
+    so bumping it would reshuffle somebody's list because a batch ran at 4am.
+    """
+    connection.execute(
+        "UPDATE sessions SET document = ? WHERE session_id = ?",
+        (session.model_dump_json(by_alias=True), str(session.session_id)),
+    )
+    connection.commit()
+
+
+def delete(connection: sqlite3.Connection, session_id: str) -> None:
+    """Remove one session row. The caller deals with its files and jobs.
+
+    Deliberately not a cascade: the files live outside SQLite (ADR-0010) and deleting a row
+    cannot take them with it. A cascade would leave the disk filling up while the database
+    looked clean -- exactly the failure the retention policy exists to prevent.
+    """
+    connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    connection.commit()

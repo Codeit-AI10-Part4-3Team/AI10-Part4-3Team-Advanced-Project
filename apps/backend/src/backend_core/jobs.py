@@ -176,3 +176,23 @@ def requeue_running(connection: sqlite3.Connection) -> int:
 def status_of(connection: sqlite3.Connection, job_id: str) -> JobStatus | None:
     row = connection.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     return None if row is None else str(row["status"])  # type: ignore[return-value]
+
+
+def for_session(connection: sqlite3.Connection, session_id: str) -> list[tuple[str, Job]]:
+    """Every job of one session, for the retention batch."""
+    rows = connection.execute(
+        "SELECT job_id, document FROM jobs WHERE session_id = ?", (session_id,)
+    ).fetchall()
+    return [(str(row["job_id"]), Job.model_validate_json(row["document"])) for row in rows]
+
+
+def all_results(connection: sqlite3.Connection) -> list[tuple[str, Job]]:
+    """Every job that produced a result, for the retention batch to check expiry against."""
+    rows = connection.execute("SELECT job_id, document FROM jobs WHERE status = 'done'").fetchall()
+    return [(str(row["job_id"]), Job.model_validate_json(row["document"])) for row in rows]
+
+
+def delete(connection: sqlite3.Connection, job_id: str) -> None:
+    """Remove one job row. The caller deals with its result file (see `sessions.delete`)."""
+    connection.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+    connection.commit()

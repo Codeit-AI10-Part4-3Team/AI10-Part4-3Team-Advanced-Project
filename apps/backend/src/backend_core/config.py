@@ -149,6 +149,30 @@ class Settings(BaseSettings):
     # (ADR-0014); a second location would be a second thing to back up and forget.
     image_dir: str = "./data/images"
 
+    # ---- retention (세션_보관_정책 2절) --------------------------------------------------
+
+    # ⚠️ These are the periods from the policy table, as settings because the policy says so
+    # ("기간 값과 배치 주기는 설정값입니다"). Shortening one shortens how long a user has to
+    # come back for their work; lengthening one means holding personal data longer than the
+    # document promises. Neither is a tuning knob - change the document first.
+
+    # 업로드 제품 사진. **From upload, not from render.** A session that never reaches
+    # finalize would otherwise keep its photo for ever, and the policy rejects that outright.
+    retention_photo_h: float = 24.0
+
+    # 브리프와 시안(텍스트), and the session row that carries them.
+    retention_session_d: float = 7.0
+
+    # How often the sweep runs. Daily per the policy. It is a period rather than a wall-clock
+    # time because the process restarts on every deploy and a clock-based schedule would
+    # either fire twice or not at all on those days.
+    sweep_interval_s: float = 86400.0
+
+    # ⚠️ **On by default**, for the same reason the worker is: a deployment that forgets it
+    # keeps personal data past its period, and nothing on screen says so. The test suite
+    # turns it off so a sweep does not delete a fixture out from under an assertion.
+    sweep_enabled: bool = True
+
     # ---- catalog -----------------------------------------------------------------------
 
     # ⚠️ Empty by default, and that is the honest value: **the art-style candidates are not

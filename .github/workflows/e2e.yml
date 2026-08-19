@@ -60,8 +60,17 @@ jobs:
           echo "E2E_BASE_URL=http://localhost:8000" >> "$GITHUB_ENV"
 
       # 브라우저 시나리오(딥링크 진입 → 위치 1회 확인)는 chromium만 설치해 잡 시간을 줄입니다.
+      #
+      # ⚠️ **`--with-deps`를 쓰지 않습니다.** 그 옵션은 OS 라이브러리를 apt로 깔고, apt는
+      #    Ubuntu 아카이브 미러에 닿지 못하면 무한 재시도합니다 — 실패가 아니라 **정지**라
+      #    잡이 타임아웃까지 매달립니다. 2026-08-19에 두 번 재현됐고 로그는 둘 다
+      #    `Ign: http://azure.archive.ubuntu.com/... InRelease` 반복이었습니다.
+      #    이 옵션을 빼면 Playwright CDN에서 브라우저 바이너리만 받고 apt를 아예 거치지
+      #    않습니다. 러너 이미지(ubuntu-latest)에 chromium이 요구하는 공유 라이브러리가
+      #    이미 들어 있어 성립하며, 아니라면 브라우저 실행 단계에서 즉시 터지므로 조용히
+      #    넘어가지 않습니다.
       - name: Install browser
-        run: playwright install --with-deps chromium
+        run: playwright install chromium
 
       # ⚠️ cwd를 e2e로 두어야 e2e/pyproject.toml의 testpaths/markers를 집습니다.
       - name: Run E2E

@@ -189,8 +189,12 @@ bring_up() {
 CURL_RESOLVE=()
 
 http_code() {
-  local url="$1"
-  curl -s -o /dev/null -m 10 -w '%{http_code}' ${CURL_RESOLVE[@]+"${CURL_RESOLVE[@]}"} "$url" 2>/dev/null || echo "000"
+  # ⚠️ curl 은 연결에 실패해도 `%{http_code}` 로 이미 `000` 을 씁니다. 그 상태에서 `|| echo`
+  #    를 붙이면 코드가 두 번 찍혀 `000000` 이라는 없는 상태 코드가 보고됩니다 (실측).
+  #    출력을 받아 두었다가 비었을 때만 채웁니다.
+  local url="$1" code
+  code="$(curl -s -o /dev/null -m 10 -w '%{http_code}' ${CURL_RESOLVE[@]+"${CURL_RESOLVE[@]}"} "$url" 2>/dev/null || true)"
+  printf '%s' "${code:-000}"
 }
 
 expect_code() {
@@ -269,6 +273,13 @@ verify() {
   expect_code "${base}/" 200 "화면 진입" || ok=1
   # 라우팅·인증·에러 계약이 셋 다 살아 있어야 401 이 나옵니다.
   expect_code "${base}/v1/sessions" 401 "프록시 /v1/sessions (미인증)" || ok=1
+
+  # HTTPS 인데 전부 `000` 이면 TLS 가 서지 않은 것이고, 그 원인은 대개 인증서 발급입니다.
+  # 컨테이너는 healthy 로 남아 있어(80 은 살아 있으므로) 증상만 보고는 알기 어렵습니다.
+  if [[ "$ok" -ne 0 && -n "$host" ]]; then
+    warn "HTTPS 확인이 실패했습니다. 인증서 발급부터 보세요: docker compose -f $COMPOSE_FILE logs caddy | tail -50"
+    warn "발급 한도로 막힌 경우의 대응은 ADR-0016 '재검토 신호' 에 있습니다."
+  fi
   return "$ok"
 }
 

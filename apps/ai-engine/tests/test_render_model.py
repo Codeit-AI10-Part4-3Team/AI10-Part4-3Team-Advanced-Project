@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -47,6 +48,7 @@ def single_ad_request(**brief_overrides: object) -> ImageRenderRequest:
             visual_plan="제품 단독 컷, 밝은 주방 배경",
         ),
         spec=ImageSpec(width=1088, height=1088),
+        quality="low",
     )
 
 
@@ -65,6 +67,7 @@ def comic_request() -> ImageRenderRequest:
             ],
         ),
         spec=ImageSpec(width=3456, height=2304),
+        quality="medium",
     )
 
 
@@ -160,23 +163,54 @@ def test_the_requested_size_is_what_gets_sent(
     assert images.calls[0]["n"] == 1
 
 
-def test_quality_is_omitted_unless_it_is_configured(
+def test_the_request_decides_the_quality_tier(
     monkeypatch: pytest.MonkeyPatch, model_settings: Settings
 ) -> None:
-    """⚠️ 미지정이면 모델이 회차마다 티어를 골라 비용이 2.3배까지 벌어집니다 (2026-08-13 실측).
-    그럼에도 기본값을 비워 두는 것은 받는 값이 확인되지 않았기 때문입니다 - 잘못된 값을 상수로
-    박으면 모든 호출이 400 으로 죽습니다."""
+    """티어는 호출자가 출력 유형을 보고 정해 보냅니다 (계약 `ImageQuality`, 2026-08-20).
+
+    이 서비스가 `output_type` 에서 유도하면 같은 결정이 두 곳에 생기고, `spec` 을 유도하지
+    않는 이유와 똑같이 한쪽만 고치는 순간 어긋납니다. 값 자체의 정본은 backend 의
+    `COMIC_QUALITY` / `SINGLE_AD_QUALITY` 입니다.
+    """
     images = FakeImages(payload=png_bytes())
     install(monkeypatch, images)
 
     render.render_image(single_ad_request(), model_settings)
-    assert "quality" not in images.calls[0]
+    render.render_image(comic_request(), model_settings)
 
-    render.render_image(
-        single_ad_request(),
-        Settings(generation_mode="model", model_api_key="k", image_quality="high"),
-    )
-    assert images.calls[1]["quality"] == "high"
+    assert images.calls[0]["quality"] == "low"
+    assert images.calls[1]["quality"] == "medium"
+
+
+def test_the_tier_is_always_sent(monkeypatch: pytest.MonkeyPatch, model_settings: Settings) -> None:
+    """⚠️ 싣지 않으면 모델이 회차마다 티어를 골라 같은 요청의 비용이 최대 9배까지 벌어집니다
+    (2026-08-13, 08-15 실측). 그래서 계약이 `quality` 를 필수로 두고, 벤더의 `auto` 는
+    열거에 없습니다."""
+    images = FakeImages(payload=png_bytes())
+    install(monkeypatch, images)
+
+    render.render_image(single_ad_request(), model_settings)
+
+    assert "quality" in images.calls[0]
+
+
+def test_the_dev_override_wins_and_leaves_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """개발과 검증 실험을 `low` 로 돌리기 위한 스위치입니다 (생성_파이프라인 6.2절).
+
+    ⚠️ 경고가 함께 남아야 합니다. 조용히 덮어쓰면 이 상태로 잰 숫자가 운영 경로의 숫자로
+    보고됩니다 - 스텁을 측정값으로 읽는 것과 같은 사고입니다.
+    """
+    images = FakeImages(payload=png_bytes())
+    install(monkeypatch, images)
+    settings = Settings(generation_mode="model", model_api_key="k", image_quality_override="low")
+
+    with caplog.at_level(logging.WARNING, logger="ai_engine.render"):
+        render.render_image(comic_request(), settings)
+
+    assert images.calls[0]["quality"] == "low"
+    assert "medium" in caplog.text, "덮어쓴 원래 티어가 로그에 남아야 합니다"
 
 
 def test_the_result_is_lossless_webp_whatever_the_api_returned(

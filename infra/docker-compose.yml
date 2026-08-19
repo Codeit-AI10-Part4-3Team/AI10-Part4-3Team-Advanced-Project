@@ -40,9 +40,10 @@ services:
       ADGEN_MODEL_API_KEY: ${ADGEN_MODEL_API_KEY:-}
       # 검증 1순위가 실제로 통과시킨 모델입니다 (2026-08-14).
       ADGEN_IMAGE_MODEL: ${ADGEN_IMAGE_MODEL:-gpt-image-2}
-      # ⚠️ 비우면 모델이 회차마다 품질 티어를 골라 **비용이 2.3배까지** 벌어집니다
-      #    (2026-08-13 실측). 예산이 걸린 운영에서는 값을 정해 넣으세요.
-      ADGEN_IMAGE_QUALITY: ${ADGEN_IMAGE_QUALITY:-}
+      # 개발용 강제 override 입니다. **비워 두는 것이 정상**이고, 그때 티어는 요청이
+      #    정합니다 (계약 ImageQuality, 만화형 medium / 단일 광고형 low). 채우면 요청 값을
+      #    덮어쓰고 경고 로그를 남깁니다 - 개발과 검증 실험을 low 로 돌릴 때만 쓰세요.
+      ADGEN_IMAGE_QUALITY_OVERRIDE: ${ADGEN_IMAGE_QUALITY_OVERRIDE:-}
       # 한 장에 54 ~ 122초 (2026-08-14 실측). 기다리는 쪽은 사용자가 아니라 잡 워커입니다.
       ADGEN_IMAGE_TIMEOUT_S: ${ADGEN_IMAGE_TIMEOUT_S:-300.0}
     ports:

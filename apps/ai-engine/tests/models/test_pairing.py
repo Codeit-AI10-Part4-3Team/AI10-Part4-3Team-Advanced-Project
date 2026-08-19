@@ -92,6 +92,7 @@ def test_draft_union_resolves_by_shape() -> None:
             "brief": BRIEF_FIELDS,
             "draft": {"adPlan": "기획안", "copy": "카피", "visualPlan": "비주얼"},
             "spec": {"width": 1088, "height": 1088},
+            "quality": "low",
         }
     )
     assert isinstance(request.draft, SingleAdDraft)
@@ -105,6 +106,7 @@ def test_a_draft_mixing_both_shapes_is_rejected() -> None:
                 "brief": BRIEF_FIELDS,
                 "draft": {"adPlan": "기획안", "copy": "카피", "visualPlan": "비주얼", "panels": []},
                 "spec": {"width": 1088, "height": 1088},
+                "quality": "low",
             }
         )
 
@@ -113,13 +115,25 @@ def test_comic_output_type_rejects_a_single_ad_draft() -> None:
     """⚠️ Without the pairing check this validates cleanly — the union accepts either."""
     brief, spec = comic_brief(), ImageSpec(width=3456, height=2304)
     with pytest.raises(ValidationError, match="expected ComicDraft"):
-        ImageRenderRequest(output_type="comic", brief=brief, draft=SINGLE_AD_DRAFT, spec=spec)
+        ImageRenderRequest(
+            output_type="comic",
+            brief=brief,
+            draft=SINGLE_AD_DRAFT,
+            spec=spec,
+            quality="medium",
+        )
 
 
 def test_single_ad_output_type_rejects_a_comic_draft() -> None:
     brief, spec = single_ad_brief(), ImageSpec(width=1088, height=1088)
     with pytest.raises(ValidationError, match="expected SingleAdDraft"):
-        ImageRenderRequest(output_type="single_ad", brief=brief, draft=COMIC_DRAFT, spec=spec)
+        ImageRenderRequest(
+            output_type="single_ad",
+            brief=brief,
+            draft=COMIC_DRAFT,
+            spec=spec,
+            quality="low",
+        )
 
 
 # ---- 컷과 규격 -----------------------------------------------------------------

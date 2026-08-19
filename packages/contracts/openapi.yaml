@@ -1420,7 +1420,8 @@ components:
             - $ref: "#/components/schemas/ComicDraft"
             - $ref: "#/components/schemas/SingleAdDraft"
         spec: { $ref: "#/components/schemas/ImageSpec" }
-      required: [outputType, brief, draft, spec]
+        quality: { $ref: "#/components/schemas/ImageQuality" }
+      required: [outputType, brief, draft, spec, quality]
 
     ImageSpec:
       type: object
@@ -1435,3 +1436,21 @@ components:
         width: { type: integer, minimum: 16, maximum: 3840, multipleOf: 16 }
         height: { type: integer, minimum: 16, maximum: 3840, multipleOf: 16 }
       required: [width, height]
+
+    ImageQuality:
+      type: string
+      enum: [low, medium, high]
+      description: |
+        생성 품질 티어입니다. **호출자가 출력 유형을 보고 정해 보냅니다** - 만화형 `medium`,
+        단일 광고형 `low` (생성_파이프라인.md 6.2절).
+
+        `spec` 과 같은 이유로 엔진이 스스로 정하지 않습니다. 엔진이 유형에서 유도하면 같은
+        값이 두 곳에 생기고, 한쪽만 고치는 순간 어긋납니다.
+
+        **모델에게 맡기는 선택지는 없어서 벤더의 `auto` 는 이 열거에 없습니다.** 지정하지
+        않으면 모델이 회차마다 티어를 골라 같은 요청의 비용이 최대 9배까지 흔들립니다
+        (2026-08-13, 08-15 실측).
+
+        `high` 는 아직 재지 않았습니다. 병렬 호출에서 개별 호출이 느려지는 폭이 티어가
+        무거울수록 커지므로(`low` 44%, `medium` 64%), 이 값을 실제로 쓰기로 하면 컷 병렬의
+        소요 시간과 타임아웃을 다시 재야 합니다 (미결정_대장 N19-a).

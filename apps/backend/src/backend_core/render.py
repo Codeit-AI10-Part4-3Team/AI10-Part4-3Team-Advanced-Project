@@ -26,6 +26,7 @@ from backend_core.ai_client import AiEngineClient, AiEngineUnavailableError, Gen
 from backend_core.models import (
     Error,
     ErrorCode,
+    ImageQuality,
     ImageRenderRequest,
     ImageSpec,
     JobResult,
@@ -46,6 +47,23 @@ unlikely.
 
 SINGLE_AD_SPEC = ImageSpec(width=1088, height=1088)
 """잠정값 (미결정_대장 A절 8번, 잠정 진행). The comic size is fixed; this one is not."""
+
+COMIC_QUALITY: ImageQuality = "medium"
+"""생성_파이프라인 6.2절. `low` 에서 손과 사물의 물리가 무너지는 결함이 관측되었습니다.
+
+⚠️ **The tier travels on the request for the same reason the spec does** (미결정_대장 E-2,
+2026-08-20). The engine deliberately does not derive it from the output type — one decision
+in two places drifts the first time one side changes.
+
+Cost lives here too: `medium` is 0.4041 USD a set against `low`'s 0.0974, and the comic's
+share of the remaining budget caps the run at about 49 sets. Development and the 검증
+experiments run at `low` through the engine-side override, not by editing this constant —
+changing it here would change what ships.
+"""
+
+SINGLE_AD_QUALITY: ImageQuality = "low"
+"""생성_파이프라인 6.2절. 같은 결함이 확인되지 않았고 세트당 0.0069 USD 라 비용이 판단 축이
+아닙니다."""
 
 RESULT_RETENTION = timedelta(days=7)
 """세션_보관_정책 2절. Written onto the result so a client knows when the link dies; the
@@ -111,7 +129,9 @@ def _render(
         _fail(connection, user_id, session, was, job_id, "INTERNAL", "시안이 없습니다.")
         return job_id
 
-    spec = COMIC_SPEC if session.output_type == "comic" else SINGLE_AD_SPEC
+    is_comic = session.output_type == "comic"
+    spec = COMIC_SPEC if is_comic else SINGLE_AD_SPEC
+    quality = COMIC_QUALITY if is_comic else SINGLE_AD_QUALITY
     try:
         payload = engine.render_image(
             ImageRenderRequest(
@@ -119,6 +139,7 @@ def _render(
                 brief=session.brief,
                 draft=session.draft,
                 spec=spec,
+                quality=quality,
             )
         )
     except GenerationTimeoutError as exc:

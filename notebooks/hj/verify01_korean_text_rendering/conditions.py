@@ -50,8 +50,11 @@ PANELS: tuple[Panel, ...] = (
 )
 
 # 대사 길이 상한은 아직 정해지지 않았습니다 (생성_파이프라인.md 7절 본안 제약). 위 대사는
-# 6자 ~ 14자로, 짧은 쪽에 유리하게 잡혀 있습니다. 여기서 떨어지면 더 긴 대사에서는 확실히
-# 떨어집니다 - 즉 이 실험은 본안에 유리한 조건입니다.
+# `len()` 기준 9 ~ 15자로, 짧은 쪽에 유리하게 잡혀 있습니다. 여기서 떨어지면 더 긴 대사에서는
+# 확실히 떨어집니다 - 즉 이 실험은 본안에 유리한 조건입니다.
+#
+# ⚠️ 문서 여러 곳에 "6 ~ 14자"로 적혀 있었는데 실제 문자열과 어긋난 값입니다 (2026-08-20 정정).
+# 2번 칸이 15자이고, 그래서 15자에는 이미 20회 표본이 있습니다.
 
 _GRID_INSTRUCTION = (
     f"하나의 이미지 안에 {PANEL_COLS} x {PANEL_ROWS} 격자로 정확히 {PANEL_COUNT}개의 칸을 "
@@ -205,12 +208,76 @@ def prompt_hard() -> str:
     )
 
 
+# 길이 구간 - N18(대사 길이 상한)의 빈 구간을 메웁니다.
+#
+# 1순위는 대사 길이와 자모 난이도가 섞여 있지 않았고, `hard` 는 길이와 영어/숫자를 **함께**
+# 올렸습니다. 그래서 "몇 자부터 틀리는가"를 어느 쪽에서도 읽어낼 수 없습니다.
+# 이 세트는 **길이 하나만 움직입니다** - 시나리오, 장면 지시, 격자, 화풍, 근거 문장이 전부
+# `PANELS` 와 같고 순한국어이며 영어, 숫자, 고유명사가 없습니다.
+#
+# ⚠️ **길이는 `len()` 으로 셉니다** (공백과 문장부호 포함). 상한이 정해지면 그것을 강제하는
+# 쪽은 `draft:generate` 의 검사 코드이고, 코드가 셀 수 있는 정의라야 상한이 집행됩니다.
+# 문서의 "6 ~ 14자" 같은 표기는 이 기준과 어긋나 있습니다 (README 의 주의 참고).
+LINE_LENGTH_BAND = (15, 25)
+
+PANELS_MID: tuple[Panel, ...] = (
+    Panel(1, "아침, 식탁에 커피를 쏟고 당황한 표정의 30대 여성", "아침부터 커피를 또 쏟았네."),
+    Panel(2, "선반에서 물티슈를 꺼내는 손", "이럴 때 쓰려고 미리 사 뒀지."),
+    Panel(3, "물티슈로 식탁을 닦는 장면, 원단이 두껍게 보임", "두꺼운 원단이라 한 장이면 충분해."),
+    Panel(4, "깨끗해진 식탁을 만족스럽게 바라보는 표정", "닦고 나니 냄새도 자국도 안 남는구나."),
+    Panel(
+        5,
+        "아이가 같은 물티슈로 손을 닦는 장면",
+        "무향 무알코올이라 아이가 써도 안심이네요.",
+    ),
+    Panel(
+        6,
+        "제품 패키지가 정면으로 보이는 마무리 컷",
+        "순한 대나무 물티슈로 매일을 산뜻하게 지내요.",
+    ),
+)
+"""칸마다 길이가 다릅니다: 15, 17, 19, 21, 23, 25자. 한 회차가 여섯 길이를 동시에 잽니다.
+
+⚠️ **길이가 칸 위치와 묶여 있습니다.** 회차를 늘려도 "25자가 어려운 것"과 "6번 칸이 어려운 것"이
+갈라지지 않습니다. 1순위에서 120칸 전부 무오탈자였으므로 위치 효과는 작다고 보고 감수했습니다.
+결과가 6번 칸에만 몰리면 그때는 길이를 칸에 섞어 다시 돌려야 합니다.
+"""
+
+
+def line_lengths(panels: tuple[Panel, ...] = PANELS_MID) -> tuple[int, ...]:
+    """각 칸 대사의 길이. `--dry-run` 이 출력하고 아래 검사가 씁니다."""
+    return tuple(len(p.line) for p in panels)
+
+
+def check_mid_band() -> None:
+    """대사가 의도한 구간 안에 있는지. 문장을 고치면 길이가 소리 없이 벗어납니다."""
+    low, high = LINE_LENGTH_BAND
+    bad = [(p.index, len(p.line), p.line) for p in PANELS_MID if not low <= len(p.line) <= high]
+    if bad:
+        raise ValueError(f"길이 구간 {low} ~ {high} 를 벗어난 대사: {bad}")
+    if len(set(line_lengths())) != len(PANELS_MID):
+        raise ValueError(f"길이가 겹칩니다: {line_lengths()} - 겹치면 그 길이의 표본만 늘어납니다")
+
+
+def prompt_mid() -> str:
+    """길이만 올린 대사 - N18 의 빈 구간."""
+    check_mid_band()
+    lines = "\n".join(f'{p.index}번 칸: {p.scene}. 말풍선 대사: "{p.line}"' for p in PANELS_MID)
+    return (
+        f"{_GRID_INSTRUCTION}\n{_STYLE_INSTRUCTION}\n{_GROUNDING_INSTRUCTION}\n\n"
+        "각 칸에 말풍선을 그리고 아래 한국어 대사를 오탈자 없이 정확히 그대로 표기한다. "
+        "글자를 임의로 바꾸거나 줄이지 않는다.\n\n"
+        f"{lines}"
+    )
+
+
 VARIANTS = {
     "main": prompt_main,
     "fallback": prompt_fallback,
     "single": prompt_single_ad,
     "product": prompt_product_shot,
     "hard": prompt_hard,
+    "mid": prompt_mid,
 }
 
 DEFAULT_SIZE = {
@@ -219,6 +286,7 @@ DEFAULT_SIZE = {
     "single": (SINGLE_AD_SIZE, SINGLE_AD_SIZE),
     "product": (SINGLE_AD_SIZE, SINGLE_AD_SIZE),
     "hard": (CANVAS_WIDTH, CANVAS_HEIGHT),
+    "mid": (CANVAS_WIDTH, CANVAS_HEIGHT),
 }
 """variant 마다 기본 해상도가 다릅니다. 만화형 규격을 단일 광고형에 그대로 쓰면 7배 비싼
 이미지를 만들고도 관통 경로의 숫자는 못 얻습니다."""

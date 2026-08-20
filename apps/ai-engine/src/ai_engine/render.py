@@ -16,6 +16,7 @@ Two properties the stub keeps even though it draws nothing:
 import base64
 import io
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -129,7 +130,9 @@ def _client(settings: Settings) -> Any:
 
     ⚠️ `timeout` 은 **호출 하나**의 상한입니다. 만화형은 1번 칸을 만든 뒤 나머지 다섯을 동시에
     부르므로 최악의 대기가 이 값의 2배까지 늘어납니다 (칸 하나가 실제로 이 상한까지 갔을 때).
-    호출자의 `render_timeout_s` 예산과 맞물리는 값이라 이슈 #141 에서 함께 정합니다.
+    그래서 응답 전체를 재는 `render_budget_s` 가 따로 있고, `_render_panels` 가 그것을 집행합니다
+    (2026-08-20, 이슈 #141). 두 값은 **함께 움직여야 합니다** - 칸당 상한의 2배가 총 예산보다
+    커지면 총 예산이 먼저 끊어 놓고도 칸은 계속 돌게 됩니다.
     """
     try:
         from openai import OpenAI
@@ -199,23 +202,44 @@ def _render_panels(
             reference=reference,
         )
 
+    deadline = time.monotonic() + settings.render_budget_s
+
     head, rest = panels[0], panels[1:]
     # ⚠️ 1번 칸의 크기는 **부채꼴로 퍼지기 전에** 봅니다. 이 칸은 나머지 다섯의 레퍼런스라,
     # 어긋난 채로 넘어가면 잘못된 크기가 다섯 호출의 입력이 되고 그 요금이 다 나간 뒤에야
     # 합성 단계에서 걸립니다.
     first = _as_png(draw(head, None), panel_size)
+    if time.monotonic() >= deadline:
+        # 여기서 이미 예산을 다 썼으면 나머지 다섯은 부르지 않습니다. 불러 봐야 예산 안에
+        # 끝날 수 없고, 요금만 다섯 번 더 나갑니다.
+        raise RenderFailedError(
+            f"1번 칸까지 {settings.render_budget_s:.0f}초 예산을 다 썼습니다. "
+            "나머지 칸은 부르지 않습니다."
+        )
 
     # 네트워크 대기가 지배적이라 스레드로 충분합니다. GIL 은 문제가 되지 않습니다.
     #
     # ⚠️ **잡 하나 안에서만 동시입니다.** 잡끼리는 여전히 직렬 1건이고 그것은 호출자의
     # `jobs.next_queued` 가 강제합니다 (ADR-0015). 두 층을 섞으면 동시 외부 호출이 잡 수만큼
     # 곱해집니다.
-    with ThreadPoolExecutor(max_workers=len(rest)) as pool:
+    #
+    # ⚠️ `with` 를 쓰지 않습니다. `__exit__` 이 `shutdown(wait=True)` 라, 예산을 넘겨 빠져나갈
+    # 때도 남은 스레드를 끝까지 기다립니다 - 그러면 예산이 아무 일도 하지 않습니다.
+    pool = ThreadPoolExecutor(max_workers=len(rest))
+    try:
         pending = [(panel, pool.submit(draw, panel, first)) for panel in rest]
         tiles = [first]
         for panel, future in pending:
             try:
-                tiles.append(future.result())
+                tiles.append(future.result(timeout=max(0.0, deadline - time.monotonic())))
+            except TimeoutError as exc:
+                # ⚠️ 기다리기를 그만두는 것이지 호출을 취소하는 것이 아닙니다. 이미 나간 요청은
+                # 벤더 쪽에서 계속 돌고 요금도 나갑니다 - 우리가 사는 것은 **호출자가 먼저
+                # 끊지 않게 하는 것** 하나뿐이고, 그래야 실패의 이유가 로그에 남습니다.
+                raise RenderFailedError(
+                    f"{settings.render_budget_s:.0f}초 예산 안에 {panel.index}번 칸이 오지 "
+                    "않았습니다. 호출자가 먼저 끊기 전에 세트를 버립니다."
+                ) from exc
             except RenderFailedError as exc:
                 # A3 / N20-a. **한 칸이라도 실패하면 세트 전체가 실패입니다.** 부분 재시도는
                 # 열지 않습니다 (ADR-0017) - 불완전한 세트를 내보내는 것보다 명시적으로
@@ -224,6 +248,8 @@ def _render_panels(
                 raise RenderFailedError(
                     f"{panel.index}번 칸이 실패해 세트 전체를 버립니다: {exc}"
                 ) from exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     return _compose(tiles, panel_size, request.spec)
 

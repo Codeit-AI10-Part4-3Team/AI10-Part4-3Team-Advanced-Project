@@ -1,0 +1,516 @@
+"""`draft:generate` 와 `draft:patch` 의 실물 분기 — 프롬프트 조립과 실패 처리.
+
+⚠️ **외부 API 를 부르지 않습니다.** 호출 1회가 요금이고 CI 가 비결정적이 됩니다 (AGENTS.md).
+여기서 확인하는 것은 "카피가 좋은가"가 아니라 **무엇을 보내고 응답을 어떻게 다루는가**입니다.
+카피 품질은 `eval/` 의 지표 함수와 검증 회차의 몫입니다.
+
+⚠️ **`pytest.raises` 블록 안에는 검사 대상 호출 하나만 둡니다.** 요청을 그 안에서 만들면 만들다
+난 실패로도 테스트가 통과하고, 그러면 정작 분기가 안 터지게 되어도 아무도 모릅니다
+(`test_seams.py` 가 같은 이유로 같은 규칙을 씁니다).
+"""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from ai_engine import draft, draft_prompt
+from ai_engine.config import Settings
+from ai_engine.models import (
+    PANEL_ROLES,
+    Brief,
+    ComicDraft,
+    DraftGenerateRequest,
+    DraftPatch,
+    DraftPatchEngineRequest,
+    OutputType,
+    Panel,
+    SingleAdDraft,
+)
+
+BRIEF_FIELDS = {
+    "productImageUrl": "/v1/sessions/abc/image",
+    "productName": "순한 대나무 물티슈",
+    "sellingPoint": "무향 무알코올, 두꺼운 원단",
+    "note": "",
+    "category": "생활용품",
+    "target": "30대 주부",
+    "artStyle": "korean_webtoon",
+}
+CHARACTER = {"appearance": "단발", "outfit": "니트"}
+
+
+def brief(**overrides: object) -> Brief:
+    return Brief.model_validate({**BRIEF_FIELDS, **overrides})
+
+
+def comic_brief(**overrides: object) -> Brief:
+    return brief(character=CHARACTER, **overrides)
+
+
+def generate_request(
+    output_type: OutputType = "single_ad", **overrides: Any
+) -> DraftGenerateRequest:
+    fields: dict[str, Any] = {
+        "output_type": output_type,
+        "brief": comic_brief() if output_type == "comic" else brief(),
+    }
+    fields.update(overrides)
+    return DraftGenerateRequest(**fields)
+
+
+def single_ad_draft() -> SingleAdDraft:
+    return SingleAdDraft(ad_plan="기획안 문장", ad_copy="원래 카피", visual_plan="원래 비주얼")
+
+
+def comic_draft() -> ComicDraft:
+    return ComicDraft(
+        ad_plan="기획안 문장",
+        panels=[
+            Panel(index=index, role=role, scene=f"{index}번 장면", dialogue=f"대사 {index}")
+            for index, role in enumerate(PANEL_ROLES, start=1)
+        ],
+    )
+
+
+def patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
+    return DraftPatchEngineRequest(
+        output_type="single_ad",
+        brief=brief(),
+        draft=single_ad_draft(),
+        patch=DraftPatch.model_validate(patch_fields),
+    )
+
+
+def comic_patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
+    return DraftPatchEngineRequest(
+        output_type="comic",
+        brief=comic_brief(),
+        draft=comic_draft(),
+        patch=DraftPatch.model_validate(patch_fields),
+    )
+
+
+class FakeCompletions:
+    """`client.chat.completions.create` 하나만 흉내냅니다."""
+
+    def __init__(self, body: str | None = None, error: Exception | None = None) -> None:
+        self.body = body
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        message = SimpleNamespace(content=self.body)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    @property
+    def prompt(self) -> str:
+        return str(self.calls[0]["messages"][0]["content"])
+
+
+def install(monkeypatch: pytest.MonkeyPatch, completions: FakeCompletions) -> None:
+    """`openai.OpenAI` 를 가로챕니다. `draft` 가 지연 import 하므로 모듈에 심습니다."""
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    module = SimpleNamespace(OpenAI=lambda **_: client)
+    monkeypatch.setitem(__import__("sys").modules, "openai", module)
+
+
+@pytest.fixture
+def model_settings() -> Settings:
+    return Settings(generation_mode="model", model_api_key="test-key")
+
+
+SINGLE_AD_BODY = json.dumps(
+    {"adPlan": "새 기획안", "copy": "새 카피", "visualPlan": "새 비주얼"}, ensure_ascii=False
+)
+COMIC_BODY = json.dumps(
+    {
+        "adPlan": "새 기획안",
+        "panels": [{"scene": f"장면 {i}", "dialogue": f"대사 {i}"} for i in range(1, 7)],
+    },
+    ensure_ascii=False,
+)
+REFUSAL_BODY = '{"refusal": "no_evidence"}'
+
+
+# ---- 프롬프트 ---------------------------------------------------------------------
+
+
+def test_the_guardrail_block_is_in_the_prompt_by_default() -> None:
+    """⚠️ INV-6. 이 블록을 빼는 것은 프롬프트를 줄이는 일이 아니라 가드레일을 절반 끄는
+    일입니다 - 없는 효능을 쓰면 표시광고법상 허위 과장 광고입니다 (생성_파이프라인 5.1절)."""
+    for prompt in (
+        draft_prompt.build_generate(generate_request()),
+        draft_prompt.build_generate(generate_request("comic")),
+        draft_prompt.build_patch(patch_request(copy="더 짧게")),
+    ):
+        assert draft_prompt.GUARDRAIL_BLOCK in prompt
+
+
+def test_turning_the_guardrail_off_actually_turns_it_off() -> None:
+    """⚠️ 대조군의 정의입니다 (생성_파이프라인 5.3절). 금지 사항을 켠 채로 "가드레일 끔"이라고
+    보고하면 환각 억제율이 0 으로 나올 수밖에 없고, 그것이 보고 지표 자체를 무효로 만듭니다.
+
+    근거 블록은 남습니다 - 근거 없이 쓰라는 뜻이 아니라 금지 지시 없이 쓰라는 뜻입니다.
+    """
+    prompt = draft_prompt.build_generate(generate_request(guardrail_applied=False))
+
+    assert draft_prompt.GUARDRAIL_BLOCK not in prompt
+    assert draft_prompt.EVIDENCE_HEADING in prompt
+    assert "무향 무알코올, 두꺼운 원단" in prompt
+
+
+def test_the_inferred_values_sit_outside_the_evidence_block() -> None:
+    """⚠️ `category` 와 `target` 은 추론값이라 근거가 아닙니다 (생성_파이프라인 5.2절).
+
+    근거 블록 안에 넣으면 금지 사항이 무력해집니다 - 추론으로 채운 카테고리를 근거 삼아 효능을
+    쓰면 지어낸 것인데, 프롬프트상으로는 근거를 지킨 것처럼 보이기 때문입니다.
+    """
+    prompt = draft_prompt.build_generate(generate_request())
+    evidence = prompt[prompt.index(draft_prompt.EVIDENCE_HEADING) : prompt.index("</근거>")]
+
+    assert "무향 무알코올, 두꺼운 원단" in evidence
+    assert "생활용품" not in evidence
+    assert "30대 주부" not in evidence
+    assert "[추론 결과]" in prompt
+
+
+def test_the_assembly_order_follows_the_document() -> None:
+    """생성_파이프라인 4절의 표가 프롬프트의 정본입니다. 순서가 어긋나면 문서가 프롬프트를
+    설명하지 못하게 됩니다."""
+    prompt = draft_prompt.build_generate(generate_request("comic"))
+    order = [
+        "당신은 제품 정보만",
+        "[표현 가이드라인과 금지 사항]",
+        draft_prompt.EVIDENCE_HEADING,
+        "[추론 결과]",
+        "[화풍]",
+        "[유형별 지시]",
+        "[출력 규격]",
+    ]
+    positions = [prompt.index(marker) for marker in order]
+
+    assert positions == sorted(positions), prompt
+
+
+def test_the_comic_prompt_carries_the_six_beats_in_order() -> None:
+    """기획서 7.3 의 컷별 역할 템플릿입니다. `index` 가 `role` 을 정하고 사용자는 고르지
+    않습니다 (INV-5)."""
+    prompt = draft_prompt.build_generate(generate_request("comic"))
+    positions = [prompt.index(f"{index}번 칸: ") for index in range(1, 7)]
+
+    assert positions == sorted(positions)
+    assert draft_prompt.ROLE_BEATS["hook"] in prompt
+    assert "단발" in prompt, "만화형 브리프의 인물이 프롬프트에 실려야 합니다"
+
+
+def test_the_prompt_asks_for_the_changed_field_only() -> None:
+    """⚠️ 전체를 다시 쓰게 하지 않습니다 (생성_파이프라인 3절). 전체 재생성 후 diff 를 취하는
+    방식은 지정하지 않은 자리까지 조용히 바꿉니다."""
+    prompt = draft_prompt.build_patch(patch_request(copy="더 짧게"))
+
+    assert '{"copy": "<새 카피>"}' in prompt
+    assert "visualPlan" not in prompt.split("[출력 규격]")[-1]
+    assert "원래 비주얼" in prompt, "바꾸지 않을 부분도 맥락으로는 보여 줍니다"
+
+
+def test_the_prompt_is_versioned() -> None:
+    """판 없는 프롬프트 변경은 그 이전 실측을 전부 무효로 만듭니다 (생성_파이프라인 4절)."""
+    assert draft_prompt.VERSION
+
+
+# ---- 생성 -------------------------------------------------------------------------
+
+
+def test_a_single_ad_draft_comes_back_whole(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    install(monkeypatch, FakeCompletions(body=SINGLE_AD_BODY))
+
+    response = draft.generate_draft(generate_request(), model_settings)
+
+    assert isinstance(response.draft, SingleAdDraft)
+    assert response.draft.ad_copy == "새 카피"
+    assert response.guardrail_applied is True
+    assert "refusalReason" not in response.model_dump(by_alias=True)
+
+
+def test_the_comic_branch_writes_six_real_panels(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 스텁이 만화형을 거절하는 것과 다릅니다 (구현_범위 1절). 칸 수와 역할은 계약과
+    기획서 7.3 이 정해 두었으므로 실물 분기가 여기서 새로 정하는 값이 없습니다."""
+    install(monkeypatch, FakeCompletions(body=COMIC_BODY))
+
+    response = draft.generate_draft(generate_request("comic"), model_settings)
+
+    assert isinstance(response.draft, ComicDraft)
+    assert [panel.index for panel in response.draft.panels] == [1, 2, 3, 4, 5, 6]
+
+
+def test_the_roles_are_ours_to_assign_not_the_models(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ INV-5. 모델이 보낸 `index` 와 `role` 은 읽지 않습니다 - 물어보면 여섯 박자가 기획
+    근거가 아니라 회차마다 흔들리는 값이 됩니다."""
+    body = json.dumps(
+        {
+            "adPlan": "새 기획안",
+            "panels": [
+                {"index": 9, "role": "cta", "scene": f"장면 {i}", "dialogue": f"대사 {i}"}
+                for i in range(1, 7)
+            ],
+        },
+        ensure_ascii=False,
+    )
+    install(monkeypatch, FakeCompletions(body=body))
+
+    response = draft.generate_draft(generate_request("comic"), model_settings)
+
+    assert isinstance(response.draft, ComicDraft)
+    assert [panel.role for panel in response.draft.panels] == list(PANEL_ROLES)
+
+
+def test_a_refusal_is_a_normal_answer_with_no_draft(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 거절은 200 입니다 - 쓸 수 있었는데 지어내지 않고 물러선 상태입니다.
+
+    `draft` 키가 **없어야** 하고 `null` 이면 안 됩니다. 계약에 `null` 은 어디에도 없습니다.
+    """
+    install(monkeypatch, FakeCompletions(body=REFUSAL_BODY))
+
+    response = draft.generate_draft(generate_request(), model_settings)
+    body = response.model_dump(by_alias=True)
+
+    assert response.refusal_reason == "no_evidence"
+    assert "draft" not in body
+    assert body["guardrailApplied"] is True
+
+
+def test_the_control_flag_survives_a_refusal(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """`guardrailApplied` 는 거절 여부와 무관하게 항상 실립니다. 대조 실행과 검증된 출력이
+    구분되지 않으면 환각 억제율 자체를 계산할 수 없습니다."""
+    install(monkeypatch, FakeCompletions(body=REFUSAL_BODY))
+
+    response = draft.generate_draft(generate_request(guardrail_applied=False), model_settings)
+
+    assert response.guardrail_applied is False
+
+
+def test_a_guardrail_refusal_cannot_come_from_the_model(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ `refusalReason: guardrail` 은 **재생성 1회 뒤에도** 근거 밖 주장이 남은 경우입니다
+    (생성_파이프라인 5.1.1절). 출력 검증이 이 경로에 붙기 전까지 그 판정은 존재할 수 없고,
+    모델이 스스로 그렇게 말해도 검증을 거친 판정이 아닙니다."""
+    install(monkeypatch, FakeCompletions(body='{"refusal": "guardrail"}'))
+    request = generate_request()
+
+    with pytest.raises(draft.DraftFailedError, match="알 수 없는 거절 사유"):
+        draft.generate_draft(request, model_settings)
+
+
+# ---- 부분 교체 ---------------------------------------------------------------------
+
+
+def test_the_patch_changes_only_what_it_names(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 부분 교체와 전체 재생성을 가르는 성질입니다. 카피를 바꿔 달라고 한 사용자는 이미
+    승인한 비주얼 구성안을 들고 있고, 그것까지 다시 쓰면 사용자의 결정이 사라집니다."""
+    install(monkeypatch, FakeCompletions(body=SINGLE_AD_BODY))
+
+    response = draft.patch_draft(patch_request(copy="더 짧게"), model_settings)
+
+    assert isinstance(response.draft, SingleAdDraft)
+    assert response.draft.ad_copy == "새 카피"
+    assert response.draft.visual_plan == "원래 비주얼"
+    assert response.draft.ad_plan == "기획안 문장"
+
+
+def test_what_the_model_returns_outside_the_patch_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 응답으로 시안을 만들지 않고 원문을 복사해 지정된 자리만 덮어씁니다. 모델이 손대지
+    말라고 한 필드까지 돌려주더라도 그것은 읽히지 않습니다 - 응답 모양이 같아서 조용히 바뀝니다."""
+    install(monkeypatch, FakeCompletions(body=SINGLE_AD_BODY))
+
+    response = draft.patch_draft(patch_request(copy="더 짧게"), model_settings)
+
+    assert isinstance(response.draft, SingleAdDraft)
+    assert response.draft.visual_plan == "원래 비주얼", "응답의 '새 비주얼'이 새면 안 됩니다"
+    assert response.draft.ad_plan == "기획안 문장", "adPlan 은 읽기 전용입니다 (INV-8)"
+
+
+def test_a_comic_patch_touches_only_the_named_cell(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """패치에 없는 칸은 손대지 않고, 있는 칸이라도 이름 없는 부분은 그대로 둡니다."""
+    body = json.dumps({"panels": {"4": {"dialogue": "새 대사"}}}, ensure_ascii=False)
+    install(monkeypatch, FakeCompletions(body=body))
+
+    response = draft.patch_draft(
+        comic_patch_request(panels={"4": {"dialogue": "더 짧게"}}), model_settings
+    )
+
+    assert isinstance(response.draft, ComicDraft)
+    assert response.draft.panels[3].dialogue == "새 대사"
+    assert response.draft.panels[3].scene == "4번 장면", "장면은 주문에 없었습니다"
+    assert response.draft.panels[0].dialogue == "대사 1"
+    assert [panel.role for panel in response.draft.panels] == list(PANEL_ROLES)
+
+
+def test_an_empty_replacement_is_applied_rather_than_ignored(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """`""` 는 "비워라" 라는 정상 지시입니다 (계약 3절). 값으로 판단하면 "그대로 둬라" 와
+    뭉개집니다."""
+    install(monkeypatch, FakeCompletions(body='{"visualPlan": ""}'))
+
+    response = draft.patch_draft(patch_request(visualPlan=""), model_settings)
+
+    assert isinstance(response.draft, SingleAdDraft)
+    assert response.draft.visual_plan == ""
+    assert response.draft.ad_copy == "원래 카피"
+
+
+def test_a_patch_refusal_omits_the_draft_rather_than_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 원문 유지는 호출자가 합니다 - 호출자가 보낸 그 시안입니다. 원문을 되돌려 보내면서
+    `refusalReason` 을 함께 실으면 계약이 말하는 거절(`draft` 키가 없는 상태)이 아니게 됩니다."""
+    install(monkeypatch, FakeCompletions(body=REFUSAL_BODY))
+
+    response = draft.patch_draft(patch_request(copy="더 짧게"), model_settings)
+
+    assert response.refusal_reason == "no_evidence"
+    assert "draft" not in response.model_dump(by_alias=True)
+
+
+# ---- 실패 -------------------------------------------------------------------------
+
+
+def test_a_missing_key_fails_instead_of_falling_back_to_the_stub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """⚠️ 키가 없다고 스텁으로 되돌아가면 그 결과가 측정값처럼 보입니다 (구현_범위 1.1절).
+    이 이음매에 폴백은 없습니다 - 카피는 제품마다 달라 사전 승인 응답이 성립하지 않습니다."""
+    completions = FakeCompletions(body=SINGLE_AD_BODY)
+    install(monkeypatch, completions)
+    request, keyless = generate_request(), Settings(generation_mode="model")
+
+    with pytest.raises(draft.DraftFailedError, match="ADGEN_MODEL_API_KEY"):
+        draft.generate_draft(request, keyless)
+
+    assert completions.calls == []
+
+
+def test_any_vendor_error_becomes_one_failure(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음."""
+    install(monkeypatch, FakeCompletions(error=RuntimeError("rate limit")))
+    request = generate_request()
+
+    with pytest.raises(draft.DraftFailedError, match="rate limit"):
+        draft.generate_draft(request, model_settings)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("이건 JSON 이 아닙니다", "JSON 이 아닙니다"),
+        ('["카피"]', "객체가 아닙니다"),
+        ('{"adPlan": "기획안"}', "형식이 아닙니다"),
+        ('{"adPlan": "기획안", "copy": "카피", "visualPlan": 3}', "형식이 아닙니다"),
+        ('{"adPlan": "기획안", "copy": "카피", "visualPlan": "비주얼", "extra": "x"}', "형식이"),
+    ],
+    ids=["JSON 아님", "객체 아님", "필드 누락", "문자열 아님", "모르는 키"],
+)
+def test_a_malformed_draft_is_a_failure_not_a_salvage_attempt(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, body: str, expected: str
+) -> None:
+    """⚠️ 깨진 응답에서 문장을 건져 내면, 그렇게 얻은 문자열은 모델이 쓴 카피가 아니라 우리가
+    주운 조각이고 근거 안에 있는지 아무도 확인하지 않았습니다."""
+    install(monkeypatch, FakeCompletions(body=body))
+    request = generate_request()
+
+    with pytest.raises(draft.DraftFailedError, match=expected):
+        draft.generate_draft(request, model_settings)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('{"adPlan": "기획안", "panels": {}}', "배열이 아닙니다"),
+        ('{"adPlan": "기획안", "panels": []}', "6개 고정"),
+        ('{"adPlan": "기획안", "panels": [{"scene": "1", "dialogue": "1"}]}', "6개 고정"),
+    ],
+    ids=["배열 아님", "빈 배열", "칸 부족"],
+)
+def test_a_comic_that_is_not_six_cells_is_refused(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, body: str, expected: str
+) -> None:
+    """0 도 7 도 유효하지 않습니다 (INV-1). 여섯 박자가 기획의 근거 자체입니다."""
+    install(monkeypatch, FakeCompletions(body=body))
+    request = generate_request("comic")
+
+    with pytest.raises(draft.DraftFailedError, match=expected):
+        draft.generate_draft(request, model_settings)
+
+
+def test_a_patch_answer_missing_the_named_cell_is_a_failure(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """조용히 원문을 두면 호출자는 200 을 받고 아무것도 바뀌지 않은 시안을 봅니다 - 이 경로가
+    가장 가지면 안 되는 실패 모양입니다 (2026-08-18 실측과 같은 사고)."""
+    install(monkeypatch, FakeCompletions(body='{"panels": {"2": {"dialogue": "엉뚱한 칸"}}}'))
+    request = comic_patch_request(panels={"4": {"dialogue": "더 짧게"}})
+
+    with pytest.raises(draft.DraftFailedError, match="4번 칸의 응답이 없습니다"):
+        draft.patch_draft(request, model_settings)
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (SimpleNamespace(choices=[]), "choices 가 없습니다"),
+        (SimpleNamespace(choices=None), "choices 가 없습니다"),
+        (SimpleNamespace(), "choices 가 없습니다"),
+        (SimpleNamespace(choices=[SimpleNamespace(message=None)]), "본문이 비어"),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None))]),
+            "본문이 비어",
+        ),
+    ],
+    ids=["choices=[]", "choices=None", "choices 없음", "message 없음", "content=None"],
+)
+def test_a_misshapen_response_is_a_failure_not_a_crash(response: Any, expected: str) -> None:
+    """⚠️ **어떤 실패인지보다 어떤 종류의 예외인지가 중요한 자리입니다.**
+
+    라우트는 `DraftFailedError` 와 `NotImplementedError` 만 503 으로 바꿉니다. `IndexError`
+    와 `TypeError` 로 새어 나가면 **500** 이 되는데, 계약이 이 경로에 준 실패 코드는 503
+    하나입니다 (`render._inline_bytes` 가 같은 사고로 고쳐졌습니다, 2026-08-18).
+    """
+    with pytest.raises(draft.DraftFailedError, match=expected):
+        draft._content(response)
+
+
+def test_the_stub_branch_never_touches_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """⚠️ 회귀 가드. 스텁 모드가 실수로 API 를 부르면 CI 가 돈을 씁니다."""
+    completions = FakeCompletions(error=AssertionError("스텁 모드는 모델을 부르면 안 됩니다"))
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request(), Settings(generation_mode="stub"))
+
+    assert response.draft is not None
+    assert completions.calls == []

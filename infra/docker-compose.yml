@@ -57,7 +57,7 @@ services:
       ADGEN_BRIEF_FILL_MODEL_TIMEOUT_S: ${ADGEN_BRIEF_FILL_MODEL_TIMEOUT_S:-12.0}
       ADGEN_DRAFT_MODEL_TIMEOUT_S: ${ADGEN_DRAFT_MODEL_TIMEOUT_S:-50.0}
     ports:
-      # ⚠️ 배포에서는 이 포트를 외부에 열지 마세요. 내부 계약 경로(/v1/generate)는 인증이
+      # ⚠️ 배포에서는 이 포트를 외부에 열지 마세요. 내부 계약 경로(/v1/brief:fill 등 넷)는 인증이
       #    없습니다. 로컬 디버깅 편의로만 노출합니다.
       - "127.0.0.1:8100:8100"
     healthcheck:

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -701,3 +702,45 @@ def test_a_number_the_user_typed_is_not_our_invention(
 
     assert response.draft is not None
     assert len(completions.calls) == 1
+
+
+# ---- 사용량 기록 --------------------------------------------------------------------
+
+
+def usage_seams(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """`usage` 줄에서 이음매 꼬리표만 순서대로."""
+    return [
+        message.split("seam=")[1].split(" ")[0]
+        for message in caplog.messages
+        if message.startswith("usage ")
+    ]
+
+
+def test_each_call_is_recorded_under_its_own_seam(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """⚠️ 총량만 남기면 어디를 줄여야 하는지 알 수 없습니다. 회차당 비용이 이음매마다 다릅니다
+    (생성_파이프라인 1절 - 변동 비용이 생기는 곳은 부분 교체뿐입니다)."""
+    install(monkeypatch, FakeCompletions(body=body_with_copy(CLEAN_COPY)))
+
+    with caplog.at_level(logging.INFO, logger="ai_engine.draft"):
+        draft.generate_draft(generate_request(), model_settings)
+        draft.patch_draft(patch_request(copy="더 짧게"), model_settings)
+
+    assert usage_seams(caplog) == ["draft:generate", "draft:patch"]
+
+
+def test_the_regeneration_is_counted_separately(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """⚠️ 재생성이 본 호출과 같은 꼬리표로 섞이면 **가드레일이 예산에서 차지하는 몫을 잴 수
+    없습니다.** 그 몫이 D2 대조 실험에서 on 팔과 off 팔을 가르는 값입니다."""
+    install(
+        monkeypatch,
+        FakeCompletions(body=body_with_copy(VIOLATING_COPY), then=body_with_copy(CLEAN_COPY)),
+    )
+
+    with caplog.at_level(logging.INFO, logger="ai_engine.draft"):
+        draft.generate_draft(generate_request(), model_settings)
+
+    assert usage_seams(caplog) == ["draft:generate", "draft:generate:retry"]

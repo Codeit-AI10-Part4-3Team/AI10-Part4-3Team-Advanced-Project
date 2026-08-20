@@ -18,7 +18,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ai_engine import draft_prompt, guardrail, render_prompt
+from ai_engine import draft_prompt, guardrail, render_prompt, usage
 from ai_engine.config import Settings
 from ai_engine.models import (
     PANEL_ROLES,
@@ -112,6 +112,7 @@ def _generate_with_model(
         build,
         _evidence(request.brief),
         enabled=request.guardrail_applied,
+        seam="draft:generate",
     )
     return _response(outcome, request.guardrail_applied)
 
@@ -201,6 +202,7 @@ def _patch_with_model(
         build,
         _evidence(request.brief),
         enabled=request.guardrail_applied,
+        seam="draft:patch",
     )
     return _response(outcome, request.guardrail_applied)
 
@@ -211,8 +213,9 @@ def _patch_with_model(
 def _evidence(brief: Brief) -> str:
     """가드레일이 대조할 원문. `sellingPoint` + `note` + **제품명**입니다.
 
-    ⚠️ 앞의 둘이 근거입니다 (생성_파이프라인 5.2절). `category` 와 `target` 은 추론값이라
-    들어가지 않습니다 - 추론으로 채운 카테고리를 근거 삼아 효능을 쓰면 지어낸 것입니다.
+    셋 다 근거입니다 (생성_파이프라인 5.2절, 2026-08-20 갱신). `category` 와 `target` 은
+    추론값이라 들어가지 않습니다 - 추론으로 채운 카테고리를 근거 삼아 효능을 쓰면 지어낸
+    것입니다.
 
     ⚠️ **제품명은 근거를 넓히려고 넣은 것이 아닙니다.** 사용자가 직접 친 글자를 우리가 지어낸
     것으로 세지 않기 위해서입니다 - 제품명이 "3겹 물티슈" 인데 카피가 `3겹` 이라고 쓰면 그
@@ -230,6 +233,7 @@ def _guarded_draft(
     evidence: str,
     *,
     enabled: bool,
+    seam: str,
 ) -> Draft | RefusalReason:
     """한 번 쓰게 하고, 위반이면 **한 번만** 다시 쓰게 하고, 그래도 남으면 거절합니다.
 
@@ -243,7 +247,7 @@ def _guarded_draft(
     뿐입니다. `adPlan` 과 `visualPlan` 은 소비자에게 하는 주장이 아니라 제작 지시문이라
     넣으면 전량 위반으로 잡힙니다 (2026-08-20 실측, ADR-0019).
     """
-    outcome = _attempt(prompt, settings, build)
+    outcome = _attempt(prompt, settings, build, seam)
     if isinstance(outcome, str) or not enabled:
         return outcome
 
@@ -254,7 +258,10 @@ def _guarded_draft(
     # 1회차 위반. 클라이언트에는 보이지 않습니다 (생성_파이프라인 5.1.1절).
     logger.info("guardrail 1회차 위반, 재생성합니다: %s", report.violations)
     retried = _attempt(
-        f"{prompt}\n\n{draft_prompt.retry_block(report.violations)}", settings, build
+        f"{prompt}\n\n{draft_prompt.retry_block(report.violations)}",
+        settings,
+        build,
+        f"{seam}:retry",
     )
     if isinstance(retried, str):
         return retried
@@ -268,10 +275,15 @@ def _guarded_draft(
 
 
 def _attempt(
-    prompt: str, settings: Settings, build: Callable[[dict[str, Any]], Draft]
+    prompt: str, settings: Settings, build: Callable[[dict[str, Any]], Draft], seam: str
 ) -> Draft | RefusalReason:
-    """한 번 물어보고, 거절 사유이거나 시안입니다."""
-    payload = _ask_model(prompt, settings)
+    """한 번 물어보고, 거절 사유이거나 시안입니다.
+
+    `seam` 은 사용량 로그의 꼬리표로만 씁니다. 재생성은 `...:retry` 로 따로 세는데,
+    **재생성이 예산에서 차지하는 몫이 D2 대조 실험의 판단 축**이기 때문입니다 - 위반율이
+    높으면 on 팔의 비용이 off 팔의 두 배로 갑니다.
+    """
+    payload = _ask_model(prompt, settings, seam)
     reason = _refusal_of(payload)
     return reason if reason is not None else build(payload)
 
@@ -287,7 +299,7 @@ def _response(outcome: Draft | RefusalReason, guardrail_applied: bool) -> DraftG
 # ---- 모델 호출과 응답 해석 ------------------------------------------------------------
 
 
-def _ask_model(prompt: str, settings: Settings) -> dict[str, Any]:
+def _ask_model(prompt: str, settings: Settings, seam: str) -> dict[str, Any]:
     """프롬프트 하나를 보내고 JSON 하나를 받습니다.
 
     ⚠️ 두 이음매가 같은 함수를 쓰는 것은 **같은 모듈 안의 두 갈래**이기 때문입니다. 앱 전체가
@@ -328,6 +340,11 @@ def _ask_model(prompt: str, settings: Settings) -> dict[str, Any]:
         # 벤더 예외 계층에 의존하지 않습니다. 인증 실패도 쿼터 초과도 타임아웃도 호출자에게는
         # 같은 답입니다: 쓸 수 없음 (`render._render_with_model` 의 같은 판단).
         raise DraftFailedError(f"{type(exc).__name__}: {exc}") from exc
+
+    # ⚠️ 본문을 꺼내기 **전에** 기록합니다. `_content` 는 빈 응답에서 예외를 던지는데, 그 호출도
+    # 토큰을 쓴 호출이고 요금이 나갑니다. 실패한 회차만 예산에서 빠지면 집계가 실제보다 싸게
+    # 보입니다 - 거절과 잘림이 잦은 구간일수록 더 그렇습니다.
+    usage.log_usage(logger, seam, settings.text_model, response)
 
     return _decode(_content(response))
 

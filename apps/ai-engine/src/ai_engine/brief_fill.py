@@ -16,7 +16,7 @@ import json
 import logging
 from typing import Any
 
-from ai_engine import brief_prompt
+from ai_engine import brief_prompt, usage
 from ai_engine.config import GenerationMode, Settings
 from ai_engine.models import BriefFillResponse, NeedsInput
 from ai_engine.service_schemas import BriefFillRequest
@@ -159,6 +159,10 @@ def _infer_with_model(request: BriefFillRequest, settings: Settings) -> BriefFil
         # 벤더 예외 계층에 의존하지 않습니다. 인증 실패도 쿼터 초과도 타임아웃도 호출자에게는
         # 같은 답입니다: 쓸 수 없음 (`render._render_with_model` 의 같은 판단).
         raise BriefFillFailedError(f"{type(exc).__name__}: {exc}") from exc
+
+    # ⚠️ 이 이음매만 입력에 사진이 실립니다. 프롬프트 토큰을 빌더로 다시 세도 그 이미지 몫은
+    # 나오지 않으므로, `prompt` 값을 실제로 아는 방법은 이 기록뿐입니다.
+    usage.log_usage(logger, "brief:fill", settings.text_model, response)
 
     return _to_response(_decode(_content(response)))
 

@@ -12,6 +12,7 @@ import io
 import logging
 import re
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -118,10 +119,12 @@ class FakePanels:
         fail_on: int | None = None,
         barrier: threading.Barrier | None = None,
         wrong_size_on: int | None = None,
+        block_until: threading.Event | None = None,
     ) -> None:
         self.fail_on = fail_on
         self.barrier = barrier
         self.wrong_size_on = wrong_size_on
+        self.block_until = block_until
         self.lock = threading.Lock()
         self.calls: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
@@ -140,6 +143,10 @@ class FakePanels:
             # 다섯이 다 도착해야 통과합니다. 순차로 돌면 첫 호출이 여기서 시간 초과로 깨지고,
             # 그것이 곧 "병렬이 아니다" 라는 판정입니다. sleep 으로 재면 느린 CI 에서 흔들립니다.
             self.barrier.wait()
+        if self.block_until is not None and edit:
+            # 예산 초과를 흉내냅니다. 테스트가 끝나면서 풀어 주므로 스레드가 남지 않습니다 -
+            # 여기서 `sleep` 을 쓰면 그 시간만큼 세션 종료가 실제로 늦어집니다.
+            self.block_until.wait(timeout=30)
         if index == self.fail_on:
             raise RuntimeError(f"{index}번 칸 벤더 오류")
         width, height = (int(part) for part in kwargs["size"].split("x"))
@@ -523,6 +530,81 @@ def test_a_failing_first_panel_never_fans_out(
 
     with pytest.raises(render.RenderFailedError):
         render.render_image(request, model_settings)
+
+    assert panels.edits == []
+
+
+# ---- 타임아웃 예산 (이슈 #141) ------------------------------------------------------
+
+
+def test_the_per_call_timeout_leaves_room_under_the_total_budget() -> None:
+    """⚠️ **두 값은 함께 움직여야 합니다.** 만화형은 1번 칸 뒤에 병렬 배치가 오는 두 단계라
+    최악 대기가 칸당 상한의 2배입니다. 그 2배가 총 예산을 넘으면 예산이 먼저 끊어 놓고도 칸은
+    계속 돌게 되고, 총 예산이 호출자의 `render_timeout_s`(300초)를 넘으면 애초에 이 설계가
+    막으려던 상태 - 호출자가 먼저 끊는 상태 - 로 돌아갑니다 (이슈 #141).
+    """
+    settings = Settings()
+
+    assert settings.image_timeout_s * 2 <= settings.render_budget_s
+    assert settings.render_budget_s < 300.0, "호출자의 render_timeout_s 보다 작아야 합니다"
+
+
+def test_the_per_call_timeout_reaches_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """설정만 내려도 클라이언트에 전달되지 않으면 아무 일도 하지 않습니다."""
+    seen: dict[str, Any] = {}
+
+    def client(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return type("Client", (), {"images": FakeImages(payload=png_bytes())})()
+
+    module = type("OpenAiModule", (), {})()
+    module.OpenAI = client  # type: ignore[attr-defined]
+    monkeypatch.setitem(__import__("sys").modules, "openai", module)
+
+    render.render_image(single_ad_request(), Settings(generation_mode="model", model_api_key="k"))
+
+    assert seen["timeout"] == 120.0
+
+
+def test_a_slow_panel_fails_the_set_without_waiting_for_the_stragglers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A2 의 대가. 병렬 배치가 예산을 넘기면 **기다리기를 그만두고** 세트를 버립니다.
+
+    ⚠️ 사는 것은 "호출자가 먼저 끊지 않는 것" 하나입니다. 이미 나간 요청은 벤더 쪽에서 계속
+    돌고 요금도 나갑니다. 그래도 이쪽이 나은 이유는, 호출자가 먼저 끊으면 실패의 이유를 아는
+    쪽이 아무도 없기 때문입니다 (이슈 #141).
+
+    ⚠️ **기다리지 않는다는 것까지 검사합니다.** `ThreadPoolExecutor` 를 `with` 로 쓰면
+    `__exit__` 이 `shutdown(wait=True)` 라, 예산을 넘겨 빠져나갈 때도 남은 스레드를 끝까지
+    기다립니다 - 그러면 예산이 아무 일도 하지 않고 증상은 똑같습니다.
+    """
+    release = threading.Event()
+    install(monkeypatch, FakePanels(block_until=release))
+    settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+    request = comic_request(96, 64)
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(render.RenderFailedError, match="예산 안에"):
+            render.render_image(request, settings)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert elapsed < 10.0, "남은 칸을 기다렸습니다 - 예산이 집행되지 않은 것입니다"
+
+
+def test_a_slow_first_panel_never_fans_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1번 칸까지 예산을 다 썼으면 나머지 다섯은 부르지 않습니다. 불러 봐야 예산 안에 끝날 수
+    없고 요금만 다섯 번 더 나갑니다."""
+    panels = FakePanels()
+    install(monkeypatch, panels)
+    settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.0)
+    request = comic_request(96, 64)
+
+    with pytest.raises(render.RenderFailedError, match="1번 칸까지"):
+        render.render_image(request, settings)
 
     assert panels.edits == []
 

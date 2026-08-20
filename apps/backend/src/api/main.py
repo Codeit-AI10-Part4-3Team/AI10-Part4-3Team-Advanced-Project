@@ -14,9 +14,9 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api import deps, worker
+from api import deps, sweeper, worker
 from api.errors import api_error_handler, unhandled_error_handler, validation_error_handler
-from api.routes import ask, auth, catalog, jobs, sessions
+from api.routes import auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
 from backend_core.storage import connect, init_schema
@@ -52,9 +52,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # correct password, which is exactly the failure this check exists to prevent
         # (2026-08-14, PR #84 리뷰에서 신호정 발견).
         #
-        # An empty database still starts with no key: a fresh clone has to serve /health and
-        # /v1/ask, because a skeleton that needs configuration before it moves is not a
-        # walking skeleton (config.py).
+        # An empty database still starts with no key: a fresh clone has to serve /health,
+        # because a stack that needs configuration before it starts cannot be deployed empty
+        # (config.py).
         if account_count(connection):
             require_secret(settings.session_secret)
 
@@ -63,7 +63,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # back and nothing would ever pick that job up again (ADR-0015).
         worker.requeue_interrupted(connection)
 
-    async with worker.lifespan_task(_app, settings.worker_poll_interval_s, settings.worker_enabled):
+    # ⚠️ Two background tasks, nested rather than merged. They have nothing to say to each
+    # other and different failure modes: a stalled render leaves a spinner, a stalled sweep
+    # leaves personal data past its period (세션_보관_정책 2절). Keeping them separate means
+    # turning one off for a test does not turn off the other.
+    async with (
+        worker.lifespan_task(_app, settings.worker_poll_interval_s, settings.worker_enabled),
+        sweeper.lifespan_task(settings),
+    ):
         yield
 
 
@@ -103,12 +110,11 @@ app.include_router(catalog.router)
 app.include_router(sessions.router)
 app.include_router(jobs.router)
 
-# ⚠️ `/v1/ask` is the template's question-and-answer path, not part of the ad-generation
-# contract, and it is deliberately left unauthenticated. The contract protects "every /v1
-# path except /health and /v1/auth/*" (API_계약.md 6절), but that sentence describes the
-# contract's own paths — this one is scheduled for replacement, not protection. Reasoning
-# and the condition that ends this exemption: API_계약.md 7절.
-app.include_router(ask.router)
+# ⚠️ Every router above is behind `current_user`. The template's `/v1/ask` used to sit here
+# unauthenticated as a documented exemption; it was deleted once the frontend moved to the
+# ad path (API_계약.md 7절). **Do not reintroduce an unauthenticated /v1 route** — the
+# contract protects every /v1 path except /health and /v1/auth/* (API_계약.md 6절), and the
+# exemption existed only because /v1/ask was not a contract path.
 
 
 @app.get("/health")

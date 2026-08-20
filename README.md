@@ -32,8 +32,9 @@ pip install pre-commit && pre-commit install && pre-commit install --hook-type p
 uvicorn ai_engine.service:app --reload --port 8100   # AI 엔진 → :8100/docs
 uvicorn api.main:app --reload --port 8000            # 백엔드   → :8000/docs
 
-curl -X POST localhost:8000/v1/ask -H 'content-type: application/json' \
-     -d '{"question":"환불은 어떻게 하나요?"}'
+curl -X POST localhost:8000/v1/auth/login -H 'content-type: application/json' \
+     -d '{"loginId":"demo1","password":"..."}' -c cookies.txt
+curl -b cookies.txt localhost:8000/v1/art-styles
 ```
 
 전체 스택:

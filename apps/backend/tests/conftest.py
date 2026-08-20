@@ -4,9 +4,9 @@ Every test runs fully offline. The AI engine is replaced with a fake through Fas
 dependency overrides — external calls in tests cost money, are rate-limited and make CI
 non-deterministic (AGENTS.md).
 
-⚠️ The fake mimics the engine's *contract*, including both failure modes: a refusal
-(`generate` returns `None`) and an outage (raises). It does not bypass the guardrail —
-guardrail behaviour is tested in apps/ai-engine, where it lives.
+⚠️ The fake mimics the engine's *contract*, including its failure modes: an outage
+(raises `AiEngineUnavailableError`) and an inconclusive inference (`needsInput`). It does
+not bypass the guardrail — guardrail behaviour is tested in apps/ai-engine, where it lives.
 """
 
 import os
@@ -36,9 +36,6 @@ from backend_core.models import (
     PanelRole,
     SingleAdDraft,
 )
-from backend_core.models.legacy_qa import Answer, Source
-
-GROUNDED_TEXT = "안내문 3조에 따라 먼저 담당 창구에 연락하세요."
 
 FILLED_CATEGORY = "[더미] 생활용품"
 FILLED_TARGET = "[더미] 30대 1인 가구"
@@ -157,6 +154,13 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
     # Tests that mean to exercise the worker turn it on and inject a fake engine.
     monkeypatch.setenv("ADGEN_WORKER_ENABLED", "false")
 
+    # ⚠️ And the retention sweeper, for the same class of reason. It sweeps once at startup,
+    # so a test whose fixture happens to be older than a period would have its data deleted
+    # between the request and the assertion — and the failure would look like a bug in the
+    # route. Tests that mean to exercise retention call `retention.sweep` directly with an
+    # explicit clock (tests/backend_core/test_retention.py); they never wait for this one.
+    monkeypatch.setenv("ADGEN_SWEEP_ENABLED", "false")
+
     deps.settings.cache_clear()
     yield
     deps.settings.cache_clear()
@@ -166,9 +170,9 @@ class FakeAiEngine:
     """Contract-shaped stand-in for all three seams.
 
     `available=False` simulates the outage branch (raise); `refuses=True` simulates the
-    honest-refusal branch, which each seam expresses differently — `answer: null` on the
-    legacy path, an absent `draft` on generation. Both must end where the design says they
-    end, which is what the pipeline and session tests check.
+    honest-refusal branch, expressed as an absent `draft` on generation. Both must end where
+    the design says they end, which is what the session tests check — `brief:fill` degrades
+    (ADR-0005) while generation and rendering fail loudly.
 
     ⚠️ The fake mimics the seams' *shapes*, not the engine's judgement. It never decides
     whether a claim is supported — the guardrail is tested in apps/ai-engine, where it lives,
@@ -184,22 +188,9 @@ class FakeAiEngine:
         self.available = available
         self.refuses = refuses
         self.needs_input = needs_input
-        self.seen: list[str] = []
         self.drafts_requested: list[DraftGenerateRequest] = []
         self.patches_requested: list[DraftPatchEngineRequest] = []
         self.renders_requested: list[ImageRenderRequest] = []
-
-    def generate(self, question: str, locale: str) -> Answer | None:
-        if not self.available:
-            raise AiEngineUnavailableError("fake outage")
-        self.seen.append(question)
-        if self.refuses:
-            return None
-        return Answer(
-            text=GROUNDED_TEXT,
-            message_mode="grounded",
-            sources=[Source(title="[더미] 공식 안내문", quote="담당 창구에 연락합니다.")],
-        )
 
     def fill_brief(
         self, product_name: str, selling_point: str, note: str, image: bytes, filename: str

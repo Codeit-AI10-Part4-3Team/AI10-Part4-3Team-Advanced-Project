@@ -1,7 +1,11 @@
-"""Starter harness tests — they prove the E2E wiring itself works.
+"""Harness tests — they prove the E2E wiring itself works, not that a feature does.
 
-Replace/extend with your real 관통 시나리오 and its failure modes. Keep this file's
-contract: reach services over HTTP, never import app packages.
+⚠️ **This file is deliberately feature-free.** It used to thread the stack through the
+template's `/v1/ask`; that route was deleted (API_계약.md 7절) and the crossing it proved
+(backend -> ai-engine -> back) is now covered by `test_ad_flow.py` on the contract path,
+which is the one that has to keep working.
+
+Keep this file's contract: reach services over HTTP, never import app packages.
 """
 
 import httpx
@@ -18,16 +22,6 @@ def test_backend_is_reachable(client: httpx.Client) -> None:
     response = client.get("/health")
     assert response.status_code == 200, response.text
     assert response.json().get("status") == "ok"
-
-
-@pytest.mark.flow
-def test_ask_threads_the_whole_stack(client: httpx.Client) -> None:
-    """One request crosses backend -> ai-engine -> back, and always returns something usable."""
-    response = client.post("/v1/ask", json={"question": "환불은 어떻게 하나요?"})
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["text"]
-    assert body["messageMode"] in {"grounded", "official_fallback"}
 
 
 @pytest.mark.failure

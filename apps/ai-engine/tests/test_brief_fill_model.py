@@ -21,7 +21,9 @@ from ai_engine.service_schemas import BriefFillRequest
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 JPEG = b"\xff\xd8\xff" + b"0" * 32
-WEBP = b"RIFF" + b"0" * 32
+WEBP = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"0" * 20
+WAV = b"RIFF" + b"\x00\x00\x00\x00" + b"WAVE" + b"0" * 20
+"""⚠️ WebP 와 앞 네 바이트가 같습니다. `RIFF` 는 컨테이너 서명이지 WebP 의 서명이 아닙니다."""
 
 
 def fill_request(payload: bytes = PNG, **overrides: Any) -> BriefFillRequest:
@@ -258,13 +260,23 @@ def test_a_misshapen_response_is_a_failure_not_a_crash(response: Any, expected: 
 
 @pytest.mark.parametrize(
     ("payload", "expected"),
-    [(b"GIF89a" + b"0" * 16, "형식을 알 수 없습니다"), (b"", "비어 있습니다")],
-    ids=["GIF 는 계약 밖", "빈 파일"],
+    [
+        (b"GIF89a" + b"0" * 16, "형식을 알 수 없습니다"),
+        (WAV, "형식을 알 수 없습니다"),
+        (b"RIFF", "형식을 알 수 없습니다"),
+        (b"", "비어 있습니다"),
+    ],
+    ids=["GIF 는 계약 밖", "RIFF 지만 WAV", "RIFF 뿐이고 잘림", "빈 파일"],
 )
 def test_an_image_the_contract_does_not_accept_never_reaches_the_vendor(
     monkeypatch: pytest.MonkeyPatch, model_settings: Settings, payload: bytes, expected: str
 ) -> None:
-    """계약이 받는 것은 JPEG, PNG, WebP 뿐입니다. 걸러 내지 않으면 요금이 나간 뒤에 실패합니다."""
+    """계약이 받는 것은 JPEG, PNG, WebP 뿐입니다. 걸러 내지 않으면 요금이 나간 뒤에 실패합니다.
+
+    ⚠️ `RIFF` 두 줄이 요점입니다 (PR #145 리뷰). 앞 네 바이트만 보면 WAV 와 AVI 가
+    `image/webp` 로 이름 붙어 올라가, 바이트에서 형식을 알아낸다는 이 함수의 목적 자체가
+    사라집니다. 형식 이름은 오프셋 8 의 `WEBP` 가 정합니다.
+    """
     completions = FakeCompletions(body=DECIDED)
     install(monkeypatch, completions)
 

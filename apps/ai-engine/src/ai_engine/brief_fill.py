@@ -87,12 +87,19 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 넘는 사진이 그대로 벤더에게 올라가고**, 그 실패는 요금이 나간 뒤에 옵니다.
 """
 
-_MAGIC: dict[bytes, str] = {
-    b"\xff\xd8\xff": "image/jpeg",
-    b"\x89PNG\r\n\x1a\n": "image/png",
-    b"RIFF": "image/webp",
-}
+_MAGIC: tuple[tuple[str, tuple[tuple[int, bytes], ...]], ...] = (
+    ("image/jpeg", ((0, b"\xff\xd8\xff"),)),
+    ("image/png", ((0, b"\x89PNG\r\n\x1a\n"),)),
+    # ⚠️ **WebP 는 두 군데를 봅니다.** `RIFF` 는 WebP 의 서명이 아니라 컨테이너 서명이라
+    # WAV 와 AVI 도 같은 네 바이트로 시작합니다. 앞만 보면 WAV 를 `image/webp` 라고 이름
+    # 붙여 벤더에게 올리게 되고, 그러면 바이트에서 형식을 알아내는 이 함수가 정작 형식을
+    # 확인하지 못한 셈이 됩니다. 형식 이름은 오프셋 8 의 `WEBP` 가 정합니다 (PR #145 리뷰).
+    ("image/webp", ((0, b"RIFF"), (8, b"WEBP"))),
+)
 """바이트에서 형식을 알아냅니다. 계약이 받는 세 가지뿐입니다 (GIF 와 HEIC 는 거절).
+
+각 항목은 **모두 맞아야 하는** (오프셋, 바이트) 짝의 묶음입니다. 딕셔너리에 접두어 하나씩
+두던 것을 이렇게 바꾼 이유는 위의 WebP 주석에 있습니다.
 
 ⚠️ **`Content-Type` 헤더도 파일 이름도 보지 않습니다.** 둘 다 호출자가 실어 보내는 값이라
 믿으면 형식 검사가 아무것도 검사하지 않게 됩니다 - backend 의 `backend_core.images` 가 같은
@@ -181,8 +188,8 @@ def _image_bytes(request: BriefFillRequest) -> bytes:
 
 def _data_url(payload: bytes) -> str:
     """벤더에게 넘길 인라인 이미지. 형식은 바이트에서 알아냅니다."""
-    for magic, media_type in _MAGIC.items():
-        if payload.startswith(magic):
+    for media_type, signature in _MAGIC:
+        if all(payload[at : at + len(magic)] == magic for at, magic in signature):
             return f"data:{media_type};base64,{base64.b64encode(payload).decode()}"
     raise BriefFillFailedError(
         "productImage 의 형식을 알 수 없습니다. 계약이 받는 것은 JPEG, PNG, WebP 뿐입니다."

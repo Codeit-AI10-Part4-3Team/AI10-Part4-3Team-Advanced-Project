@@ -23,7 +23,8 @@
 #      쓰면 백업 파일이 uid 10001 소유로 남아 정리도 열람도 어려워집니다.
 #    - 되돌릴 때는 **파일을 stdin 으로 흘려보냅니다.** 호스트 쪽에서 읽고 컨테이너 쪽에서
 #      쓰므로 양쪽 다 자기 파일만 만지고, 볼륨 안 파일의 소유권(uid 10001)이 그대로
-#      유지됩니다. bind mount 로 넣으면 0600 으로 좁혀 둔 백업을 컨테이너가 못 읽고,
+#      유지됩니다. bind mount 로 넣으면 좁혀 둔 백업(0640)을 컨테이너가 못 읽고
+#      -- 컨테이너 사용자는 그 파일의 소유자도 그룹 구성원도 아닙니다 --,
 #      `cp` 로 넣으면 대상이 root 소유가 되어 다음 기동이
 #      `attempt to write a readonly database` 로 죽습니다 (2026-08-19 실측).
 #
@@ -127,7 +128,15 @@ with sqlite3.connect(sys.argv[1]) as conn:
   # ⚠️ **`umask` 가 아니라 여기가 파일 권한을 정하는 자리입니다.** 위 줄을 실행한 것은
   #    컨테이너 프로세스라 호스트 셸의 umask 를 물려받지 않았고, 파일은 0644 로 떨어져
   #    있습니다. 확인보다 먼저 좁히는 것은 노출되는 구간을 줄이기 위해서입니다.
-  chmod 600 "$BACKUP_DIR/$name"
+  #
+  # ⚠️ **0600 이 아니라 0640 입니다. 그룹 읽기를 남기는 것이 의도입니다.**
+  #    cron 은 한 사람의 crontab 에 걸리므로 0600 이면 **그 사람만 복원할 수 있습니다.**
+  #    `/srv/adcraft` 는 `adcraft` 그룹과 setgid 로 세운 공용 경로이고(infra/README 의
+  #    "배포 체크아웃은 `/srv/adcraft/app`" 절), 배포가 한 사람의 자산이 아니라는 것이 그
+  #    경로의 전제입니다. setgid 덕에 파일 그룹이 `adcraft` 로 붙으므로 0640 이면 팀원이
+  #    읽고, 그 밖의 사용자는 여전히 못 읽습니다. 기본 ACL 이 없는 다른 경로를 가리켜도
+  #    그룹은 만든 사람의 기본 그룹이라 넓어지지 않습니다 (PR #133 리뷰, 신호정).
+  chmod 640 "$BACKUP_DIR/$name"
 
   verify "$BACKUP_DIR/$name"
   [[ "$do_rotate" -eq 1 ]] && rotate
@@ -139,6 +148,16 @@ with sqlite3.connect(sys.argv[1]) as conn:
 verify() {
   local file="$1" users
   [[ -s "$file" ]] || die "백업 파일이 비어 있습니다: $file"
+
+  # ⚠️ **읽을 수 있는지를 먼저 봅니다. 아래 `sqlite3` 가 권한과 손상을 구별하지 못하기
+  #    때문입니다.** 못 읽는 파일을 열면 `PermissionError` 가 아니라
+  #    `OperationalError: unable to open database file` 이 나오는데, 이것은 깨진 백업의
+  #    메시지와 같습니다. 장애 중에 그것을 보면 자연스러운 다음 행동이 "그다음으로 오래된
+  #    백업을 시도" 이고 전부 같은 이유로 실패하므로 **백업 전체가 깨진 것으로 오진하게
+  #    됩니다.** 위 `-s` 는 `stat` 만 쓰므로 걸러 주지 못합니다 (PR #133 리뷰, 신호정).
+  if [[ ! -r "$file" ]]; then
+    die "백업 파일을 읽을 권한이 없습니다: $(ls -ld "$file" 2>/dev/null || echo "$file")"
+  fi
 
   users="$(python3 -c "
 import sqlite3, sys

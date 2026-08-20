@@ -15,12 +15,14 @@ Two rules this module must not "simplify":
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
-from ai_engine import draft_prompt
+from ai_engine import draft_prompt, guardrail, render_prompt
 from ai_engine.config import Settings
 from ai_engine.models import (
     PANEL_ROLES,
+    Brief,
     ComicDraft,
     Draft,
     DraftGenerateRequest,
@@ -103,19 +105,15 @@ def _generate_with_model(
     실제로 여섯 칸을 쓰는 것은 지어내는 일이 아닙니다. 칸 수와 역할은 계약과 기획서 7.3 이
     정해 두었으므로 여기서 새로 정하는 값이 없습니다.
     """
-    payload = _ask_model(draft_prompt.build_generate(request), settings)
-
-    reason = _refusal_of(payload)
-    if reason is not None:
-        return DraftGenerateResponse(
-            guardrail_applied=request.guardrail_applied, refusal_reason=reason
-        )
-
-    if request.output_type == "comic":
-        drafted: Draft = _comic_draft(payload)
-    else:
-        drafted = _single_ad_draft(payload)
-    return DraftGenerateResponse(draft=drafted, guardrail_applied=request.guardrail_applied)
+    build = _comic_draft if request.output_type == "comic" else _single_ad_draft
+    outcome = _guarded_draft(
+        draft_prompt.build_generate(request),
+        settings,
+        build,
+        _evidence(request.brief),
+        enabled=request.guardrail_applied,
+    )
+    return _response(outcome, request.guardrail_applied)
 
 
 def patch_draft(request: DraftPatchEngineRequest, settings: Settings) -> DraftGenerateResponse:
@@ -190,19 +188,100 @@ def _patch_with_model(
     보내면서 `refusalReason` 을 함께 실으면 계약이 말하는 거절(`draft` 키가 없는 상태)이
     아니게 됩니다.
     """
-    payload = _ask_model(draft_prompt.build_patch(request), settings)
+    original = request.draft
 
+    def build(payload: dict[str, Any]) -> Draft:
+        if isinstance(original, ComicDraft):
+            return _patched_comic(request, original, payload)
+        return _patched_single_ad(request, original, payload)
+
+    outcome = _guarded_draft(
+        draft_prompt.build_patch(request),
+        settings,
+        build,
+        _evidence(request.brief),
+        enabled=request.guardrail_applied,
+    )
+    return _response(outcome, request.guardrail_applied)
+
+
+# ---- 가드레일 (ADR-0019, 생성_파이프라인 5.1절) ------------------------------------------
+
+
+def _evidence(brief: Brief) -> str:
+    """가드레일이 대조할 원문. `sellingPoint` + `note` + **제품명**입니다.
+
+    ⚠️ 앞의 둘이 근거입니다 (생성_파이프라인 5.2절). `category` 와 `target` 은 추론값이라
+    들어가지 않습니다 - 추론으로 채운 카테고리를 근거 삼아 효능을 쓰면 지어낸 것입니다.
+
+    ⚠️ **제품명은 근거를 넓히려고 넣은 것이 아닙니다.** 사용자가 직접 친 글자를 우리가 지어낸
+    것으로 세지 않기 위해서입니다 - 제품명이 "3겹 물티슈" 인데 카피가 `3겹` 이라고 쓰면 그
+    수치는 우리가 만든 것이 아닙니다. 제품명은 효능을 실어 올 수 없으므로 근거의 성격은
+    그대로입니다.
+    """
+    parts = (brief.selling_point, brief.note, brief.product_name)
+    return " ".join(part for part in parts if part)
+
+
+def _guarded_draft(
+    prompt: str,
+    settings: Settings,
+    build: Callable[[dict[str, Any]], Draft],
+    evidence: str,
+    *,
+    enabled: bool,
+) -> Draft | RefusalReason:
+    """한 번 쓰게 하고, 위반이면 **한 번만** 다시 쓰게 하고, 그래도 남으면 거절합니다.
+
+    생성_파이프라인 5.1.1절의 표 그대로입니다. 1회차 위반은 조용히 재생성하므로 호출자에게
+    보이지 않고, 2회차 위반이 `refusalReason: guardrail` 입니다.
+
+    ⚠️ **재생성을 열어 두지 마세요.** 거절이 반복될 때 비용이 무한히 늘고, 그 비용은 사용자가
+    기다리는 시간이기도 합니다.
+
+    ⚠️ 검사 대상은 `render_prompt.dialogue_of` 가 주는 문자열 - **이미지 안에 그려질 글자**
+    뿐입니다. `adPlan` 과 `visualPlan` 은 소비자에게 하는 주장이 아니라 제작 지시문이라
+    넣으면 전량 위반으로 잡힙니다 (2026-08-20 실측, ADR-0019).
+    """
+    outcome = _attempt(prompt, settings, build)
+    if isinstance(outcome, str) or not enabled:
+        return outcome
+
+    report = guardrail.check_claims(render_prompt.dialogue_of(outcome), evidence)
+    if report.passed:
+        return outcome
+
+    # 1회차 위반. 클라이언트에는 보이지 않습니다 (생성_파이프라인 5.1.1절).
+    logger.info("guardrail 1회차 위반, 재생성합니다: %s", report.violations)
+    retried = _attempt(
+        f"{prompt}\n\n{draft_prompt.retry_block(report.violations)}", settings, build
+    )
+    if isinstance(retried, str):
+        return retried
+
+    second = guardrail.check_claims(render_prompt.dialogue_of(retried), evidence)
+    if second.passed:
+        return retried
+
+    logger.warning("guardrail 2회차 위반, 거절합니다: %s", second.violations)
+    return "guardrail"
+
+
+def _attempt(
+    prompt: str, settings: Settings, build: Callable[[dict[str, Any]], Draft]
+) -> Draft | RefusalReason:
+    """한 번 물어보고, 거절 사유이거나 시안입니다."""
+    payload = _ask_model(prompt, settings)
     reason = _refusal_of(payload)
-    if reason is not None:
-        return DraftGenerateResponse(
-            guardrail_applied=request.guardrail_applied, refusal_reason=reason
-        )
+    return reason if reason is not None else build(payload)
 
-    if isinstance(request.draft, ComicDraft):
-        patched: Draft = _patched_comic(request, request.draft, payload)
-    else:
-        patched = _patched_single_ad(request, request.draft, payload)
-    return DraftGenerateResponse(draft=patched, guardrail_applied=request.guardrail_applied)
+
+def _response(outcome: Draft | RefusalReason, guardrail_applied: bool) -> DraftGenerateResponse:
+    """⚠️ 거절이면 `draft` 를 **넘기지 않습니다.** `None` 을 넘기면 계약이 금지한 `null` 이
+    되고, 키를 실으면 "거절인데 시안이 있는" 상태가 됩니다 (계약 `DraftGenerateResponse`)."""
+    if isinstance(outcome, str):
+        return DraftGenerateResponse(guardrail_applied=guardrail_applied, refusal_reason=outcome)
+    return DraftGenerateResponse(draft=outcome, guardrail_applied=guardrail_applied)
 
 
 # ---- 모델 호출과 응답 해석 ------------------------------------------------------------

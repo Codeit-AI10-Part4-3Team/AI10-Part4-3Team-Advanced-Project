@@ -211,7 +211,7 @@ def _bad_panels(cell: str | None) -> set[int]:
     return {int(token) for token in re.findall(r"[1-6]", cell)}
 
 
-def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int) -> None:
+def _tally_by_length(sheets: list[Path]) -> None:
     """N18 의 본체 - 길이별 오탈자율.
 
     ⚠️ **"틀린 칸 번호" 열이 비어 있으면 무오탈자로 셉니다.** 칸 수 열이 6이면 실제로 그렇고,
@@ -223,8 +223,8 @@ def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int)
     칸이 정상 표본으로 들어가 **상한이 실제보다 높게** 잡힙니다.
     """
     by_index = {p.index: len(p.line) for p in conditions.PANELS_MID}
-    fails: dict[int, int] = {index: 0 for index in by_index}
-    samples: dict[int, int] = {index: 0 for index in by_index}
+    judges_of_run: dict[int, int] = {}
+    flags_of_run: dict[int, dict[int, int]] = {}
 
     for sheet in sheets:
         for run_id, (panels_ok, cell) in _parse_sheet(sheet).items():
@@ -239,22 +239,35 @@ def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int)
                     f"틀린 칸 {sorted(bad)} - 두 열이 맞지 않아 길이 집계에서 뺍니다"
                 )
                 continue
-            for index in by_index:
-                samples[index] += 1
-                if index in bad:
-                    fails[index] += 1
+            judges_of_run[run_id] = judges_of_run.get(run_id, 0) + 1
+            slot = flags_of_run.setdefault(run_id, {})
+            for index in bad:
+                slot[index] = slot.get(index, 0) + 1
+
+    runs = len(judges_of_run)
+    votes = sum(judges_of_run.values())
 
     print("\n길이별 집계 (N18)")
-    print("| 칸 | 길이 | 표본 | 오탈자 | 비율 |")
-    print("|---|---|---|---|---|")
+    print("| 칸 | 길이 | 회차 | 오탈자 회차 | 비율 | 지목/판정 |")
+    print("|---|---|---|---|---|---|")
     for index, length in sorted(by_index.items(), key=lambda kv: kv[1]):
-        n, bad_n = samples[index], fails[index]
-        rate = f"{bad_n / n:.0%}" if n else "-"
-        print(f"| {index} | {length}자 | {n} | {bad_n} | {rate} |")
+        # ⚠️ **판정자 수로 표본을 곱하지 않습니다.** 세 사람이 같은 이미지를 보는 것이라
+        # 독립 표본이 아니고, 그대로 세면 5세트가 표본 15로 보여 신뢰도가 3배로 부풀려집니다.
+        # 회차 단위로 접고 B-16 의 다수결(3명 중 2명 이상)로 판정합니다.
+        flagged = sum(1 for r, c in judges_of_run.items() if flags_of_run.get(r, {}).get(index, 0) * 2 > c)
+        picks = sum(slot.get(index, 0) for slot in flags_of_run.values())
+        rate = f"{flagged / runs:.0%}" if runs else "-"
+        print(f"| {index} | {length}자 | {runs} | {flagged} | {rate} | {picks}/{votes} |")
+
     print(
-        f"\n회차 {total}건. 상한은 **오탈자가 처음 나오는 길이의 바로 아래**로 잡되, "
-        "표본이 작으면 0건도 안전을 보증하지 않습니다."
+        f"\n회차 {runs}건 / 판정 {votes}건. **비율은 회차 기준이고 다수결(과반)로 판정합니다** - "
+        "판정자 수를 표본으로 곱하면 신뢰도가 부풀려집니다.\n"
+        "`지목/판정` 이 다수결과 어긋나면(예: 지목은 있는데 오탈자 회차가 0) 판정이 갈린 "
+        "것이므로, 그 칸은 수치보다 메모를 먼저 보세요.\n"
+        "상한은 **오탈자가 처음 나오는 길이의 바로 아래**로 잡되, 회차가 적으면 0건도 안전을 "
+        "보증하지 않습니다."
     )
+
 
 def _parse_sheet(path: Path) -> dict[int, tuple[int | None, str | None]]:
     """채워진 시트에서 (회차 -> (칸 수, 균등 분할))만 뽑습니다."""
@@ -282,26 +295,29 @@ def _tally_single_lengths(rows: list[dict[str, str]], sheets: list[Path]) -> Non
         print("\n길이별 집계: manifest 에 copy 열이 없습니다 (옛 회차)")
         return
 
-    fails: dict[int, int] = {}
-    samples: dict[int, int] = {}
+    # ⚠️ 만화형과 같은 이유로 판정자 수를 표본으로 곱하지 않습니다. 회차 단위로 접고
+    # 다수결(과반)로 판정하며, 갈린 판정은 `지목/판정` 으로 드러냅니다.
+    judges: dict[int, int] = {}
+    picks: dict[int, int] = {}
     for sheet in sheets:
         for run_id, (score, _) in _parse_sheet(sheet).items():
-            length = length_of.get(run_id)
-            if score is None or length is None:
+            if score is None or run_id not in length_of:
                 continue
-            samples[length] = samples.get(length, 0) + 1
+            judges[run_id] = judges.get(run_id, 0) + 1
             if score < 1:
-                fails[length] = fails.get(length, 0) + 1
+                picks[run_id] = picks.get(run_id, 0) + 1
 
     print("\n길이별 집계 (단건 광고형)")
-    print("| 길이 | 표본 | 실패 | 비율 |")
+    print("| 길이 | 회차 | 실패 회차 | 지목/판정 |")
     print("|---|---|---|---|")
-    for length in sorted(samples):
-        n, bad = samples[length], fails.get(length, 0)
-        print(f"| {length}자 | {n} | {bad} | {bad / n:.0%} |")
+    for run_id in sorted(judges, key=lambda r: length_of[r]):
+        n = judges[run_id]
+        pick = picks.get(run_id, 0)
+        verdict = "실패" if pick * 2 > n else "통과"
+        print(f"| {length_of[run_id]}자 | 1 | {verdict} | {pick}/{n} |")
     print(
-        "\n⚠️ 길이당 표본이 작습니다. 이 회차는 경계 탐색이 아니라 **만화형 상한을 단건에 "
-        "그대로 써도 되는지 보는 대조군**입니다."
+        "\n⚠️ **길이당 회차가 1건입니다.** 이 회차는 경계 탐색이 아니라 **만화형 상한을 단건에 "
+        "그대로 써도 되는지 보는 대조군**입니다. 한 건의 통과가 그 길이의 안전을 뜻하지 않습니다."
     )
 
 def _tally(run_dir: Path, task: str = "text") -> None:
@@ -356,7 +372,7 @@ def _tally(run_dir: Path, task: str = "text") -> None:
             print(f"    판정: {verdict}")
 
     if variant in LENGTH_VARIANTS:
-        _tally_by_length(run_dir, sheets, prefix, total)
+        _tally_by_length(sheets)
     if variant == "single_len":
         _tally_single_lengths(rows, sheets)
 

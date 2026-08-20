@@ -26,9 +26,21 @@ SHEET_PREFIX = "sheet"
 # 폴더를 다시 쓰는 설계라(3순위는 1순위 이미지를 그대로 봅니다) 이름을 갈라 두어야 합니다.
 TASK_PREFIX = {"text": SHEET_PREFIX, "consistency": "consistency"}
 
+LENGTH_VARIANTS = frozenset({"mid", "panels_mid"})
+"""칸마다 대사 길이가 다른 회차. 길이별 집계(N18)가 붙는 회차이기도 합니다.
+
+`mid` 는 한 장에 6칸을 그린 조건이고 `panels_mid` 는 칸을 따로 생성해 합성한 조건입니다.
+**판정 방식은 같지만 결론은 섞으면 안 됩니다** - 운영 경로는 후자뿐입니다 (ADR-0017).
+"""
+
 
 def _read_manifest(run_dir: Path) -> list[dict[str, str]]:
-    manifest = run_dir / "manifest.csv"
+    # ⚠️ 컷별 회차(`run_panels.py`)는 manifest.csv 가 **호출 단위**라 한 세트가 6행입니다.
+    # 판정 대상은 합성된 세트 이미지 한 장이므로 그쪽이 남긴 sets.csv 를 먼저 봅니다.
+    # 이 순서를 뒤집으면 판정자가 칸 낱장을 세트로 알고 6배를 채점하게 됩니다.
+    manifest = run_dir / "sets.csv"
+    if not manifest.exists():
+        manifest = run_dir / "manifest.csv"
     if not manifest.exists():
         raise SystemExit(f"{manifest}가 없습니다. run_experiment.py를 먼저 돌리세요.")
     with manifest.open(encoding="utf-8") as fp:
@@ -59,23 +71,40 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
         count_column = "동일 인물 (1) / 아님 (0)"
         count_hint = "1번부터 5번 칸이 같은 사람으로 보이면 `1`, 아니면 `0`"
         columns = ["회차", "이미지 파일", count_column, "6칸 화풍 일관 (Y/N)", "메모"]
-    elif variant == "single":
+    elif variant in ("single", "single_len"):
         # 단일 광고형은 칸이 없습니다. 6칸 척도를 그대로 쓰면 판정자가 없는 칸을 세게 됩니다.
-        criterion = (
-            "이미지에 그려진 한국어 카피가 아래 정답과 **글자 단위로 완전히 같은지** 봅니다. "
-            "한 글자라도 다르거나, 빠지거나, 깨져 있으면 실패입니다. 정답에 없는 문구가 이미지에 "
-            "추가로 그려져 있어도 실패입니다 (근거에 없는 문구를 넣지 말라고 지시했습니다).\n\n"
-            f"- 카피: `{conditions.SINGLE_AD_COPY}`\n"
-        )
+        #
+        # ⚠️ `single_len` 은 **회차마다 카피가 다릅니다.** 정답을 머리말에 한 줄로 적으면
+        # 판정자가 전 회차를 그 문장 기준으로 채점하게 되므로, 표의 각 행에 정답을 붙입니다.
+        per_row_answer = variant == "single_len"
+        if per_row_answer:
+            criterion = (
+                "이미지에 그려진 한국어 카피가 **그 행의 정답과 글자 단위로 완전히 같은지** "
+                "봅니다. 한 글자라도 다르거나, 빠지거나, 깨져 있으면 실패입니다. 정답에 없는 "
+                "문구가 추가로 그려져 있어도 실패입니다.\n\n"
+                "⚠️ **회차마다 정답이 다릅니다.** 표의 `정답 카피` 열을 보고 채점하세요.\n"
+            )
+        else:
+            criterion = (
+                "이미지에 그려진 한국어 카피가 아래 정답과 **글자 단위로 완전히 같은지** 봅니다. "
+                "한 글자라도 다르거나, 빠지거나, 깨져 있으면 실패입니다. 정답에 없는 문구가 "
+                "이미지에 추가로 그려져 있어도 실패입니다 (근거에 없는 문구를 넣지 말라고 "
+                "지시했습니다).\n\n"
+                f"- 카피: `{conditions.SINGLE_AD_COPY}`\n"
+            )
         count_column = "카피 정확 (1) / 실패 (0)"
         count_hint = "정확하면 `1`, 한 글자라도 어긋나거나 없는 문구가 추가됐으면 `0`"
-        columns = ["회차", "이미지 파일", count_column, "제품이 주인공 (Y/N)", "메모"]
-    elif variant in ("main", "hard", "mid"):
+        # ⚠️ 정답 카피를 세 번째가 아니라 네 번째 열에 둡니다. 집계(`_parse_sheet`)가 세 번째
+        # 열을 점수로 읽으므로, 정답을 앞에 끼우면 판정이 통째로 집계에서 빠집니다.
+        side_column = "정답 카피" if per_row_answer else "제품이 주인공 (Y/N)"
+        columns = ["회차", "이미지 파일", count_column, side_column, "메모"]
+    elif variant in ("main", "hard", "mid", "panels_base", "panels_mid"):
         # 어려운 대사 회차는 정답 문자열만 다르고 척도는 같습니다. 정답 표를 갈아 끼우지
         # 않으면 판정자가 1순위 대사를 기준으로 채점하게 됩니다.
         panels = {
             "hard": conditions.PANELS_HARD,
             "mid": conditions.PANELS_MID,
+            "panels_mid": conditions.PANELS_MID,
         }.get(variant, conditions.PANELS)
         answer_block = "\n".join(f"- {p.index}번 칸: `{p.line}`" for p in panels)
         criterion = (
@@ -85,7 +114,7 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
         )
         count_column = "오탈자 없는 칸 수 (0-6)"
         count_hint = "여섯 칸 모두 정확하면 `6`, 한 칸만 틀렸으면 `5`"
-        if variant == "mid":
+        if variant in LENGTH_VARIANTS:
             # ⚠️ N18 은 "몇 칸이 틀렸는가"가 아니라 **"몇 자부터 틀리는가"**를 묻습니다.
             # 칸마다 대사 길이가 다르므로 틀린 칸 번호가 없으면 길이별 집계가 성립하지 않고,
             # 그러면 회차를 몇 번 돌려도 상한을 못 정합니다.
@@ -117,7 +146,15 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
         "올라가는 것보다는 낫습니다.\n"
         f"- 나머지 두 열({columns[3]}, 메모)은 참고용입니다. 비어 있어도 판정은 성립합니다."
     )
-    if variant == "mid" and task == "text":
+    if variant == "single_len" and task == "text":
+        # `정답 카피` 는 판정자가 채우는 칸이 아니라 이미 채워져 있는 기준입니다. 위 문장을
+        # 그대로 두면 "비워도 되는 칸"으로 읽힙니다.
+        how_to_fill = how_to_fill.rsplit("\n- 나머지 두 열", 1)[0] + (
+            "\n- **`정답 카피` 열은 이미 채워져 있습니다.** 회차마다 정답이 다르니 그 행의 "
+            "문장과 대조하세요. 고치지 마세요.\n"
+            "- 메모는 참고용입니다. 틀린 글자를 적어 주시면 더 좋습니다."
+        )
+    if variant in LENGTH_VARIANTS and task == "text":
         # ⚠️ 이 회차에서는 네 번째 열이 참고용이 아닙니다. 칸마다 대사 길이가 달라서
         # **어느 칸이 틀렸는지가 곧 어느 길이가 틀렸는지**이고, 그것이 이 실험의 목적입니다
         # (N18). 위 문장을 그대로 두면 판정자가 비워도 된다고 읽습니다.
@@ -148,7 +185,9 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
             divider,
         ]
         for row in rows:
-            lines.append(f"| {row['run_id']} | `{row['image_file']}` |  |  |  |")
+            # 회차마다 정답이 다른 변형만 네 번째 칸을 미리 채웁니다. 나머지는 판정자 몫입니다.
+            answer = f"`{row['copy']}`" if row.get("copy") and variant == "single_len" else ""
+            lines.append(f"| {row['run_id']} | `{row['image_file']}` |  | {answer} |  |")
         lines += [
             "",
             "## 총평 (한 줄)",
@@ -172,7 +211,7 @@ def _bad_panels(cell: str | None) -> set[int]:
     return {int(token) for token in re.findall(r"[1-6]", cell)}
 
 
-def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int) -> None:
+def _tally_by_length(sheets: list[Path]) -> None:
     """N18 의 본체 - 길이별 오탈자율.
 
     ⚠️ **"틀린 칸 번호" 열이 비어 있으면 무오탈자로 셉니다.** 칸 수 열이 6이면 실제로 그렇고,
@@ -184,8 +223,8 @@ def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int)
     칸이 정상 표본으로 들어가 **상한이 실제보다 높게** 잡힙니다.
     """
     by_index = {p.index: len(p.line) for p in conditions.PANELS_MID}
-    fails: dict[int, int] = {index: 0 for index in by_index}
-    samples: dict[int, int] = {index: 0 for index in by_index}
+    judges_of_run: dict[int, int] = {}
+    flags_of_run: dict[int, dict[int, int]] = {}
 
     for sheet in sheets:
         for run_id, (panels_ok, cell) in _parse_sheet(sheet).items():
@@ -200,22 +239,35 @@ def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int)
                     f"틀린 칸 {sorted(bad)} - 두 열이 맞지 않아 길이 집계에서 뺍니다"
                 )
                 continue
-            for index in by_index:
-                samples[index] += 1
-                if index in bad:
-                    fails[index] += 1
+            judges_of_run[run_id] = judges_of_run.get(run_id, 0) + 1
+            slot = flags_of_run.setdefault(run_id, {})
+            for index in bad:
+                slot[index] = slot.get(index, 0) + 1
+
+    runs = len(judges_of_run)
+    votes = sum(judges_of_run.values())
 
     print("\n길이별 집계 (N18)")
-    print("| 칸 | 길이 | 표본 | 오탈자 | 비율 |")
-    print("|---|---|---|---|---|")
+    print("| 칸 | 길이 | 회차 | 오탈자 회차 | 비율 | 지목/판정 |")
+    print("|---|---|---|---|---|---|")
     for index, length in sorted(by_index.items(), key=lambda kv: kv[1]):
-        n, bad_n = samples[index], fails[index]
-        rate = f"{bad_n / n:.0%}" if n else "-"
-        print(f"| {index} | {length}자 | {n} | {bad_n} | {rate} |")
+        # ⚠️ **판정자 수로 표본을 곱하지 않습니다.** 세 사람이 같은 이미지를 보는 것이라
+        # 독립 표본이 아니고, 그대로 세면 5세트가 표본 15로 보여 신뢰도가 3배로 부풀려집니다.
+        # 회차 단위로 접고 B-16 의 다수결(3명 중 2명 이상)로 판정합니다.
+        flagged = sum(1 for r, c in judges_of_run.items() if flags_of_run.get(r, {}).get(index, 0) * 2 > c)
+        picks = sum(slot.get(index, 0) for slot in flags_of_run.values())
+        rate = f"{flagged / runs:.0%}" if runs else "-"
+        print(f"| {index} | {length}자 | {runs} | {flagged} | {rate} | {picks}/{votes} |")
+
     print(
-        f"\n회차 {total}건. 상한은 **오탈자가 처음 나오는 길이의 바로 아래**로 잡되, "
-        "표본이 작으면 0건도 안전을 보증하지 않습니다."
+        f"\n회차 {runs}건 / 판정 {votes}건. **비율은 회차 기준이고 다수결(과반)로 판정합니다** - "
+        "판정자 수를 표본으로 곱하면 신뢰도가 부풀려집니다.\n"
+        "`지목/판정` 이 다수결과 어긋나면(예: 지목은 있는데 오탈자 회차가 0) 판정이 갈린 "
+        "것이므로, 그 칸은 수치보다 메모를 먼저 보세요.\n"
+        "상한은 **오탈자가 처음 나오는 길이의 바로 아래**로 잡되, 회차가 적으면 0건도 안전을 "
+        "보증하지 않습니다."
     )
+
 
 def _parse_sheet(path: Path) -> dict[int, tuple[int | None, str | None]]:
     """채워진 시트에서 (회차 -> (칸 수, 균등 분할))만 뽑습니다."""
@@ -232,6 +284,42 @@ def _parse_sheet(path: Path) -> dict[int, tuple[int | None, str | None]]:
     return result
 
 
+def _tally_single_lengths(rows: list[dict[str, str]], sheets: list[Path]) -> None:
+    """단건 광고형의 길이별 집계.
+
+    만화형과 달리 **한 장이 곧 길이 1표본**입니다. 회차와 길이의 대응은 manifest 의 `copy`
+    열에서 읽습니다 - `run_id` 로 다시 계산하면 `--start-id` 가 달라지는 순간 어긋납니다.
+    """
+    length_of = {int(r["run_id"]): len(r.get("copy") or "") for r in rows if r.get("copy")}
+    if not length_of:
+        print("\n길이별 집계: manifest 에 copy 열이 없습니다 (옛 회차)")
+        return
+
+    # ⚠️ 만화형과 같은 이유로 판정자 수를 표본으로 곱하지 않습니다. 회차 단위로 접고
+    # 다수결(과반)로 판정하며, 갈린 판정은 `지목/판정` 으로 드러냅니다.
+    judges: dict[int, int] = {}
+    picks: dict[int, int] = {}
+    for sheet in sheets:
+        for run_id, (score, _) in _parse_sheet(sheet).items():
+            if score is None or run_id not in length_of:
+                continue
+            judges[run_id] = judges.get(run_id, 0) + 1
+            if score < 1:
+                picks[run_id] = picks.get(run_id, 0) + 1
+
+    print("\n길이별 집계 (단건 광고형)")
+    print("| 길이 | 회차 | 실패 회차 | 지목/판정 |")
+    print("|---|---|---|---|")
+    for run_id in sorted(judges, key=lambda r: length_of[r]):
+        n = judges[run_id]
+        pick = picks.get(run_id, 0)
+        verdict = "실패" if pick * 2 > n else "통과"
+        print(f"| {length_of[run_id]}자 | 1 | {verdict} | {pick}/{n} |")
+    print(
+        "\n⚠️ **길이당 회차가 1건입니다.** 이 회차는 경계 탐색이 아니라 **만화형 상한을 단건에 "
+        "그대로 써도 되는지 보는 대조군**입니다. 한 건의 통과가 그 길이의 안전을 뜻하지 않습니다."
+    )
+
 def _tally(run_dir: Path, task: str = "text") -> None:
     rows = _read_manifest(run_dir)
     variant = _variant_of(run_dir, rows)
@@ -247,12 +335,13 @@ def _tally(run_dir: Path, task: str = "text") -> None:
     # 전부 실패로 집계됩니다.
     if task == "consistency":
         threshold, scale, side_label = 1, "동일 인물 판정", "6칸 화풍 일관"
-    elif variant == "single":
-        threshold, scale, side_label = 1, "카피 정확", "제품이 주인공"
+    elif variant in ("single", "single_len"):
+        side = "정답 카피" if variant == "single_len" else "제품이 주인공"
+        threshold, scale, side_label = 1, "카피 정확", side
     else:
         threshold = conditions.PANELS_OK_THRESHOLD
         scale = f"{conditions.PANELS_OK_THRESHOLD}칸 이상"
-        side_label = "틀린 칸 번호" if variant == "mid" else "6칸 균등 분할"
+        side_label = "틀린 칸 번호" if variant in LENGTH_VARIANTS else "6칸 균등 분할"
 
     for sheet in sheets:
         judge = sheet.stem[len(prefix) + 1 :]
@@ -266,7 +355,7 @@ def _tally(run_dir: Path, task: str = "text") -> None:
         rate = ok_runs / len(filled)
         side_ok = sum(1 for _, grid in filled.values() if grid == "Y")
         side_rate = side_ok / len(filled)
-        if variant == "mid":
+        if variant in LENGTH_VARIANTS:
             side_ok = side_rate = 0.0  # 이 열은 Y/N 이 아니라 칸 번호입니다 (아래에서 집계)
 
         print(f"- {judge}: 판정 {len(filled)}/{total}건")
@@ -274,7 +363,7 @@ def _tally(run_dir: Path, task: str = "text") -> None:
             f"    성공 판정 - {scale} {ok_runs}건 "
             f"= {rate:.0%} (기준 {conditions.PASS_RATE_THRESHOLD:.0%})"
         )
-        if variant != "mid":
+        if variant not in LENGTH_VARIANTS and variant != "single_len":
             print(f"    참고 - {side_label} {side_ok}건 = {side_rate:.0%}")
         if len(filled) < conditions.TARGET_RUNS:
             print(f"    주의: 회차가 {conditions.TARGET_RUNS}회에 못 미쳐 확정 판정이 아닙니다")
@@ -282,8 +371,10 @@ def _tally(run_dir: Path, task: str = "text") -> None:
             verdict = "기준 충족" if rate >= conditions.PASS_RATE_THRESHOLD else "기준 미달"
             print(f"    판정: {verdict}")
 
-    if variant == "mid":
-        _tally_by_length(run_dir, sheets, prefix, total)
+    if variant in LENGTH_VARIANTS:
+        _tally_by_length(sheets)
+    if variant == "single_len":
+        _tally_single_lengths(rows, sheets)
 
     print(
         "\n수치는 회의록과 미결정_대장(A-1)에 옮기세요. 시트와 이미지는 커밋되지 않으므로 "

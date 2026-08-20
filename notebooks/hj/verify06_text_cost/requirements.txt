@@ -1,0 +1,8 @@
+# 실험 전용 의존입니다. 앱의 dev extra에 넣지 마세요 - CI가 매번 끌고 옵니다
+# (apps/ai-engine/AGENTS.md).
+#
+# 엔진(`ai_engine`)은 설치본이 아니라 체크아웃에서 직접 import 합니다. 설치본을 쓰면 브랜치의
+# 코드가 아니라 다른 버전을 재게 됩니다.
+openai>=1.40
+fastapi>=0.110
+pydantic>=2.0

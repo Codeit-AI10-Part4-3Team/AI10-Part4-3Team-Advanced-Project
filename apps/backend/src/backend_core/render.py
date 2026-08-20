@@ -48,14 +48,17 @@ SINGLE_AD_SPEC = ImageSpec(width=1088, height=1088)
 """잠정값 (미결정_대장 A절 8번, 잠정 진행). The comic size is fixed; this one is not."""
 
 RESULT_RETENTION = timedelta(days=7)
-"""세션_보관_정책 2절. Written onto the result so a client knows when the link dies; the
-batch that actually deletes is a separate job (08-26)."""
+"""세션_보관_정책 2절의 기본값. ⚠️ Kept as the default of `run_one`'s parameter rather than
+used directly: the policy says the periods are settings, and this one also decides what
+`JobResult.expiresAt` promises a client. `backend_core.retention` honours that promise over
+the session period, so a constant here would quietly override a configured period."""
 
 
 def run_one(
     connection: sqlite3.Connection,
     engine: AiEngineClient,
     image_dir: str | Path,
+    result_retention: timedelta = RESULT_RETENTION,
 ) -> str | None:
     """Take the next queued job, render it, and record the outcome. Returns its id, or
     `None` when there was nothing to do.
@@ -83,7 +86,7 @@ def run_one(
     # The alternative here is not "fail loudly" — the loop above already swallows and
     # continues — it is "fail silently and take everything else with it".
     try:
-        return _render(connection, engine, image_dir, job_id, session_id)
+        return _render(connection, engine, image_dir, job_id, session_id, result_retention)
     except Exception:
         logger.exception("render job %s failed unexpectedly", job_id)
         jobs.mark_failed(
@@ -99,6 +102,7 @@ def _render(
     image_dir: str | Path,
     job_id: str,
     session_id: str,
+    result_retention: timedelta,
 ) -> str:
     """The render itself. Its caller guarantees a terminal state whatever happens here."""
     found = sessions.for_owner_of_job(connection, session_id)
@@ -136,7 +140,7 @@ def _render(
             image_url=images.store_result(image_dir, job_id, payload),
             width=spec.width,
             height=spec.height,
-            expires_at=at + RESULT_RETENTION,
+            expires_at=at + result_retention,
         ),
     )
     sessions.save(connection, user_id, session_flow.complete(session, at), was)

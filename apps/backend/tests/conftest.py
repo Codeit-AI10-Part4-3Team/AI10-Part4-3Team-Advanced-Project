@@ -157,6 +157,13 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
     # Tests that mean to exercise the worker turn it on and inject a fake engine.
     monkeypatch.setenv("ADGEN_WORKER_ENABLED", "false")
 
+    # ⚠️ And the retention sweeper, for the same class of reason. It sweeps once at startup,
+    # so a test whose fixture happens to be older than a period would have its data deleted
+    # between the request and the assertion — and the failure would look like a bug in the
+    # route. Tests that mean to exercise retention call `retention.sweep` directly with an
+    # explicit clock (tests/backend_core/test_retention.py); they never wait for this one.
+    monkeypatch.setenv("ADGEN_SWEEP_ENABLED", "false")
+
     deps.settings.cache_clear()
     yield
     deps.settings.cache_clear()

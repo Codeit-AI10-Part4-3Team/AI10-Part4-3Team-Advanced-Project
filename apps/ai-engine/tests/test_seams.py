@@ -60,6 +60,7 @@ def render_request(width: int = 1088, height: int = 1088) -> ImageRenderRequest:
         brief=brief(),
         draft=draft.SingleAdDraft(ad_plan="기획안", ad_copy="카피", visual_plan="비주얼"),
         spec=ImageSpec(width=width, height=height),
+        quality="low",
     )
 
 
@@ -257,6 +258,7 @@ def test_image_render_route_returns_webp_bytes(client: TestClient) -> None:
             "brief": BRIEF_FIELDS,
             "draft": {"adPlan": "기획안", "copy": "카피", "visualPlan": "비주얼"},
             "spec": {"width": 1088, "height": 1088},
+            "quality": "low",
         },
     )
     assert response.status_code == 200

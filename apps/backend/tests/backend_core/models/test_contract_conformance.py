@@ -31,6 +31,7 @@ from backend_core.models import (
     Error,
     FieldMeta,
     FinalizeAccepted,
+    ImageQuality,
     ImageRenderRequest,
     ImageSpec,
     Job,
@@ -82,6 +83,7 @@ MODELS: dict[str, type[BaseModel]] = {
 }
 
 ENUMS: dict[str, Any] = {
+    "ImageQuality": ImageQuality,
     "JobStatus": JobStatus,
     "PanelRole": PanelRole,
     "SessionState": SessionState,

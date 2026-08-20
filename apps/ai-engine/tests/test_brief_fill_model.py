@@ -3,6 +3,10 @@
 ⚠️ **외부 API 를 부르지 않습니다.** 호출 1회가 요금이고 CI 가 비결정적이 됩니다 (AGENTS.md).
 여기서 확인하는 것은 "추론이 맞았는가"가 아니라 **무엇을 보내고 응답을 어떻게 다루는가**이며,
 둘 다 호출 없이 확인할 수 있는 성질입니다.
+
+⚠️ **`pytest.raises` 블록 안에는 검사 대상 호출 하나만 둡니다.** 요청을 그 안에서 만들면 만들다
+난 실패로도 테스트가 통과하고, 그러면 정작 분기가 안 터지게 되어도 아무도 모릅니다
+(`test_seams.py` 가 같은 이유로 같은 규칙을 씁니다).
 """
 
 from __future__ import annotations
@@ -194,9 +198,10 @@ def test_a_missing_key_fails_instead_of_falling_back_to_the_stub(
     """
     completions = FakeCompletions(body=DECIDED)
     install(monkeypatch, completions)
+    request, keyless = fill_request(), Settings(generation_mode="model")
 
     with pytest.raises(brief_fill.BriefFillFailedError, match="ADGEN_MODEL_API_KEY"):
-        brief_fill.fill_brief(fill_request(), Settings(generation_mode="model"))
+        brief_fill.fill_brief(request, keyless)
 
     assert completions.calls == []
 
@@ -206,9 +211,10 @@ def test_any_vendor_error_becomes_one_failure(
 ) -> None:
     """인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음."""
     install(monkeypatch, FakeCompletions(error=RuntimeError("rate limit")))
+    request = fill_request()
 
     with pytest.raises(brief_fill.BriefFillFailedError, match="rate limit"):
-        brief_fill.fill_brief(fill_request(), model_settings)
+        brief_fill.fill_brief(request, model_settings)
 
 
 @pytest.mark.parametrize(
@@ -228,9 +234,10 @@ def test_a_half_answer_is_a_failure_not_a_polite_needs_input(
     """⚠️ 형식을 지키지 않은 응답을 거절로 바꿔 주면, 우리 쪽 응답 처리가 부족했던 것을
     사용자에게 "메모를 더 써 달라"고 떠넘기게 됩니다."""
     install(monkeypatch, FakeCompletions(body=body))
+    request = fill_request()
 
     with pytest.raises(brief_fill.BriefFillFailedError, match=expected):
-        brief_fill.fill_brief(fill_request(), model_settings)
+        brief_fill.fill_brief(request, model_settings)
 
 
 @pytest.mark.parametrize(
@@ -279,9 +286,10 @@ def test_an_image_the_contract_does_not_accept_never_reaches_the_vendor(
     """
     completions = FakeCompletions(body=DECIDED)
     install(monkeypatch, completions)
+    request = fill_request(payload)
 
     with pytest.raises(brief_fill.BriefFillFailedError, match=expected):
-        brief_fill.fill_brief(fill_request(payload), model_settings)
+        brief_fill.fill_brief(request, model_settings)
 
     assert completions.calls == []
 
@@ -292,10 +300,10 @@ def test_an_oversized_photo_never_reaches_the_vendor(
     """호출자가 이미 검사한 값이지만, 여기서 안 보면 상한을 넘는 사진이 그대로 올라갑니다."""
     completions = FakeCompletions(body=DECIDED)
     install(monkeypatch, completions)
-    oversized = PNG + b"0" * brief_fill.MAX_IMAGE_BYTES
+    request = fill_request(PNG + b"0" * brief_fill.MAX_IMAGE_BYTES)
 
     with pytest.raises(brief_fill.BriefFillFailedError, match="상한"):
-        brief_fill.fill_brief(fill_request(oversized), model_settings)
+        brief_fill.fill_brief(request, model_settings)
 
     assert completions.calls == []
 

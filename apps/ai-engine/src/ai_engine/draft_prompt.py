@@ -233,22 +233,35 @@ def _current_draft(request: DraftPatchEngineRequest) -> str:
     return "\n".join(lines)
 
 
-def _patch_instructions(patch: DraftPatch, is_comic: bool) -> str:
-    """무엇을 왜 바꾸는지. 값은 사용자의 주문입니다.
+PANEL_FIELD_LABELS: dict[str, str] = {"scene": "장면", "dialogue": "대사"}
+"""`PanelPatch` 의 필드 이름을 프롬프트에 쓸 한국어로. 계약은 영어, 프롬프트는 한국어입니다."""
+
+
+def _named_panel_cells(patch: DraftPatch) -> list[tuple[str, str, str]]:
+    """패치가 이름 붙인 (칸 번호, 필드 이름, 사용자가 적은 주문) 을 읽는 순서대로.
 
     ⚠️ `model_fields_set` 을 읽습니다. 이 계열에서 `""` 는 "비워라" 라는 정상 지시이고
     `None` 은 키가 없었다는 뜻뿐이라, 값으로 판단하면 정반대의 두 요청이 하나로 뭉개집니다
     (`models/patch.py`).
     """
+    if patch.panels is None:
+        return []
+    return [
+        (index, name, getattr(cell, name))
+        for index, cell in sorted(patch.panels.root.items())
+        for name in PANEL_FIELD_LABELS
+        if name in cell.model_fields_set
+    ]
+
+
+def _patch_instructions(patch: DraftPatch, is_comic: bool) -> str:
+    """무엇을 왜 바꾸는지. 값은 사용자의 주문입니다."""
     lines = ["[바꿀 부분]", "아래에 적힌 자리만 다시 씁니다. 그 밖의 부분은 건드리지 마세요."]
-    if is_comic and patch.panels is not None:
-        for index, panel_patch in sorted(patch.panels.root.items()):
-            for name in ("scene", "dialogue"):
-                if name in panel_patch.model_fields_set:
-                    label = "장면" if name == "scene" else "대사"
-                    lines.append(
-                        f"{index}번 칸 {label}: {getattr(panel_patch, name)!r} 라는 주문에 맞게"
-                    )
+    if is_comic:
+        lines += [
+            f"{index}번 칸 {PANEL_FIELD_LABELS[name]}: {order!r} 라는 주문에 맞게"
+            for index, name, order in _named_panel_cells(patch)
+        ]
     if "ad_copy" in patch.model_fields_set:
         lines.append(f"카피: {patch.ad_copy!r} 라는 주문에 맞게")
     if "visual_plan" in patch.model_fields_set:
@@ -264,15 +277,12 @@ def _patch_output_shape(patch: DraftPatch, is_comic: bool) -> str:
     호출부는 그것을 걸러 내야 합니다. 애초에 요구하지 않는 편이 안전합니다 - 그래도 호출부는
     원문에서 복사하지 응답을 믿지 않습니다 (`draft._patch_with_model`).
     """
-    if is_comic and patch.panels is not None:
-        cells = []
-        for index, cell in sorted(patch.panels.root.items()):
-            fields = ", ".join(
-                f'"{name}": "<새 {"장면" if name == "scene" else "대사"}>"'
-                for name in sorted(cell.model_fields_set)
-            )
-            cells.append(f'"{index}": {{{fields}}}')
-        shape = f'{{"panels": {{{", ".join(cells)}}}}}'
+    if is_comic:
+        named: dict[str, list[str]] = {}
+        for index, name, _ in _named_panel_cells(patch):
+            named.setdefault(index, []).append(f'"{name}": "<새 {PANEL_FIELD_LABELS[name]}>"')
+        cells = ", ".join(f'"{index}": {{{", ".join(fields)}}}' for index, fields in named.items())
+        shape = f'{{"panels": {{{cells}}}}}'
     else:
         keys = []
         if "ad_copy" in patch.model_fields_set:

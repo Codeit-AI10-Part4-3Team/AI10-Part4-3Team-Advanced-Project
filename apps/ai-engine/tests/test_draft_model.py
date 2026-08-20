@@ -3,6 +3,10 @@
 ⚠️ **외부 API 를 부르지 않습니다.** 호출 1회가 요금이고 CI 가 비결정적이 됩니다 (AGENTS.md).
 여기서 확인하는 것은 "카피가 좋은가"가 아니라 **무엇을 보내고 응답을 어떻게 다루는가**입니다.
 카피 품질은 `eval/` 의 지표 함수와 검증 회차의 몫입니다.
+
+⚠️ **`pytest.raises` 블록 안에는 검사 대상 호출 하나만 둡니다.** 요청을 그 안에서 만들면 만들다
+난 실패로도 테스트가 통과하고, 그러면 정작 분기가 안 터지게 되어도 아무도 모릅니다
+(`test_seams.py` 가 같은 이유로 같은 규칙을 씁니다).
 """
 
 from __future__ import annotations
@@ -309,9 +313,10 @@ def test_a_guardrail_refusal_cannot_come_from_the_model(
     (생성_파이프라인 5.1.1절). 출력 검증이 이 경로에 붙기 전까지 그 판정은 존재할 수 없고,
     모델이 스스로 그렇게 말해도 검증을 거친 판정이 아닙니다."""
     install(monkeypatch, FakeCompletions(body='{"refusal": "guardrail"}'))
+    request = generate_request()
 
     with pytest.raises(draft.DraftFailedError, match="알 수 없는 거절 사유"):
-        draft.generate_draft(generate_request(), model_settings)
+        draft.generate_draft(request, model_settings)
 
 
 # ---- 부분 교체 ---------------------------------------------------------------------
@@ -401,9 +406,10 @@ def test_a_missing_key_fails_instead_of_falling_back_to_the_stub(
     이 이음매에 폴백은 없습니다 - 카피는 제품마다 달라 사전 승인 응답이 성립하지 않습니다."""
     completions = FakeCompletions(body=SINGLE_AD_BODY)
     install(monkeypatch, completions)
+    request, keyless = generate_request(), Settings(generation_mode="model")
 
     with pytest.raises(draft.DraftFailedError, match="ADGEN_MODEL_API_KEY"):
-        draft.generate_draft(generate_request(), Settings(generation_mode="model"))
+        draft.generate_draft(request, keyless)
 
     assert completions.calls == []
 
@@ -413,9 +419,10 @@ def test_any_vendor_error_becomes_one_failure(
 ) -> None:
     """인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음."""
     install(monkeypatch, FakeCompletions(error=RuntimeError("rate limit")))
+    request = generate_request()
 
     with pytest.raises(draft.DraftFailedError, match="rate limit"):
-        draft.generate_draft(generate_request(), model_settings)
+        draft.generate_draft(request, model_settings)
 
 
 @pytest.mark.parametrize(
@@ -435,9 +442,10 @@ def test_a_malformed_draft_is_a_failure_not_a_salvage_attempt(
     """⚠️ 깨진 응답에서 문장을 건져 내면, 그렇게 얻은 문자열은 모델이 쓴 카피가 아니라 우리가
     주운 조각이고 근거 안에 있는지 아무도 확인하지 않았습니다."""
     install(monkeypatch, FakeCompletions(body=body))
+    request = generate_request()
 
     with pytest.raises(draft.DraftFailedError, match=expected):
-        draft.generate_draft(generate_request(), model_settings)
+        draft.generate_draft(request, model_settings)
 
 
 @pytest.mark.parametrize(
@@ -454,9 +462,10 @@ def test_a_comic_that_is_not_six_cells_is_refused(
 ) -> None:
     """0 도 7 도 유효하지 않습니다 (INV-1). 여섯 박자가 기획의 근거 자체입니다."""
     install(monkeypatch, FakeCompletions(body=body))
+    request = generate_request("comic")
 
     with pytest.raises(draft.DraftFailedError, match=expected):
-        draft.generate_draft(generate_request("comic"), model_settings)
+        draft.generate_draft(request, model_settings)
 
 
 def test_a_patch_answer_missing_the_named_cell_is_a_failure(
@@ -465,11 +474,10 @@ def test_a_patch_answer_missing_the_named_cell_is_a_failure(
     """조용히 원문을 두면 호출자는 200 을 받고 아무것도 바뀌지 않은 시안을 봅니다 - 이 경로가
     가장 가지면 안 되는 실패 모양입니다 (2026-08-18 실측과 같은 사고)."""
     install(monkeypatch, FakeCompletions(body='{"panels": {"2": {"dialogue": "엉뚱한 칸"}}}'))
+    request = comic_patch_request(panels={"4": {"dialogue": "더 짧게"}})
 
     with pytest.raises(draft.DraftFailedError, match="4번 칸의 응답이 없습니다"):
-        draft.patch_draft(
-            comic_patch_request(panels={"4": {"dialogue": "더 짧게"}}), model_settings
-        )
+        draft.patch_draft(request, model_settings)
 
 
 @pytest.mark.parametrize(

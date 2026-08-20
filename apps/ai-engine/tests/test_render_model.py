@@ -582,11 +582,12 @@ def test_a_slow_panel_fails_the_set_without_waiting_for_the_stragglers(
     release = threading.Event()
     install(monkeypatch, FakePanels(block_until=release))
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+    request = comic_request(96, 64)
 
     started = time.monotonic()
     try:
         with pytest.raises(render.RenderFailedError, match="예산 안에"):
-            render.render_image(comic_request(96, 64), settings)
+            render.render_image(request, settings)
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -600,9 +601,10 @@ def test_a_slow_first_panel_never_fans_out(monkeypatch: pytest.MonkeyPatch) -> N
     panels = FakePanels()
     install(monkeypatch, panels)
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.0)
+    request = comic_request(96, 64)
 
     with pytest.raises(render.RenderFailedError, match="1번 칸까지"):
-        render.render_image(comic_request(96, 64), settings)
+        render.render_image(request, settings)
 
     assert panels.edits == []
 

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -95,10 +96,16 @@ def comic_patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
 
 
 class FakeCompletions:
-    """`client.chat.completions.create` 하나만 흉내냅니다."""
+    """`client.chat.completions.create` 하나만 흉내냅니다.
 
-    def __init__(self, body: str | None = None, error: Exception | None = None) -> None:
-        self.body = body
+    `then` 은 **두 번째 호출부터** 돌려줄 본문입니다. 가드레일이 1회 재생성을 하므로 회차별로
+    다른 답을 줄 수 있어야 하고, 그래야 "재생성이 실제로 다시 물어봤는가"를 볼 수 있습니다.
+    """
+
+    def __init__(
+        self, body: str | None = None, error: Exception | None = None, then: str | None = None
+    ) -> None:
+        self.bodies = [body] if then is None else [body, then]
         self.error = error
         self.calls: list[dict[str, Any]] = []
 
@@ -106,12 +113,11 @@ class FakeCompletions:
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
-        message = SimpleNamespace(content=self.body)
-        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        body = self.bodies[min(len(self.calls) - 1, len(self.bodies) - 1)]
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=body))])
 
-    @property
-    def prompt(self) -> str:
-        return str(self.calls[0]["messages"][0]["content"])
+    def prompt_at(self, index: int) -> str:
+        return str(self.calls[index]["messages"][0]["content"])
 
 
 def install(monkeypatch: pytest.MonkeyPatch, completions: FakeCompletions) -> None:
@@ -514,3 +520,227 @@ def test_the_stub_branch_never_touches_the_client(monkeypatch: pytest.MonkeyPatc
 
     assert response.draft is not None
     assert completions.calls == []
+
+
+# ---- 가드레일 출력 검증 (ADR-0019, 생성_파이프라인 5.1절) --------------------------------
+
+
+def body_with_copy(copy: str) -> str:
+    return json.dumps(
+        {"adPlan": "새 기획안", "copy": copy, "visualPlan": "새 비주얼"}, ensure_ascii=False
+    )
+
+
+CLEAN_COPY = "무향 무알코올, 두꺼운 원단"
+VIOLATING_COPY = "타사보다 2배 두꺼운 원단"
+
+
+def test_a_clean_draft_is_not_regenerated(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 재생성은 위반이 있을 때만입니다. 매번 두 번 부르면 텍스트 비용이 두 배가 됩니다."""
+    completions = FakeCompletions(body=body_with_copy(CLEAN_COPY))
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request(), model_settings)
+
+    assert response.draft is not None
+    assert len(completions.calls) == 1
+
+
+def test_the_first_violation_is_regenerated_and_never_reaches_the_caller(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """생성_파이프라인 5.1.1절: 1회차 위반은 조용히 재생성하고 클라이언트에 보이지 않습니다."""
+    completions = FakeCompletions(
+        body=body_with_copy(VIOLATING_COPY), then=body_with_copy(CLEAN_COPY)
+    )
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request(), model_settings)
+
+    assert len(completions.calls) == 2
+    assert isinstance(response.draft, SingleAdDraft)
+    assert response.draft.ad_copy == CLEAN_COPY
+    assert "refusalReason" not in response.model_dump(by_alias=True)
+
+
+def test_the_regeneration_prompt_names_what_was_caught(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ "규칙을 어겼다" 만 알려 주면 모델이 같은 문장을 다시 씁니다. 그러면 재생성 1회가
+    요금만 쓰고 끝납니다."""
+    completions = FakeCompletions(
+        body=body_with_copy(VIOLATING_COPY), then=body_with_copy(CLEAN_COPY)
+    )
+    install(monkeypatch, completions)
+
+    draft.generate_draft(generate_request(), model_settings)
+
+    retry = completions.prompt_at(1)
+    assert "타사" in retry
+    assert "2배" in retry
+    assert "타사 비교" in retry, "갈래도 한국어로 보여 줍니다"
+    assert completions.prompt_at(0) in retry, "원래 지시문 위에 덧붙입니다"
+
+
+def test_a_violation_surviving_one_regeneration_is_a_refusal(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 계약의 `refusalReason: guardrail` 이 정확히 이 상태입니다 - 재생성 1회 뒤에도
+    근거 밖 주장이 남은 경우. 200 이고 `draft` 가 빠집니다."""
+    completions = FakeCompletions(body=body_with_copy(VIOLATING_COPY))
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request(), model_settings)
+    body = response.model_dump(by_alias=True)
+
+    assert response.refusal_reason == "guardrail"
+    assert "draft" not in body
+    assert body["guardrailApplied"] is True
+
+
+def test_the_regeneration_happens_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 열어 두면 거절이 반복될 때 비용이 무한히 늘고, 그 비용은 사용자가 기다리는 시간이기도
+    합니다. 위반이 계속돼도 호출은 두 번에서 멈춰야 합니다."""
+    completions = FakeCompletions(body=body_with_copy(VIOLATING_COPY))
+    install(monkeypatch, completions)
+
+    draft.generate_draft(generate_request(), model_settings)
+
+    assert len(completions.calls) == 2
+
+
+def test_the_control_run_does_not_verify_at_all(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ `guardrailApplied: false` 는 대조군입니다 (생성_파이프라인 5.3절). 검사도 재생성도
+    하지 않아야 그 실행이 "가드레일 없이 뽑은 결과" 가 됩니다 - 조용히 검사하면 델타가 0 이
+    나오고 보고 지표가 무효가 됩니다."""
+    completions = FakeCompletions(body=body_with_copy(VIOLATING_COPY))
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request(guardrail_applied=False), model_settings)
+
+    assert len(completions.calls) == 1
+    assert isinstance(response.draft, SingleAdDraft)
+    assert response.draft.ad_copy == VIOLATING_COPY
+    assert response.guardrail_applied is False
+
+
+def test_the_production_instructions_are_not_verified(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ `adPlan` 과 `visualPlan` 은 소비자에게 하는 주장이 아니라 제작 지시문입니다.
+
+    검사에 넣으면 "가장 잘 보이는 위치" 같은 평범한 지시가 최상급 위반으로 잡혀 전량 거절이
+    됩니다 (2026-08-20 실측, ADR-0019).
+    """
+    body = json.dumps(
+        {
+            "adPlan": "가장 잘 보이는 위치에 배치해 타사 대비 우위를 시각화한다",
+            "copy": CLEAN_COPY,
+            "visualPlan": "화면의 최상단에 제품을 둔다",
+        },
+        ensure_ascii=False,
+    )
+    completions = FakeCompletions(body=body)
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request(), model_settings)
+
+    assert response.draft is not None, "지시문의 표현은 거절 사유가 아닙니다"
+    assert len(completions.calls) == 1
+
+
+def test_the_comic_dialogue_is_what_gets_checked(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """만화형에서 이미지에 그려지는 글자는 여섯 칸의 대사입니다. `scene` 은 지시문입니다."""
+    panels = [{"scene": f"장면 {i}", "dialogue": f"대사 {i}"} for i in range(1, 7)]
+    panels[3]["dialogue"] = "타사보다 2배 좋아요"
+    completions = FakeCompletions(
+        body=json.dumps({"adPlan": "기획안", "panels": panels}, ensure_ascii=False)
+    )
+    install(monkeypatch, completions)
+
+    response = draft.generate_draft(generate_request("comic"), model_settings)
+
+    assert response.refusal_reason == "guardrail"
+    assert len(completions.calls) == 2
+
+
+def test_the_patch_path_is_guarded_too(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """생성_파이프라인 2절의 흐름도가 PATCH 를 다시 가드레일로 보냅니다. 부분 교체로 근거 밖
+    주장을 밀어 넣을 수 있으면 시안 생성 쪽 검사는 우회로가 생긴 셈입니다."""
+    completions = FakeCompletions(body=json.dumps({"copy": VIOLATING_COPY}, ensure_ascii=False))
+    install(monkeypatch, completions)
+
+    response = draft.patch_draft(patch_request(copy="더 세게"), model_settings)
+
+    assert response.refusal_reason == "guardrail"
+    assert "draft" not in response.model_dump(by_alias=True)
+    assert len(completions.calls) == 2
+
+
+def test_a_number_the_user_typed_is_not_our_invention(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 근거에 있는 수치를 카피가 되풀이하는 것은 지어낸 것이 아닙니다. 이것을 잡으면
+    사용자가 직접 쓴 소구점을 광고에 쓸 수 없게 됩니다."""
+    completions = FakeCompletions(body=body_with_copy("3겹 원단으로 든든하게"))
+    install(monkeypatch, completions)
+    request = DraftGenerateRequest(
+        output_type="single_ad", brief=brief(sellingPoint="3겹 원단, 두툼합니다")
+    )
+
+    response = draft.generate_draft(request, model_settings)
+
+    assert response.draft is not None
+    assert len(completions.calls) == 1
+
+
+# ---- 사용량 기록 --------------------------------------------------------------------
+
+
+def usage_seams(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """`usage` 줄에서 이음매 꼬리표만 순서대로."""
+    return [
+        message.split("seam=")[1].split(" ")[0]
+        for message in caplog.messages
+        if message.startswith("usage ")
+    ]
+
+
+def test_each_call_is_recorded_under_its_own_seam(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """⚠️ 총량만 남기면 어디를 줄여야 하는지 알 수 없습니다. 회차당 비용이 이음매마다 다릅니다
+    (생성_파이프라인 1절 - 변동 비용이 생기는 곳은 부분 교체뿐입니다)."""
+    install(monkeypatch, FakeCompletions(body=body_with_copy(CLEAN_COPY)))
+
+    with caplog.at_level(logging.INFO, logger="ai_engine.draft"):
+        draft.generate_draft(generate_request(), model_settings)
+        draft.patch_draft(patch_request(copy="더 짧게"), model_settings)
+
+    assert usage_seams(caplog) == ["draft:generate", "draft:patch"]
+
+
+def test_the_regeneration_is_counted_separately(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """⚠️ 재생성이 본 호출과 같은 꼬리표로 섞이면 **가드레일이 예산에서 차지하는 몫을 잴 수
+    없습니다.** 그 몫이 D2 대조 실험에서 on 팔과 off 팔을 가르는 값입니다."""
+    install(
+        monkeypatch,
+        FakeCompletions(body=body_with_copy(VIOLATING_COPY), then=body_with_copy(CLEAN_COPY)),
+    )
+
+    with caplog.at_level(logging.INFO, logger="ai_engine.draft"):
+        draft.generate_draft(generate_request(), model_settings)
+
+    assert usage_seams(caplog) == ["draft:generate", "draft:generate:retry"]

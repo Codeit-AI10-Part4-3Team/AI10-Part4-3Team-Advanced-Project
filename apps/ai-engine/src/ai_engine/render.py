@@ -200,7 +200,10 @@ def _render_panels(
         )
 
     head, rest = panels[0], panels[1:]
-    first = _as_png(draw(head, None))
+    # ⚠️ 1번 칸의 크기는 **부채꼴로 퍼지기 전에** 봅니다. 이 칸은 나머지 다섯의 레퍼런스라,
+    # 어긋난 채로 넘어가면 잘못된 크기가 다섯 호출의 입력이 되고 그 요금이 다 나간 뒤에야
+    # 합성 단계에서 걸립니다.
+    first = _as_png(draw(head, None), panel_size)
 
     # 네트워크 대기가 지배적이라 스레드로 충분합니다. GIL 은 문제가 되지 않습니다.
     #
@@ -289,21 +292,42 @@ def _generate(
     return _inline_bytes(response)
 
 
-def _as_png(payload: bytes) -> bytes:
-    """레퍼런스로 넘길 바이트를 PNG 로 맞춥니다.
+def _as_png(payload: bytes, panel_size: tuple[int, int]) -> bytes:
+    """레퍼런스로 넘길 1번 칸을 검사하고 PNG 로 맞춥니다.
 
     `images.edit` 에 형식을 선언해서 보내는데, 벤더가 무엇을 돌려주는지는 우리가 정하는 값이
     아닙니다. 선언과 내용이 다르면 5건이 한꺼번에 400 으로 돌아옵니다. PNG 는 무손실이라 이
     한 번의 재인코딩이 1번 칸의 픽셀을 바꾸지 않습니다 - 그 칸도 최종 합성에 그대로 들어가므로
     손실 압축을 끼워 넣을 수 없는 자리입니다.
+
+    크기 검사가 여기 있는 이유는 **돈입니다.** 합성 단계에서도 같은 검사를 하지만, 그때는 이미
+    다섯 칸의 요금이 나간 뒤입니다.
     """
     try:
         with Image.open(io.BytesIO(payload)) as image:
+            _check_panel_size(1, image.size, panel_size)
             buffer = io.BytesIO()
             image.convert("RGB").save(buffer, format="PNG")
     except OSError as exc:
         raise RenderFailedError(f"1번 칸 이미지를 읽지 못했습니다: {exc}") from exc
     return buffer.getvalue()
+
+
+def _check_panel_size(index: int, got: tuple[int, int], want: tuple[int, int]) -> None:
+    """⚠️ **어긋난 칸은 늘려 붙이지 않고 세트를 실패시킵니다** (PR #150 리뷰, 임동규).
+
+    보정하면 캔버스는 3456 x 2304 로 맞아 떨어지지만 그 정확도는 우리 `resize` 가 만든 것이지
+    생성 결과가 아닙니다. 재보는 쪽은 합성물의 픽셀을 재므로 **규격 위반이 통과로 보입니다.**
+    게다가 재샘플링은 칸에 그려진 한글을 뭉개는데, 검증 1순위가 채점하는 대상이 바로 그
+    글자입니다 - 무손실 WebP 를 고집하는 이유와 같은 이유로 여기서 리샘플링을 허용할 수
+    없습니다. 렌더에 폴백이 없다는 ADR-0005 와도 같은 방향입니다.
+    """
+    if got == want:
+        return
+    raise RenderFailedError(
+        f"{index}번 칸이 {got[0]}x{got[1]} 로 왔습니다. 요청은 {want[0]}x{want[1]} 였습니다. "
+        "늘려 붙이면 규격 위반이 합성물에서는 통과로 보이므로 세트를 버립니다."
+    )
 
 
 def _compose(tiles: list[bytes], panel_size: tuple[int, int], spec: ImageSpec) -> bytes:
@@ -314,6 +338,9 @@ def _compose(tiles: list[bytes], panel_size: tuple[int, int], spec: ImageSpec) -
     **경계선과 바깥 여백은 0px 이고, 그것이 이 방식을 택한 이유입니다.** 여백을 합성 단계가
     결정하므로 회차 편차가 존재하지 않고, 고정 좌표 크롭이 성립합니다 - 인스타그램 그리드로
     자를 때 칸이 어긋나지 않습니다.
+
+    크기가 어긋난 칸은 `_check_panel_size` 가 여기서 세트째 버립니다. 1번 칸은 부채꼴로
+    퍼지기 전에 이미 한 번 걸러졌고, 나머지 다섯이 여기서 걸립니다.
     """
     panel_width, panel_height = panel_size
     canvas = Image.new("RGB", (spec.width, spec.height), COMPOSE_BACKGROUND)
@@ -321,17 +348,7 @@ def _compose(tiles: list[bytes], panel_size: tuple[int, int], spec: ImageSpec) -
         for index, payload in enumerate(tiles):
             with Image.open(io.BytesIO(payload)) as tile:
                 image = tile.convert("RGB")
-                if image.size != panel_size:
-                    # ⚠️ 여기 걸리면 "칸 1152px 정확" 이 이미 깨진 것입니다. 붙이기는 하되
-                    # 조용히 넘기지 않습니다 - 크기를 지정해 보냈는데 다른 것이 왔다는 뜻이고,
-                    # 그 사실이 로그에 없으면 다음 사람이 픽셀을 재기 전까지 모릅니다.
-                    logger.warning(
-                        "%d번 칸이 %s 로 왔습니다. 요청은 %s 였습니다. 늘려 붙입니다.",
-                        index + 1,
-                        image.size,
-                        panel_size,
-                    )
-                    image = image.resize(panel_size, Image.Resampling.LANCZOS)
+                _check_panel_size(index + 1, image.size, panel_size)
                 canvas.paste(
                     image,
                     ((index % PANEL_COLS) * panel_width, (index // PANEL_COLS) * panel_height),

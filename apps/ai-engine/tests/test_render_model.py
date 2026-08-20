@@ -114,10 +114,14 @@ class FakePanels:
     """
 
     def __init__(
-        self, fail_on: int | None = None, barrier: threading.Barrier | None = None
+        self,
+        fail_on: int | None = None,
+        barrier: threading.Barrier | None = None,
+        wrong_size_on: int | None = None,
     ) -> None:
         self.fail_on = fail_on
         self.barrier = barrier
+        self.wrong_size_on = wrong_size_on
         self.lock = threading.Lock()
         self.calls: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
@@ -139,6 +143,9 @@ class FakePanels:
         if index == self.fail_on:
             raise RuntimeError(f"{index}번 칸 벤더 오류")
         width, height = (int(part) for part in kwargs["size"].split("x"))
+        if index == self.wrong_size_on:
+            # 벤더가 요청한 크기를 안 지킨 경우. 성공 응답이라 호출부는 알아채지 못합니다.
+            width, height = width - 16, height
         buffer = io.BytesIO()
         Image.new("RGB", (width, height), self.color(index)).save(buffer, format="PNG")
         encoded = base64.b64encode(buffer.getvalue()).decode()
@@ -472,6 +479,29 @@ def test_one_failed_panel_fails_the_whole_set(
 
     with pytest.raises(render.RenderFailedError, match="4번 칸이 실패"):
         render.render_image(comic_request(96, 64), model_settings)
+
+
+@pytest.mark.parametrize("wrong", [1, 5], ids=["1번 칸", "5번 칸"])
+def test_a_panel_of_the_wrong_size_fails_instead_of_being_stretched(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings, wrong: int
+) -> None:
+    """⚠️ **늘려 붙이면 규격 위반이 합성물에서는 통과로 보입니다** (PR #150 리뷰, 임동규).
+
+    보정해도 캔버스는 3456 x 2304 로 맞아 떨어지므로, 픽셀을 재는 쪽은 "칸 1152px 정확"을
+    확인했다고 판단합니다. 그 정확도를 만든 것은 생성 결과가 아니라 우리 `resize` 인데 말입니다.
+    그리고 재샘플링은 칸에 그려진 한글을 뭉갭니다 - 검증 1순위가 채점하는 대상이 그 글자라,
+    무손실 WebP 를 고집하는 이유가 여기에도 그대로 적용됩니다.
+
+    **1번 칸은 부채꼴로 퍼지기 전에 걸립니다.** 그 칸은 나머지 다섯의 레퍼런스라, 합성
+    단계까지 끌고 가면 다섯 호출의 요금이 다 나간 뒤에 같은 결론에 도달합니다.
+    """
+    panels = FakePanels(wrong_size_on=wrong)
+    install(monkeypatch, panels)
+
+    with pytest.raises(render.RenderFailedError, match=f"{wrong}번 칸이 16x32"):
+        render.render_image(comic_request(96, 64), model_settings)
+
+    assert len(panels.edits) == (0 if wrong == 1 else 5)
 
 
 def test_a_failing_first_panel_never_fans_out(

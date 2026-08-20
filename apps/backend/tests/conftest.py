@@ -188,6 +188,11 @@ class FakeAiEngine:
         self.available = available
         self.refuses = refuses
         self.needs_input = needs_input
+        # ⚠️ Recorded like the other seams, because `brief:fill` is now called from **two**
+        # routes: session creation and the `needsInput` retry on a brief patch. "Did the
+        # retry happen, and did it see the note the user just typed" is only answerable if
+        # the fake keeps the arguments.
+        self.briefs_requested: list[tuple[str, str, str]] = []
         self.drafts_requested: list[DraftGenerateRequest] = []
         self.patches_requested: list[DraftPatchEngineRequest] = []
         self.renders_requested: list[ImageRenderRequest] = []
@@ -197,6 +202,7 @@ class FakeAiEngine:
     ) -> BriefFillResponse:
         if not self.available:
             raise AiEngineUnavailableError("fake outage")
+        self.briefs_requested.append((product_name, selling_point, note))
         if self.needs_input is not None:
             # Inference ran and could not decide: the two values are empty strings, not
             # absent keys, and `needsInput` is what tells the two situations apart.

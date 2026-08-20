@@ -194,8 +194,71 @@ def require_revision(session: Session, sent: int) -> None:
         raise RevisionConflictError(session.revision, sent)
 
 
-def apply_brief_patch(session: Session, patch: BriefPatch, at: datetime) -> Session:
-    """Merge the named brief fields and re-decide the state.
+@dataclass(frozen=True)
+class RefillOutcome:
+    """The result of asking the engine again after the user answered `needsInput`.
+
+    ⚠️ `filled is None` means the inference **could not run** — the engine was unreachable or
+    the photo it needs is gone. It does not mean "ran and found nothing"; that case arrives
+    as a `filled` carrying its own `needsInput`. The contract splits the two on exactly this
+    line (openapi.yaml `POST /v1/sessions`), and collapsing them would tell the user "we
+    could not decide" about a request nobody ever made.
+    """
+
+    filled: BriefFillResponse | None
+
+
+# The three brief fields `brief:fill` actually reads. A patch that touches none of them
+# cannot change the inference, so asking again would spend a vendor call to receive the same
+# answer — `artStyle` and `character` are not inputs to it.
+REFILL_INPUTS = frozenset({"product_name", "selling_point", "note"})
+
+
+def wants_refill(session: Session, patch: BriefPatch) -> bool:
+    """Whether this patch could change what the inference would say, and so deserves a retry.
+
+    Three conditions, all necessary.
+
+    1. **There is still something to infer.** Once `category` and `target` are both filled
+       the retry cannot change anything — `_fold_refill` only fills blanks — so it would be
+       a vendor call bought to be discarded.
+    2. **The session is one inference was supposed to fill.** `needsInput` is the contract's
+       own case ("`needsInput`이 걸린 세션에서 `note`를 채우면 서버가 추론을 다시 시도합니다"),
+       and `degraded` is the same person one outage later. A session whose values the user
+       cleared by hand is neither, and re-inferring there would undo a deliberate edit.
+    3. **The patch actually changes one of the inputs.** Not "names" — *changes*. Saving the
+       same note twice asks the same question twice and pays twice.
+
+    ⚠️ **`degraded` is included, and leaving it out was a bug** (PR #148 리뷰에서 신호정
+    재현). Since a failed retry clears `needsInput`, excluding degraded sessions meant one
+    outage cost the session its retry **for ever**: the engine could come back a second
+    later and that user would never be offered auto-fill again, with nothing on screen to
+    say why. The earlier rationale here claimed it prevented a stampede, which does not
+    survive reading — a healthy `needsInput` session already retries on every qualifying
+    patch, so the only traffic that was ever blocked belonged to sessions that had already
+    been hurt once.
+
+    ⚠️ Condition 3 compares **values, not keys**. A screen that autosaves, or a person
+    fixing a typo and saving again, sends `note` every time; keys alone would bill each one
+    (PR #148 리뷰에서 신호정 실측 - 같은 메모 3회 저장에 호출 3건).
+    """
+    if session.brief.category and session.brief.target:
+        return False
+    if session.needs_input is None and session.message_mode != "degraded":
+        return False
+    changes = patch.model_dump(exclude_unset=True)
+    return any(
+        field in changes and changes[field] != getattr(session.brief, field)
+        for field in REFILL_INPUTS
+    )
+
+
+def merge_brief_patch(session: Session, patch: BriefPatch) -> tuple[Brief, BriefMeta]:
+    """The merge half of `apply_brief_patch`, with no state change and no revision bump.
+
+    Split out because the caller has to know **what the brief will say** before it can ask
+    the engine to look at it again: the retry has to see the note the user just typed, not
+    the one that already failed.
 
     ⚠️ Read with `exclude_unset`, which is the only correct way to read this family: an
     omitted key means "leave it alone" and `""` means "empty it", and they are opposite
@@ -217,7 +280,73 @@ def apply_brief_patch(session: Session, patch: BriefPatch, at: datetime) -> Sess
     # `BriefMeta` carries exactly `Brief`'s keys — a conformance test enforces it — so every
     # changed field names a meta field, with no lookup needed to find out.
     meta = session.brief_meta.model_copy(update={field: _meta("user") for field in changes})
+    return brief, meta
+
+
+def apply_brief_patch(
+    session: Session,
+    patch: BriefPatch,
+    at: datetime,
+    refill: RefillOutcome | None = None,
+) -> Session:
+    """Merge the named brief fields, fold in a retry if one was run, and re-decide the state.
+
+    `refill is None` means no retry was attempted, which is the ordinary patch. When one was
+    attempted, its outcome decides two things the merge cannot:
+
+    | refill | needsInput | messageMode |
+    |---|---|---|
+    | 없음 (재추론 안 함) | 그대로 | 그대로 |
+    | 있음, `filled` 있음, 그 안에 `needsInput` 있음 | 새 `reason` 으로 교체 | `normal` |
+    | 있음, `filled` 있음, `needsInput` 없음 | 지웁니다 | `normal` |
+    | 있음, `filled` 없음 (돌지 못함) | 지웁니다 | `degraded` |
+
+    ⚠️ **The last row clears `needsInput`, and that is the user's way out.** A session that
+    could not run inference is a degraded session, and the contract already tells that user
+    what to do: fill `category` and `target` themselves. Leaving `needsInput` on would keep
+    the screen asking for a note that no longer leads anywhere.
+
+    ⚠️ That clearing is only safe because `wants_refill` treats `degraded` as retryable too.
+    The key is the screen's signal, not a permission slip — read the two together or the
+    last row silently becomes "this session may never ask again".
+
+    ⚠️ What this function still does **not** do is give up. A retry that comes back
+    undecided leaves the session in `brief_filling`, exactly where it was. The contract
+    promises a 422 `INSUFFICIENT_INPUT` there, but *when* to give up (first failure? third?)
+    is 미결정_대장 B-11 and its 확정 근거 is 회의록 — so the ledger's own rule forbids
+    picking a number here. The loop is narrower than it was, not closed.
+    """
+    brief, meta = merge_brief_patch(session, patch)
+    if refill is not None:
+        brief, meta = _fold_refill(brief, meta, refill.filled)
+        session.message_mode = "normal" if refill.filled else "degraded"
+        session.needs_input = refill.filled.needs_input if refill.filled else None
     return replace_brief(session, brief, meta, at)
+
+
+def _fold_refill(
+    brief: Brief, meta: BriefMeta, filled: BriefFillResponse | None
+) -> tuple[Brief, BriefMeta]:
+    """Take the inferred values, but **only where the user left a blank**.
+
+    ⚠️ The user's own patch wins. If they typed a `category` in the very request that
+    triggered this retry, overwriting it with the model's guess would undo a correction the
+    person just made — 기획서 5.4 is that an auto-filled value stays visibly theirs to
+    change, and this is the same rule read from the other side.
+    """
+    if filled is None:
+        return brief, meta
+    updates = {
+        field: value
+        for field, value in (("category", filled.category), ("target", filled.target))
+        if value and not getattr(brief, field)
+    }
+    if not updates:
+        return brief, meta
+    return (
+        brief.model_copy(update=updates),
+        meta.model_copy(update={field: _meta("inferred") for field in updates}),
+    )
 
 
 def replace_brief(session: Session, brief: Brief, meta: BriefMeta, at: datetime) -> Session:

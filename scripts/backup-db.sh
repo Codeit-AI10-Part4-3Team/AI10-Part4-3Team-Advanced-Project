@@ -23,7 +23,7 @@
 #      쓰면 백업 파일이 uid 10001 소유로 남아 정리도 열람도 어려워집니다.
 #    - 되돌릴 때는 **파일을 stdin 으로 흘려보냅니다.** 호스트 쪽에서 읽고 컨테이너 쪽에서
 #      쓰므로 양쪽 다 자기 파일만 만지고, 볼륨 안 파일의 소유권(uid 10001)이 그대로
-#      유지됩니다. bind mount 로 넣으면 `umask 077` 로 만든 백업을 컨테이너가 못 읽고,
+#      유지됩니다. bind mount 로 넣으면 0600 으로 좁혀 둔 백업을 컨테이너가 못 읽고,
 #      `cp` 로 넣으면 대상이 root 소유가 되어 다음 기동이
 #      `attempt to write a readonly database` 로 죽습니다 (2026-08-19 실측).
 #
@@ -35,7 +35,15 @@ set -Eeuo pipefail
 
 # 백업 파일에는 `users.password_hash` 와 세션이 통째로 들어갑니다. 기본 위치는 `/srv/adcraft`
 # 의 그룹 설정을 상속받지만 `ADCRAFT_BACKUP_DIR` 로 다른 곳을 가리키면 그 보호가 따라가지
-# 않으므로, 만드는 쪽에서 좁혀 둡니다 (PR #133 리뷰, 신호정).
+# 않으므로, 이 스크립트가 만드는 것은 이 스크립트가 좁힙니다 (PR #133 리뷰, 신호정).
+#
+# ⚠️ **umask 가 좁히는 것은 아래 `mkdir -p "$BACKUP_DIR"` 하나이고, 백업 파일은 아닙니다.**
+#    umask 는 프로세스 속성이라 `compose run` 안에서 새로 시작하는 컨테이너 프로세스가
+#    물려받지 않고, 자기 기본값 022 로 0644 를 만듭니다 (PR #133 리뷰에서 신호정 실측).
+#    기본 ACL 이 걸린 디렉토리에서는 umask 자체가 무시되므로 기본 위치에서는 디렉토리에도
+#    효력이 없습니다. 그래서 이 줄만 믿지 않고 `do_backup` 이 뜬 파일을 곧바로 `chmod` 합니다 —
+#    이 줄을 "파일도 좁혀진다" 로 읽으면 나중에 백업을 내려받는 절차가 붙는 날 확인을
+#    건너뛰게 됩니다.
 umask 077
 
 ROOT="$(cd -P "$(dirname "$0")/.." && pwd)"
@@ -115,6 +123,11 @@ import sqlite3, sys
 with sqlite3.connect(sys.argv[1]) as conn:
     conn.execute('VACUUM INTO ?', (sys.argv[2],))
 " "$db" "/backup/$name"
+
+  # ⚠️ **`umask` 가 아니라 여기가 파일 권한을 정하는 자리입니다.** 위 줄을 실행한 것은
+  #    컨테이너 프로세스라 호스트 셸의 umask 를 물려받지 않았고, 파일은 0644 로 떨어져
+  #    있습니다. 확인보다 먼저 좁히는 것은 노출되는 구간을 줄이기 위해서입니다.
+  chmod 600 "$BACKUP_DIR/$name"
 
   verify "$BACKUP_DIR/$name"
   [[ "$do_rotate" -eq 1 ]] && rotate

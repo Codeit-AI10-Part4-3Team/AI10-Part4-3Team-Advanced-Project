@@ -537,9 +537,10 @@ def test_a_missing_key_fails_instead_of_falling_back_to_the_stub(
     이 분기는 명시적으로 실패해야 하고, 그것이 ADR-0005 의 "폴백 없음"입니다."""
     images = FakeImages(payload=png_bytes())
     install(monkeypatch, images)
+    request, keyless = single_ad_request(), Settings(generation_mode="model")
 
     with pytest.raises(render.RenderFailedError, match="ADGEN_MODEL_API_KEY"):
-        render.render_image(single_ad_request(), Settings(generation_mode="model"))
+        render.render_image(request, keyless)
 
     assert images.calls == []
 
@@ -549,9 +550,10 @@ def test_any_vendor_error_becomes_one_failure(
 ) -> None:
     """인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음."""
     install(monkeypatch, FakeImages(error=RuntimeError("rate limit")))
+    request = single_ad_request()
 
     with pytest.raises(render.RenderFailedError, match="rate limit"):
-        render.render_image(single_ad_request(), model_settings)
+        render.render_image(request, model_settings)
 
 
 def test_a_url_response_is_refused_rather_than_downloaded(
@@ -560,18 +562,20 @@ def test_a_url_response_is_refused_rather_than_downloaded(
     """검증 1순위가 확인한 것은 인라인 base64 경로뿐입니다. URL 응답을 같은 것으로 취급하면
     확인한 적 없는 경로를 확인한 것처럼 다루게 됩니다."""
     install(monkeypatch, FakeImages(payload=None))
+    request = single_ad_request()
 
     with pytest.raises(render.RenderFailedError, match="b64_json"):
-        render.render_image(single_ad_request(), model_settings)
+        render.render_image(request, model_settings)
 
 
 def test_an_unreadable_response_is_a_failure_not_a_crash(
     monkeypatch: pytest.MonkeyPatch, model_settings: Settings
 ) -> None:
     install(monkeypatch, FakeImages(payload=b"not an image at all"))
+    request = single_ad_request()
 
     with pytest.raises(render.RenderFailedError):
-        render.render_image(single_ad_request(), model_settings)
+        render.render_image(request, model_settings)
 
 
 @pytest.mark.parametrize(

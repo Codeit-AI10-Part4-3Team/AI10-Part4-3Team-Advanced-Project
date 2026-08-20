@@ -130,17 +130,32 @@ def run_case(
     return row
 
 
-def run_patch(settings: Settings, collector: UsageCollector) -> dict[str, Any]:
-    """부분 교체 1회. 변동 비용이 생기는 유일한 자리라 단가가 따로 필요합니다."""
+def run_patch(settings: Settings, collector: UsageCollector) -> list[dict[str, Any]]:
+    """부분 교체 1회. 변동 비용이 생기는 유일한 자리라 단가가 따로 필요합니다.
+
+    ⚠️ **기준 시안을 만드는 호출도 요금입니다.** 그 사용량을 버리면 합계가 실제 지출보다
+    작아지고, **예산 판단이 그 작은 숫자 위에서 이뤄집니다** (2026-08-20 리뷰 지적, PR #151).
+    그래서 두 줄로 나눠 돌려줍니다 - 부분 교체 단가는 뒤의 줄만 봐야 정확하고, 합계는 두 줄을
+    다 세야 맞습니다.
+    """
     case = conditions.CASES[0]
     brief = Brief.model_validate(conditions.brief_fields(case))
+
+    collector.take()  # 이전 회차의 잔여를 버립니다
     base = draft.generate_draft(
         DraftGenerateRequest(output_type="single_ad", brief=brief), settings
     )
+    base_records = collector.take()
+    base_row: dict[str, Any] = {
+        "case": "draft:patch 기준 시안",
+        "usage": base_records,
+        "calls": len(base_records),
+        "note": "부분 교체를 재려고 만든 시안입니다. 단가 표에는 넣지 말고 합계에는 넣으세요",
+    }
     if base.draft is None:
-        return {"case": "draft:patch", "error": f"기준 시안이 거절됐습니다: {base.refusal_reason}"}
+        base_row["error"] = f"기준 시안이 거절됐습니다: {base.refusal_reason}"
+        return [base_row]
 
-    collector.take()
     patched = draft.patch_draft(
         DraftPatchEngineRequest(
             output_type="single_ad",
@@ -151,12 +166,15 @@ def run_patch(settings: Settings, collector: UsageCollector) -> dict[str, Any]:
         settings,
     )
     records = collector.take()
-    return {
-        "case": "draft:patch",
-        "usage": records,
-        "calls": len(records),
-        "refusalReason": patched.refusal_reason,
-    }
+    return [
+        base_row,
+        {
+            "case": "draft:patch",
+            "usage": records,
+            "calls": len(records),
+            "refusalReason": patched.refusal_reason,
+        },
+    ]
 
 
 def run_brief_fill(image: Path, settings: Settings, collector: UsageCollector) -> dict[str, Any]:
@@ -249,9 +267,9 @@ def main() -> int:
                 print(f"  {row['case']:24s} guard={guardrail_applied!s:5s} -> {_verdict(row)}")
 
     if args.patch:
-        row = run_patch(settings, collector)
-        row["usd"] = usd(row.get("usage", []), price_in, price_out)
-        rows.append(row)
+        for row in run_patch(settings, collector):
+            row["usd"] = usd(row.get("usage", []), price_in, price_out)
+            rows.append(row)
     if args.image:
         row = run_brief_fill(args.image, settings, collector)
         row["usd"] = usd(row.get("usage", []), price_in, price_out)
@@ -272,7 +290,15 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\n원시 기록: {out}")
+    # ⚠️ 기록된 호출 수를 계획과 대조합니다. 사용량을 흘리면 합계가 실제 지출보다 작아지는데,
+    # 그 작은 숫자로 예산을 판단하게 됩니다 (2026-08-20 리뷰 지적, PR #151).
+    counted = sum(int(row.get("calls", 0)) for row in rows)
+    total = sum(row["usd"] for row in rows if row.get("usd") is not None)
+    print(f"\n기록된 호출 {counted}회 (계획 최소 {calls}회), 합계 {total:.4f} USD")
+    if counted < calls:
+        print(f"⚠️ {calls - counted}회의 사용량이 기록되지 않았습니다. 합계가 실제보다 작습니다.")
+
+    print(f"원시 기록: {out}")
     print("⚠️ runs/ 는 커밋되지 않습니다. 요약을 RESULTS.md 로 옮기세요.")
     return 0
 

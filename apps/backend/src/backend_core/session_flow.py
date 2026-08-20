@@ -215,22 +215,42 @@ REFILL_INPUTS = frozenset({"product_name", "selling_point", "note"})
 
 
 def wants_refill(session: Session, patch: BriefPatch) -> bool:
-    """Whether this patch is the user answering `needsInput`, and so deserves a retry.
+    """Whether this patch could change what the inference would say, and so deserves a retry.
 
-    Two conditions, both necessary. The session has to be **waiting on the user** — a
-    `needsInput` session is the only one the contract promises a retry for
-    ("`needsInput`이 걸린 세션에서 `note`를 채우면 서버가 추론을 다시 시도합니다"). And the
-    patch has to touch something the inference reads, or the retry is a paid call whose
-    answer cannot differ.
+    Three conditions, all necessary.
 
-    ⚠️ Deliberately **not** triggered on a `degraded` session. There the contract sends the
-    user a different way out — they fill `category` and `target` themselves — and retrying
-    an engine that was down a moment ago on every keystroke-sized patch turns an outage into
-    a stampede.
+    1. **There is still something to infer.** Once `category` and `target` are both filled
+       the retry cannot change anything — `_fold_refill` only fills blanks — so it would be
+       a vendor call bought to be discarded.
+    2. **The session is one inference was supposed to fill.** `needsInput` is the contract's
+       own case ("`needsInput`이 걸린 세션에서 `note`를 채우면 서버가 추론을 다시 시도합니다"),
+       and `degraded` is the same person one outage later. A session whose values the user
+       cleared by hand is neither, and re-inferring there would undo a deliberate edit.
+    3. **The patch actually changes one of the inputs.** Not "names" — *changes*. Saving the
+       same note twice asks the same question twice and pays twice.
+
+    ⚠️ **`degraded` is included, and leaving it out was a bug** (PR #148 리뷰에서 신호정
+    재현). Since a failed retry clears `needsInput`, excluding degraded sessions meant one
+    outage cost the session its retry **for ever**: the engine could come back a second
+    later and that user would never be offered auto-fill again, with nothing on screen to
+    say why. The earlier rationale here claimed it prevented a stampede, which does not
+    survive reading — a healthy `needsInput` session already retries on every qualifying
+    patch, so the only traffic that was ever blocked belonged to sessions that had already
+    been hurt once.
+
+    ⚠️ Condition 3 compares **values, not keys**. A screen that autosaves, or a person
+    fixing a typo and saving again, sends `note` every time; keys alone would bill each one
+    (PR #148 리뷰에서 신호정 실측 - 같은 메모 3회 저장에 호출 3건).
     """
-    if session.needs_input is None:
+    if session.brief.category and session.brief.target:
         return False
-    return bool(patch.model_dump(exclude_unset=True).keys() & REFILL_INPUTS)
+    if session.needs_input is None and session.message_mode != "degraded":
+        return False
+    changes = patch.model_dump(exclude_unset=True)
+    return any(
+        field in changes and changes[field] != getattr(session.brief, field)
+        for field in REFILL_INPUTS
+    )
 
 
 def merge_brief_patch(session: Session, patch: BriefPatch) -> tuple[Brief, BriefMeta]:
@@ -285,6 +305,10 @@ def apply_brief_patch(
     could not run inference is a degraded session, and the contract already tells that user
     what to do: fill `category` and `target` themselves. Leaving `needsInput` on would keep
     the screen asking for a note that no longer leads anywhere.
+
+    ⚠️ That clearing is only safe because `wants_refill` treats `degraded` as retryable too.
+    The key is the screen's signal, not a permission slip — read the two together or the
+    last row silently becomes "this session may never ask again".
 
     ⚠️ What this function still does **not** do is give up. A retry that comes back
     undecided leaves the session in `brief_filling`, exactly where it was. The contract

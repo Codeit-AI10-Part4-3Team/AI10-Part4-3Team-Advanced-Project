@@ -549,6 +549,15 @@ def _refill_brief(
     could not run. The session degrades, which is precisely the state whose documented exit
     is "the user fills `category` and `target` themselves" — so the person is left with a
     way forward rather than a question about a note.
+
+    ⚠️ **Which is why the read is inside the `try`, and `OSError` lands in the same branch
+    as an outage.** Finding the file and opening it are two calls, and the retention sweeper
+    runs on a timer in this very process (api/sweeper.py) — so a photo that existed at
+    `images.find` can be gone by `read_bytes`, and the window is widest at exactly 24 hours,
+    which is when the user is most likely to be answering a `needsInput` from yesterday.
+    Letting that escape would answer a 500 to the one request that was carrying the user to
+    the exit (PR #148 리뷰에서 신호정 재현). *When* we noticed the file was missing means
+    nothing to them.
     """
     photo = images.find(settings.image_dir, session.session_id)
     if photo is None:
@@ -567,6 +576,6 @@ def _refill_brief(
                 filename=photo.name,
             )
         )
-    except AiEngineUnavailableError as exc:
+    except (AiEngineUnavailableError, OSError) as exc:
         logger.warning("brief:fill retry unavailable, degrading to user input: %s", exc)
         return session_flow.RefillOutcome(filled=None)

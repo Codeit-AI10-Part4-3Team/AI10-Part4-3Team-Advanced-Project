@@ -10,6 +10,7 @@ The three questions this file exists to answer:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -166,9 +167,20 @@ def test_the_degraded_and_needs_input_cases_are_told_apart_by_one_key(
 
 
 def _patch_brief(client: TestClient, body: dict[str, Any], **patch: Any) -> dict[str, Any]:
+    """PATCH the brief the way a client does — **camelCase keys**.
+
+    ⚠️ The conversion is not cosmetic. `Base` sets `populate_by_name=True`, so `art_style`
+    would also be accepted and the test would pass while pinning the wrong thing: "the cost
+    guard skips `art_style`" instead of "the cost guard skips `artStyle`", which is the name
+    the contract and the screen actually use (PR #148 리뷰, 신호정).
+    """
+    camel = {
+        re.sub(r"_(.)", lambda m: m.group(1).upper(), field): value
+        for field, value in patch.items()
+    }
     response = client.patch(
         f"/v1/sessions/{body['sessionId']}/brief",
-        json={"revision": body["revision"], "patch": patch},
+        json={"revision": body["revision"], "patch": camel},
     )
     assert response.status_code == 200, response.text
     answer: dict[str, Any] = response.json()
@@ -299,6 +311,99 @@ def test_a_retry_that_is_still_undecided_stays_put_rather_than_failing(
     assert answered["messageMode"] == "normal"
     # The reason is refreshed, so the screen shows what is missing *now*.
     assert answered["needsInput"]["reason"] == "아직도 판단이 서지 않습니다."
+
+
+def test_a_degraded_session_is_still_allowed_to_try_again(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """An outage must not cost the session its retry for ever.
+
+    ⚠️ **This is the trap `wants_refill` fell into** (PR #148 리뷰, 신호정): a failed retry
+    clears `needsInput`, so a rule keyed only on `needsInput` turned one bad second into a
+    permanent loss of auto-fill — with nothing on screen to say why. The user would keep
+    rewriting the note and keep getting blanks.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.available = False
+    degraded = _patch_brief(client, created, note="여름용 수분 크림")
+    assert degraded["messageMode"] == "degraded"
+
+    ai.available = True
+    ai.needs_input = None
+    recovered = _patch_brief(client, degraded, note="여름용 수분 크림, 무향입니다")
+
+    assert recovered["state"] == "brief_ready"
+    assert recovered["messageMode"] == "normal"
+    assert recovered["brief"]["category"] == FILLED_CATEGORY
+
+
+def test_saving_the_same_note_again_does_not_pay_for_the_same_answer(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """The guard compares values, not keys.
+
+    A screen that autosaves, or a person fixing a typo and saving twice, sends `note` every
+    time. Billing each one buys the identical answer repeatedly (PR #148 리뷰, 신호정).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.needs_input = NeedsInput(field="note", reason="아직도 판단이 서지 않습니다.")
+    once = _patch_brief(client, created, note="여름용 수분 크림")
+    after_first = len(ai.briefs_requested)
+
+    twice = _patch_brief(client, once, note="여름용 수분 크림")
+
+    assert len(ai.briefs_requested) == after_first
+    assert twice["needsInput"]["reason"] == "아직도 판단이 서지 않습니다."
+
+
+def test_a_brief_with_nothing_left_to_infer_does_not_call_the_engine(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """A settled brief has no blank for the retry to fill, so the call is bought to be thrown away.
+
+    ⚠️ The reachable case is a **degraded session the user finished by hand**: `messageMode`
+    stays `degraded` after `replace_brief` moves it to `brief_ready`, so a rule keyed only on
+    the mode would keep paying for retries on a brief that is already complete. `_fold_refill`
+    fills blanks only, so every one of those answers would be discarded.
+    """
+    ai.available = False
+    degraded = _create(client)
+    settled = _patch_brief(client, degraded, category="스킨케어", target="20대 여성")
+    assert settled["state"] == "brief_ready"
+    assert settled["messageMode"] == "degraded"
+
+    ai.available = True
+    calls = len(ai.briefs_requested)
+    _patch_brief(client, settled, note="나중에 덧붙인 메모")
+
+    assert len(ai.briefs_requested) == calls
+
+
+def test_a_photo_deleted_between_finding_it_and_reading_it_degrades(
+    client: TestClient, ai: FakeAiEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweeper runs on a timer **in this process**, so the two calls are a race.
+
+    ⚠️ Finding the file and opening it are separate syscalls, and the window is widest at
+    exactly 24 hours — which is when the user is most likely to be answering yesterday's
+    `needsInput`. Before the fix this answered a 500 to the very request carrying them to
+    the exit (PR #148 리뷰에서 신호정 재현).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    def vanished(self: Path) -> bytes:
+        raise FileNotFoundError(self)
+
+    monkeypatch.setattr(Path, "read_bytes", vanished)
+    answered = _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    assert answered["messageMode"] == "degraded"
+    assert "needsInput" not in answered
 
 
 def test_a_retry_whose_photo_expired_degrades_rather_than_asking_without_it(

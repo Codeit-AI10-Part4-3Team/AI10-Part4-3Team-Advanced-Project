@@ -7,8 +7,8 @@ needs a filled-in .env before it moves is not a walking skeleton.
 ⚠️ The auth fields below have empty defaults, and that emptiness is *not* a usable value.
 A committed default signing key is a published signing key (ADR-0013), and the fixed
 accounts only exist in infra/.env anyway (ADR-0008). The check that rejects an empty
-secret lives in the auth wiring, not here: this class is also read by /health and /v1/ask,
-which must keep working on a fresh clone with no .env at all.
+secret lives in the auth wiring, not here: this class is also read by /health, which must
+keep working on a fresh clone with no .env at all.
 """
 
 import json
@@ -77,8 +77,8 @@ def _json_list(value: Any, variable: str, example: str) -> Any:
     CI 의 종단 관통 테스트가 여기서 unhealthy 로 떨어졌습니다).
 
     An unconfigured stack is a supported state. Nobody can log in and the catalog is empty,
-    while `/health` and `/v1/ask` still answer — which is exactly the "빈 스택이어도 충족"
-    deployment the 08-14 일정 항목 asks for.
+    while `/health` still answers — which is exactly the "빈 스택이어도 충족" deployment the
+    08-14 일정 항목 asks for.
 
     Genuinely broken JSON still fails, loudly and **with the shape in the message**: whoever
     hits it is looking at a container that will not start, and the value is one long line in
@@ -148,6 +148,40 @@ class Settings(BaseSettings):
     # Under the same volume as the database so one mount carries all durable state
     # (ADR-0014); a second location would be a second thing to back up and forget.
     image_dir: str = "./data/images"
+
+    # ---- retention (세션_보관_정책 2절) --------------------------------------------------
+
+    # ⚠️ These are the periods from the policy table, as settings because the policy says so
+    # ("기간 값과 배치 주기는 설정값입니다"). Shortening one shortens how long a user has to
+    # come back for their work; lengthening one means holding personal data longer than the
+    # document promises. Neither is a tuning knob - change the document first.
+
+    # 업로드 제품 사진. **From upload, not from render.** A session that never reaches
+    # finalize would otherwise keep its photo for ever, and the policy rejects that outright.
+    retention_photo_h: float = 24.0
+
+    # 브리프와 시안(텍스트), and the session row that carries them.
+    retention_session_d: float = 7.0
+
+    # 결과 이미지. ⚠️ This one is also written onto `JobResult.expiresAt` and **sent to the
+    # client**, so it is a promise, not just a period. The batch honours the promise over the
+    # session period (`retention.sweep`), which means a rendered session lives until
+    # `render time + this` -- shortening `retention_session_d` alone has no effect on it.
+    retention_result_d: float = 7.0
+
+    # ⚠️ The period is also **how late a deletion can be**. Nothing expires on the dot: a
+    # photo passes its 24 hours and then waits for the next pass. With a daily sweep the
+    # real retention was up to 48 hours -- twice what 세션_보관_정책 2절's table promises
+    # (PR #132 리뷰, 신호정). An hour keeps the gap under 25 hours, and a pass is a scan of
+    # a few dozen rows, so the cost is nothing next to holding personal data twice as long.
+    # A period rather than a wall-clock time because the process restarts on every deploy and
+    # a clock-based schedule would either fire twice or not at all on those days.
+    sweep_interval_s: float = 3600.0
+
+    # ⚠️ **On by default**, for the same reason the worker is: a deployment that forgets it
+    # keeps personal data past its period, and nothing on screen says so. The test suite
+    # turns it off so a sweep does not delete a fixture out from under an assertion.
+    sweep_enabled: bool = True
 
     # ---- catalog -----------------------------------------------------------------------
 

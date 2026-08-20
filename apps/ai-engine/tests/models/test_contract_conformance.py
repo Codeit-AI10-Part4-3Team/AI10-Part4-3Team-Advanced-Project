@@ -24,6 +24,7 @@ from ai_engine.models import (
     DraftPatch,
     DraftPatchEngineRequest,
     Error,
+    ImageQuality,
     ImageRenderRequest,
     ImageSpec,
     NeedsInput,
@@ -52,7 +53,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "SingleAdDraft": SingleAdDraft,
 }
 
-ENUMS: dict[str, Any] = {"PanelRole": PanelRole}
+ENUMS: dict[str, Any] = {"ImageQuality": ImageQuality, "PanelRole": PanelRole}
 
 SCALAR_ALIASES = {"AdPlan", "GuardrailApplied"}
 

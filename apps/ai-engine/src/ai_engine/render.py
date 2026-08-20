@@ -47,11 +47,12 @@ def render_image(request: ImageRenderRequest, settings: Settings) -> bytes:
     share a filesystem and the coupling would have escaped the HTTP contract (AGENTS.md).
     """
     logger.info(
-        "image:render mode=%s outputType=%s spec=%dx%d",
+        "image:render mode=%s outputType=%s spec=%dx%d quality=%s",
         settings.generation_mode,
         request.output_type,
         request.spec.width,
         request.spec.height,
+        request.quality,
     )
     if settings.generation_mode == "stub":
         return _render_stub(request, settings)
@@ -113,9 +114,13 @@ def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes
         ) from exc
 
     client = OpenAI(api_key=settings.model_api_key, timeout=settings.image_timeout_s)
-    kwargs: dict[str, Any] = {"model": settings.image_model, "prompt": prompt, "size": size, "n": 1}
-    if settings.image_quality:
-        kwargs["quality"] = settings.image_quality
+    kwargs: dict[str, Any] = {
+        "model": settings.image_model,
+        "prompt": prompt,
+        "size": size,
+        "n": 1,
+        "quality": _quality(request, settings),
+    }
 
     try:
         response = client.images.generate(**kwargs)
@@ -126,6 +131,29 @@ def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes
         raise RenderFailedError(f"{type(exc).__name__}: {exc}") from exc
 
     return _to_lossless_webp(_inline_bytes(response))
+
+
+def _quality(request: ImageRenderRequest, settings: Settings) -> str:
+    """어느 품질 티어로 부를지. 평소에는 **요청이 정합니다** (계약 `ImageQuality`).
+
+    호출자가 출력 유형을 보고 정해 보내는 값이고, 이 서비스는 유형에서 유도하지 않습니다 -
+    `spec` 을 유도하지 않는 것과 같은 이유입니다 (미결정_대장 E-2, 2026-08-20).
+
+    ⚠️ **override 가 채워져 있으면 그것이 이기고, 그때마다 경고를 남깁니다.** 개발과 검증
+    실험을 `low` 로 돌리기 위한 스위치인데(생성_파이프라인 6.2절), 조용히 동작하면 그 상태로
+    잰 숫자가 운영 경로의 숫자로 보고됩니다. 값 검증은 하지 않습니다 - 벤더가 티어 이름을
+    늘렸을 때 실험을 막지 않기 위해서이고, 틀린 값은 API 가 400 으로 즉시 알려 줍니다.
+    """
+    override = settings.image_quality_override
+    if not override:
+        return request.quality
+    logger.warning(
+        "ADGEN_IMAGE_QUALITY_OVERRIDE=%s 가 요청의 티어 %s 를 덮어씁니다. "
+        "개발용 스위치이며, 이 상태의 결과는 운영 경로의 것이 아닙니다.",
+        override,
+        request.quality,
+    )
+    return override
 
 
 def _inline_bytes(response: Any) -> bytes:

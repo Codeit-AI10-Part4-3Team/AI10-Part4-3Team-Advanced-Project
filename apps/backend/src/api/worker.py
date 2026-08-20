@@ -20,6 +20,7 @@ import contextlib
 import logging
 import sqlite3
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import anyio
 from fastapi import FastAPI
@@ -84,7 +85,15 @@ def _drain_one(app: FastAPI, settings: Settings) -> bool:
     """One iteration, on a worker thread. True when something was rendered."""
     with connect(settings.db_path) as connection:
         engine = deps.resolve_ai_client(app)
-        return render.run_one(connection, engine, settings.image_dir) is not None
+        return (
+            render.run_one(
+                connection,
+                engine,
+                settings.image_dir,
+                timedelta(days=settings.retention_result_d),
+            )
+            is not None
+        )
 
 
 @contextlib.asynccontextmanager

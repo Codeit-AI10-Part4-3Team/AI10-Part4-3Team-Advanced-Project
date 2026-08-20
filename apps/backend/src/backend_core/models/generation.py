@@ -97,6 +97,20 @@ class ImageSpec(Base):
     height: int = Field(ge=16, le=3840, multiple_of=16)
 
 
+ImageQuality = Literal["low", "medium", "high"]
+"""Contract: `components.schemas.ImageQuality`. Sent by the caller, never derived here.
+
+The tier is fixed per output type — comic `medium`, single ad `low` (생성_파이프라인 6.2절).
+Deriving it from `output_type` in this service would put the same decision in two places, for
+exactly the reason `ImageSpec` is not derived either.
+
+⚠️ The vendor's `auto` is deliberately absent: leaving the tier to the model swings the cost
+of an identical request by up to 9x (2026-08-13, 08-15 실측). `high` is in the enum but has
+never been measured — the per-call slowdown under parallel fan-out grows with the tier
+(`low` 44%, `medium` 64%), so adopting it reopens 미결정_대장 N19-a.
+"""
+
+
 class ImageRenderRequest(Base):
     """Contract: `components.schemas.ImageRenderRequest`.
 
@@ -108,6 +122,7 @@ class ImageRenderRequest(Base):
     brief: Brief
     draft: Draft
     spec: ImageSpec
+    quality: ImageQuality
 
     @model_validator(mode="after")
     def _check_pairing(self) -> "ImageRenderRequest":

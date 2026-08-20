@@ -79,10 +79,14 @@ def _session_model(at: datetime, output_type: OutputType = "single_ad") -> Sessi
     )
 
 
-def _finalized(connection: sqlite3.Connection, user_id: str = USER) -> tuple[str, str]:
+def _finalized(
+    connection: sqlite3.Connection,
+    user_id: str = USER,
+    output_type: OutputType = "single_ad",
+) -> tuple[str, str]:
     """A session sitting in `rendering` with a queued job, as `finalize` leaves it."""
     at = sessions.now()
-    session = _session_model(at)
+    session = _session_model(at, output_type)
     sessions.create(connection, user_id, session)
     found = sessions.for_user(connection, user_id, session.session_id)
     assert found is not None
@@ -261,3 +265,33 @@ def test_the_render_request_carries_the_size_the_output_type_demands(
     render.run_one(connection, engine, tmp_path)
 
     assert engine.renders_requested[0].spec == render.SINGLE_AD_SPEC
+
+
+def test_the_render_request_carries_the_quality_tier_the_output_type_demands(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """생성_파이프라인 6.2절. 만화형 `medium`, 단일 광고형 `low`.
+
+    ⚠️ 티어가 요청에 실리는 이유는 `spec` 과 같습니다 - 엔진이 `output_type` 에서 유도하면
+    같은 결정이 두 곳에 생기고, 한쪽만 고치는 순간 어긋납니다 (미결정_대장 E-2, 2026-08-20).
+    만화형이 `low` 로 새면 손과 사물의 물리가 무너지는 결함이 그대로 나가고, 단일 광고형이
+    `medium` 으로 새면 세트당 단가가 58배가 됩니다.
+    """
+    _finalized(connection, output_type="comic")
+    engine = FakeAiEngine()
+
+    render.run_one(connection, engine, tmp_path)
+
+    assert engine.renders_requested[0].quality == render.COMIC_QUALITY == "medium"
+
+
+def test_the_single_ad_render_stays_on_the_cheap_tier(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """단일 광고형에서는 `low` 의 결함이 확인되지 않았고 세트당 0.0069 USD 입니다."""
+    _finalized(connection)
+    engine = FakeAiEngine()
+
+    render.run_one(connection, engine, tmp_path)
+
+    assert engine.renders_requested[0].quality == render.SINGLE_AD_QUALITY == "low"

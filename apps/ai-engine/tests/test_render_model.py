@@ -252,8 +252,10 @@ def test_the_character_reaches_the_panel_that_has_no_reference() -> None:
 def test_the_retired_whole_sheet_prompt_has_no_way_back() -> None:
     """⚠️ 한 장에 6칸은 ADR-0017 이 폐기한 방식입니다. 규격이 산술적으로 달성되지 않으므로
     (경계선을 그리는 한 칸은 1152px 보다 작아집니다) 조용히 되돌아갈 자리를 남기지 않습니다."""
+    request = comic_request()
+
     with pytest.raises(TypeError, match="build_panel"):
-        render_prompt.build(comic_request())
+        render_prompt.build(request)
 
 
 # ---- 호출 -------------------------------------------------------------------------
@@ -297,8 +299,12 @@ def test_a_canvas_that_cannot_be_tiled_fails_before_any_call(
     """⚠️ 호출 **전에** 막습니다. 그대로 보내면 첫 칸이 400 으로 돌아오는데 그때는 이미 요금이
     나간 뒤이고, 나누어떨어지지 않는 쪽은 400 도 나지 않고 캔버스에 띠만 남습니다 - 그 띠가
     이 방식으로 없앤 "회차마다 흔들리는 여백" 입니다."""
+    # ⚠️ `ImageSpec` 조립을 밖으로 뺍니다. 이것도 검증이 붙어 있어(16의 배수) 안에 두면
+    # 어느 쪽이 던진 예외인지가 갈리지 않습니다.
+    spec = ImageSpec(width=width, height=height)
+
     with pytest.raises(render.RenderFailedError, match=expected):
-        render._panel_size(ImageSpec(width=width, height=height))
+        render._panel_size(spec)
 
 
 def test_the_request_decides_the_quality_tier(
@@ -476,9 +482,10 @@ def test_one_failed_panel_fails_the_whole_set(
     6회 호출 중 하나가 실패한 것이라, 그 정보가 없으면 로그만 보고는 재현할 수 없습니다.
     """
     install(monkeypatch, FakePanels(fail_on=4))
+    request = comic_request(96, 64)
 
     with pytest.raises(render.RenderFailedError, match="4번 칸이 실패"):
-        render.render_image(comic_request(96, 64), model_settings)
+        render.render_image(request, model_settings)
 
 
 @pytest.mark.parametrize("wrong", [1, 5], ids=["1번 칸", "5번 칸"])
@@ -497,9 +504,10 @@ def test_a_panel_of_the_wrong_size_fails_instead_of_being_stretched(
     """
     panels = FakePanels(wrong_size_on=wrong)
     install(monkeypatch, panels)
+    request = comic_request(96, 64)
 
     with pytest.raises(render.RenderFailedError, match=f"{wrong}번 칸이 16x32"):
-        render.render_image(comic_request(96, 64), model_settings)
+        render.render_image(request, model_settings)
 
     assert len(panels.edits) == (0 if wrong == 1 else 5)
 
@@ -511,9 +519,10 @@ def test_a_failing_first_panel_never_fans_out(
     다섯 번 더 나가고 결과는 어차피 실패입니다."""
     panels = FakePanels(fail_on=1)
     install(monkeypatch, panels)
+    request = comic_request(96, 64)
 
     with pytest.raises(render.RenderFailedError):
-        render.render_image(comic_request(96, 64), model_settings)
+        render.render_image(request, model_settings)
 
     assert panels.edits == []
 

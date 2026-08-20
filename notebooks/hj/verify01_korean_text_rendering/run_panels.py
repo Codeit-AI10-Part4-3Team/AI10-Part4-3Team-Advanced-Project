@@ -52,8 +52,18 @@ REFERENCE_INSTRUCTION = (
 )
 
 
+def panels_of(name: str) -> tuple[conditions.Panel, ...]:
+    """어느 대사 세트로 돌릴지. `--panels` 가 고릅니다.
+
+    `base` 는 1순위와 같은 문장(9 ~ 15자)이라 컷별 방식과 한 장 방식을 견줄 때 씁니다.
+    `mid` 는 길이만 15 ~ 25자로 올린 세트이고, **N18 상한의 운영 조건 표본이 이쪽입니다** -
+    운영 경로가 컷별 생성이므로 한 장 6칸으로 잰 값은 근거가 되지 않습니다 (ADR-0017).
+    """
+    return {"base": conditions.PANELS, "mid": conditions.PANELS_MID}[name]
+
+
 def panel_prompt(panel: conditions.Panel, with_reference: bool) -> str:
-    """칸 하나의 프롬프트. 대사는 1순위와 같은 문장을 씁니다 - 바꾸면 비교가 깨집니다."""
+    """칸 하나의 프롬프트. 대사 외에는 세트가 달라도 같습니다 - 바꾸면 비교가 깨집니다."""
     head = PANEL_PROMPT_HEAD
     if with_reference:
         head += REFERENCE_INSTRUCTION
@@ -154,6 +164,7 @@ def _generate_set(
     호출 수와 비용은 순차와 같습니다. 줄어드는 것은 대기 시간뿐입니다.
     """
     results: list[tuple] = []
+    panels = panels_of(args.panels)
 
     def run(panel: conditions.Panel, ref: Path | None) -> tuple:
         prompt = panel_prompt(panel, with_reference=ref is not None)
@@ -163,7 +174,7 @@ def _generate_set(
         return (panel, ref, path, elapsed, usage)
 
     if not (args.parallel and args.reference == "first"):
-        for panel in conditions.PANELS:
+        for panel in panels:
             ref: Path | None = None
             if args.reference == "first" and panel_paths:
                 ref = panel_paths[0]
@@ -174,13 +185,13 @@ def _generate_set(
             results.append(row)
         return results
 
-    head = run(conditions.PANELS[0], None)
+    head = run(panels[0], None)
     panel_paths.append(head[2])
     results.append(head)
 
     # 네트워크 대기가 지배적이므로 스레드로 충분합니다. GIL은 문제가 되지 않습니다.
-    with ThreadPoolExecutor(max_workers=len(conditions.PANELS) - 1) as pool:
-        for row in pool.map(lambda p: run(p, head[2]), conditions.PANELS[1:]):
+    with ThreadPoolExecutor(max_workers=len(panels) - 1) as pool:
+        for row in pool.map(lambda p: run(p, head[2]), panels[1:]):
             panel_paths.append(row[2])
             results.append(row)
     return results
@@ -190,6 +201,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sets", type=int, default=1, help="세트 수. 1세트 = 6회 호출")
     parser.add_argument("--start-id", type=int, default=1)
+    parser.add_argument(
+        "--panels",
+        choices=["base", "mid"],
+        default="base",
+        help="base=1순위와 같은 대사(9 ~ 15자), mid=길이만 올린 세트(15 ~ 25자, N18 운영 조건)",
+    )
     parser.add_argument("--model", default=os.environ.get("ADGEN_IMAGE_MODEL", "gpt-image-2"))
     parser.add_argument(
         "--reference",
@@ -216,12 +233,17 @@ def main() -> int:
 
     size = f"{conditions.PANEL_WIDTH}x{conditions.PANEL_HEIGHT}"
 
+    panels = panels_of(args.panels)
+
     if args.dry_run:
-        print(f"[dry-run] size={size} reference={args.reference} 호출 {args.sets * 6}회")
+        print(
+            f"[dry-run] size={size} reference={args.reference} panels={args.panels} "
+            f"길이={tuple(len(p.line) for p in panels)} 호출 {args.sets * 6}회"
+        )
         print("-" * 72)
-        print(panel_prompt(conditions.PANELS[0], with_reference=False))
+        print(panel_prompt(panels[0], with_reference=False))
         print("-" * 72)
-        print(panel_prompt(conditions.PANELS[1], with_reference=args.reference != "none"))
+        print(panel_prompt(panels[1], with_reference=args.reference != "none"))
         return 0
 
     calls = args.sets * conditions.PANEL_COUNT
@@ -237,7 +259,9 @@ def main() -> int:
 
     client = OpenAI(api_key=_api_key())
     prices = _prices()
-    suffix = f"-panels-{args.quality}" if args.quality else "-panels"
+    suffix = f"-panels_{args.panels}"
+    if args.quality:
+        suffix += f"-{args.quality}"
     run_dir = RUNS_ROOT / f"{datetime.now():%Y%m%d-%H%M%S}{suffix}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -253,6 +277,9 @@ def main() -> int:
         "file",
     ]
     grand_total = 0.0
+    # 판정 대상은 칸 낱장이 아니라 **합성된 세트 이미지**입니다. manifest.csv 는 호출 단위라
+    # 한 세트가 6행이고, 판정 시트는 한 세트가 1행이어야 하므로 목록을 따로 남깁니다.
+    composed_sets: list[dict[str, Any]] = []
 
     with (run_dir / "manifest.csv").open("w", newline="", encoding="utf-8") as fp:
         writer = csv.DictWriter(fp, fieldnames=fields)
@@ -298,6 +325,11 @@ def main() -> int:
 
             composed = run_dir / f"panels-{set_id:02d}.png"
             width, height = compose(panel_paths, composed)
+            composed_sets.append({
+                "run_id": set_id,
+                "variant": f"panels_{args.panels}",
+                "image_file": composed.name,
+            })
             grand_total += set_cost
             mode = "병렬" if (args.parallel and args.reference == "first") else "순차"
             print(
@@ -305,10 +337,15 @@ def main() -> int:
                 f"실측 {set_wall:.1f}s (호출 시간 합 {set_time:.1f}s) / ${set_cost:.4f}\n"
             )
 
+    with (run_dir / "sets.csv").open("w", newline="", encoding="utf-8") as fp:
+        set_writer = csv.DictWriter(fp, fieldnames=["run_id", "variant", "image_file"])
+        set_writer.writeheader()
+        set_writer.writerows(composed_sets)
+
     (run_dir / "prompt.txt").write_text(
-        panel_prompt(conditions.PANELS[0], with_reference=False)
+        panel_prompt(panels[0], with_reference=False)
         + "\n\n=== 2번 칸부터 (레퍼런스 동반) ===\n\n"
-        + panel_prompt(conditions.PANELS[1], with_reference=args.reference != "none"),
+        + panel_prompt(panels[1], with_reference=args.reference != "none"),
         encoding="utf-8",
     )
     print(f"결과: {run_dir}")

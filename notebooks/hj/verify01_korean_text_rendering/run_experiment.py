@@ -211,7 +211,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    prompt = conditions.VARIANTS[args.variant]()
+    # ⚠️ 회차마다 부릅니다. `single_len` 은 회차별로 카피 길이가 달라지므로, 루프 밖에서 한 번
+    # 만들어 두면 모든 회차가 같은 길이를 재게 되어 길이 축이 사라집니다.
+    build = conditions.VARIANTS[args.variant]
+    prompt = build(args.start_id)
     if args.size is None:
         width, height = conditions.DEFAULT_SIZE[args.variant]
         args.size = f"{width}x{height}"
@@ -267,6 +270,7 @@ def main() -> int:
         "output_tokens",
         "cost_usd",
         "image_file",
+        "copy",
         "error",
     ]
     total_cost = 0.0
@@ -279,6 +283,10 @@ def main() -> int:
         for run_id in range(args.start_id, args.start_id + args.runs):
             row: dict[str, Any] = {"run_id": run_id, "variant": args.variant, "model": args.model}
             row["requested_size"] = args.size
+            prompt = build(run_id)
+            # 판정 시트가 회차별 정답을 여기서 읽습니다. run_id 로 다시 계산하게 두면
+            # `--start-id` 가 달라지는 순간 정답과 이미지가 어긋납니다.
+            row["copy"] = conditions.copy_of(args.variant, run_id)
             try:
                 image_bytes, meta = _call_once(
                     client, args.model, prompt, args.size, args.quality, args.input_image

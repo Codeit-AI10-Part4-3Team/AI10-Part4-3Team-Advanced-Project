@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api import deps, worker
+from api import deps, sweeper, worker
 from api.errors import api_error_handler, unhandled_error_handler, validation_error_handler
 from api.routes import auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
@@ -63,7 +63,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # back and nothing would ever pick that job up again (ADR-0015).
         worker.requeue_interrupted(connection)
 
-    async with worker.lifespan_task(_app, settings.worker_poll_interval_s, settings.worker_enabled):
+    # ⚠️ Two background tasks, nested rather than merged. They have nothing to say to each
+    # other and different failure modes: a stalled render leaves a spinner, a stalled sweep
+    # leaves personal data past its period (세션_보관_정책 2절). Keeping them separate means
+    # turning one off for a test does not turn off the other.
+    async with (
+        worker.lifespan_task(_app, settings.worker_poll_interval_s, settings.worker_enabled),
+        sweeper.lifespan_task(settings),
+    ):
         yield
 
 

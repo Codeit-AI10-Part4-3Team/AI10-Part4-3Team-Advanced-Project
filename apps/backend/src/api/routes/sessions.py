@@ -46,6 +46,7 @@ from backend_core.ai_client import (
 )
 from backend_core.config import Settings
 from backend_core.models import (
+    Brief,
     BriefFillResponse,
     BriefPatchRequest,
     DraftGenerateRequest,
@@ -248,8 +249,10 @@ def patch_brief(
     body: BriefPatchRequest,
     account: Annotated[Account, Depends(deps.current_user)],
     connection: Annotated[sqlite3.Connection, Depends(deps.db)],
+    settings: Annotated[Settings, Depends(deps.settings)],
+    engine: Annotated[AiEngineClient, Depends(deps.ai_client)],
 ) -> Session:
-    """Change part of the brief.
+    """Change part of the brief, and ask the engine again if this answers `needsInput`.
 
     ⚠️ Only the named fields travel. The client does not send the whole document back —
     that would make the *client* the keeper of the original, and a bug in a screen would
@@ -257,10 +260,28 @@ def patch_brief(
 
     409 once a draft exists (INV-7): the brief is a draft's evidence, and evidence that
     moves after the fact leaves nothing to say what the draft was based on.
+
+    ⚠️ **This is the only patch route that can call the engine, and it is the contract that
+    says so**: "`needsInput`이 걸린 세션에서 `note`를 채우면 서버가 추론을 다시 시도합니다".
+    Without the retry a `needsInput` session has no exit at all — `category` and `target`
+    stay empty however much the user writes, `brief_filling -> brief_filling` is a legal
+    edge, and the screen asks the same question for ever. That was invisible while
+    `brief:fill` was a stub and became reachable the day it was not (2026-08-20).
+
+    ⚠️ The merge runs **before** the retry so the engine sees the note the user just typed.
+    Retrying on the old brief would ask the same question again and get the same answer.
     """
     session, was = _owned(connection, account, session_id)
     _require_revision(session, body.revision)
-    session = _guard(lambda: session_flow.apply_brief_patch(session, body.patch, sessions.now()))
+
+    refill = None
+    if session_flow.wants_refill(session, body.patch):
+        merged, _ = _guard(lambda: session_flow.merge_brief_patch(session, body.patch))
+        refill = _refill_brief(engine, settings, session, merged)
+
+    session = _guard(
+        lambda: session_flow.apply_brief_patch(session, body.patch, sessions.now(), refill)
+    )
     return _store(connection, account, session, was)
 
 
@@ -430,11 +451,16 @@ def _store(
         state_conflict("세션이 방금 다른 요청으로 바뀌었습니다. 최신 상태를 다시 읽고 시도하세요.")
 
 
-def _guard(operation: Callable[[], Session]) -> Session:
-    """Run a state transition, turning a refusal into the contract's 409.
+def _guard[T](operation: Callable[[], T]) -> T:
+    """Run a domain call, turning a refusal into the contract's 409 or 422.
 
     The domain raises `StateConflictError` without knowing about HTTP; this is the one place
     that mapping happens, so a new route cannot answer a conflict with the wrong status.
+
+    ⚠️ Generic because the brief patch now runs the **merge** through here too, before the
+    session itself is rebuilt: `merge_brief_patch` raises the same `ValueError` the pairing
+    check has always raised, and it has to reach the client as the same 422 whether the
+    caller wanted a `Session` back or a merged `Brief`.
     """
     try:
         return operation()
@@ -503,3 +529,44 @@ def _fill_brief(
     except AiEngineUnavailableError as exc:
         logger.warning("brief:fill unavailable, degrading to user input: %s", exc)
         return None
+
+
+def _refill_brief(
+    engine: AiEngineClient,
+    settings: Settings,
+    session: Session,
+    merged: Brief,
+) -> session_flow.RefillOutcome:
+    """Ask the engine again, now that the user has answered. Never raises.
+
+    ⚠️ **The photo is read back off disk**, because a brief patch does not carry one. The
+    upload happens once, at session creation (API_계약.md 8.1절), and `brief:fill` reads the
+    picture as well as the words — sending only the words would be a different question with
+    a worse answer.
+
+    A missing photo is not an error here. It is the 24-hour retention doing its job
+    (세션_보관_정책.md 2절), and the honest report is the same as an outage: the inference
+    could not run. The session degrades, which is precisely the state whose documented exit
+    is "the user fills `category` and `target` themselves" — so the person is left with a
+    way forward rather than a question about a note.
+    """
+    photo = images.find(settings.image_dir, session.session_id)
+    if photo is None:
+        logger.warning(
+            "brief:fill retry skipped, photo is gone (session=%s): degrading",
+            session.session_id,
+        )
+        return session_flow.RefillOutcome(filled=None)
+    try:
+        return session_flow.RefillOutcome(
+            filled=engine.fill_brief(
+                product_name=merged.product_name,
+                selling_point=merged.selling_point,
+                note=merged.note,
+                image=photo.read_bytes(),
+                filename=photo.name,
+            )
+        )
+    except AiEngineUnavailableError as exc:
+        logger.warning("brief:fill retry unavailable, degrading to user input: %s", exc)
+        return session_flow.RefillOutcome(filled=None)

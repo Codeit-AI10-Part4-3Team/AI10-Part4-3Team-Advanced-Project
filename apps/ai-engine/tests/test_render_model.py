@@ -10,6 +10,8 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -52,7 +54,10 @@ def single_ad_request(**brief_overrides: object) -> ImageRenderRequest:
     )
 
 
-def comic_request() -> ImageRenderRequest:
+def comic_request(width: int = 3456, height: int = 2304) -> ImageRenderRequest:
+    """⚠️ 기본값이 운영 규격입니다. 합성까지 도는 테스트는 **작은 캔버스**를 쓰세요 -
+    3456 x 2304 는 약 8MP 라 칸 6장을 실제로 붙이면 테스트가 느려집니다. 격자 산술은 캔버스
+    크기와 무관하므로 96 x 64 로 재도 같은 것을 잽니다."""
     roles = ["hook", "setup", "problem", "solution", "proof", "cta"]
     return ImageRenderRequest(
         output_type="comic",
@@ -66,9 +71,13 @@ def comic_request() -> ImageRenderRequest:
                 for index, role in enumerate(roles, start=1)
             ],
         ),
-        spec=ImageSpec(width=3456, height=2304),
+        spec=ImageSpec(width=width, height=height),
         quality="medium",
     )
+
+
+def comic_panel(index: int = 1) -> Panel:
+    return Panel(index=index, role="hook", scene=f"{index}번 장면", dialogue=f"대사 {index}")
 
 
 def png_bytes(width: int = 32, height: int = 32) -> bytes:
@@ -93,6 +102,55 @@ class FakeImages:
         return type("Response", (), {"data": [type("Datum", (), {"b64_json": encoded})()]})()
 
 
+PANEL_MARK = re.compile(r"전체 6칸 중 (\d)번 칸이다\.")
+
+
+class FakePanels:
+    """만화형 6회 호출을 흉내냅니다. `generate` 는 1번 칸, `edit` 는 나머지입니다.
+
+    칸마다 **다른 색**을 돌려주는 것이 핵심입니다. 전부 같은 색이면 합성 위치가 뒤바뀌어도
+    결과 픽셀이 같아서 배치를 검사할 수 없습니다. 어느 칸인지는 프롬프트에서 읽습니다 -
+    호출 순서로 판단하면 병렬 경로에서 그 순서 자체가 보장되지 않습니다.
+    """
+
+    def __init__(
+        self, fail_on: int | None = None, barrier: threading.Barrier | None = None
+    ) -> None:
+        self.fail_on = fail_on
+        self.barrier = barrier
+        self.lock = threading.Lock()
+        self.calls: list[dict[str, Any]] = []
+        self.edits: list[dict[str, Any]] = []
+
+    @staticmethod
+    def color(index: int) -> tuple[int, int, int]:
+        return (index * 40, 255 - index * 30, index * 10)
+
+    def _answer(self, kwargs: dict[str, Any], *, edit: bool) -> Any:
+        index = int(PANEL_MARK.search(kwargs["prompt"]).group(1))  # type: ignore[union-attr]
+        with self.lock:
+            self.calls.append(kwargs)
+            if edit:
+                self.edits.append(kwargs)
+        if self.barrier is not None and edit:
+            # 다섯이 다 도착해야 통과합니다. 순차로 돌면 첫 호출이 여기서 시간 초과로 깨지고,
+            # 그것이 곧 "병렬이 아니다" 라는 판정입니다. sleep 으로 재면 느린 CI 에서 흔들립니다.
+            self.barrier.wait()
+        if index == self.fail_on:
+            raise RuntimeError(f"{index}번 칸 벤더 오류")
+        width, height = (int(part) for part in kwargs["size"].split("x"))
+        buffer = io.BytesIO()
+        Image.new("RGB", (width, height), self.color(index)).save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode()
+        return type("Response", (), {"data": [type("Datum", (), {"b64_json": encoded})()]})()
+
+    def generate(self, **kwargs: Any) -> Any:
+        return self._answer(kwargs, edit=False)
+
+    def edit(self, **kwargs: Any) -> Any:
+        return self._answer(kwargs, edit=True)
+
+
 @pytest.fixture
 def model_settings() -> Settings:
     return Settings(generation_mode="model", model_api_key="test-key")
@@ -110,9 +168,18 @@ def install(monkeypatch: pytest.MonkeyPatch, images: FakeImages) -> None:
 
 def test_the_grounding_sentence_is_always_in_the_prompt() -> None:
     """⚠️ INV-6. 이 문장을 빼는 것은 프롬프트를 줄이는 일이 아니라 가드레일을 끄는 일입니다 -
-    없는 효능을 그려 넣으면 표시광고법상 허위 과장 광고이고, on/off 델타가 보고 지표입니다."""
-    for request in (single_ad_request(), comic_request()):
-        assert render_prompt.GROUNDING in render_prompt.build(request)
+    없는 효능을 그려 넣으면 표시광고법상 허위 과장 광고이고, on/off 델타가 보고 지표입니다.
+
+    ⚠️ **칸마다 확인합니다.** 만화형이 호출 6회로 갈라진 뒤로는 한 칸이라도 이 문장을 빠뜨리면
+    그 칸에서 없는 효능이 나올 수 있고, 세트로 보면 여전히 한 장의 광고물입니다.
+    """
+    assert render_prompt.GROUNDING in render_prompt.build(single_ad_request())
+    for index in range(1, 7):
+        for with_reference in (False, True):
+            prompt = render_prompt.build_panel(
+                comic_request(), comic_panel(index), with_reference=with_reference
+            )
+            assert render_prompt.GROUNDING in prompt
 
 
 def test_the_prompt_carries_the_evidence_not_just_the_copy() -> None:
@@ -127,7 +194,9 @@ def test_the_ad_plan_is_not_sent_to_the_image_model() -> None:
     """⚠️ `adPlan` 은 기획 문장이지 그림에 쓸 글자가 아닙니다. 함께 보내면 모델이 기획서를
     이미지 안에 써 넣습니다."""
     assert "기획안 문장" not in render_prompt.build(single_ad_request())
-    assert "기획안 문장" not in render_prompt.build(comic_request())
+    assert "기획안 문장" not in render_prompt.build_panel(
+        comic_request(), comic_panel(), with_reference=False
+    )
 
 
 def test_an_empty_note_does_not_become_an_empty_instruction() -> None:
@@ -136,14 +205,48 @@ def test_an_empty_note_does_not_become_an_empty_instruction() -> None:
     assert "추가 요청: 파란 톤" in render_prompt.build(single_ad_request(note="파란 톤"))
 
 
-def test_the_comic_prompt_keeps_the_six_panel_grid_and_every_line() -> None:
-    """검증 1순위가 통과시킨 조건입니다. 여기서 격자 지시가 빠지면 그 실험 결과가
-    이 파이프라인으로 이전되지 않습니다."""
-    prompt = render_prompt.build(comic_request())
+def test_a_panel_prompt_asks_for_one_scene_and_only_its_own_line() -> None:
+    """⚠️ 칸 프롬프트가 격자를 지시하면 합성 뒤에 36칸이 됩니다.
 
-    assert "3 x 2" in prompt
-    for index in range(1, 7):
-        assert f"대사 {index}" in prompt
+    그리고 **자기 대사만** 들어가야 합니다. 여섯 대사를 다 보내면 모델이 한 칸에 다른 칸의
+    문구까지 써 넣습니다 - 한 장 방식에서는 그것이 정상 지시였으므로 옮겨 오기 쉬운 실수입니다.
+    """
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(3), with_reference=False)
+
+    assert render_prompt.SINGLE_PANEL in prompt
+    assert "3 x 2" not in prompt
+    assert "대사 3" in prompt
+    for other in (1, 2, 4, 5, 6):
+        assert f"대사 {other}" not in prompt
+
+
+def test_only_the_later_panels_are_told_to_keep_the_reference() -> None:
+    """1번 칸은 레퍼런스가 될 그림 자체라 유지할 대상이 없습니다. 그 칸에 이 문장을 넣으면
+    모델이 있지도 않은 입력 이미지를 따르라는 지시를 받습니다."""
+    request = comic_request()
+
+    assert render_prompt.KEEP_REFERENCE not in render_prompt.build_panel(
+        request, comic_panel(1), with_reference=False
+    )
+    assert render_prompt.KEEP_REFERENCE in render_prompt.build_panel(
+        request, comic_panel(2), with_reference=True
+    )
+
+
+def test_the_character_reaches_the_panel_that_has_no_reference() -> None:
+    """⚠️ 1번 칸에 인물을 알려 줄 통로는 `brief.character` 뿐입니다. 나머지 칸은 1번 칸 그림을
+    보고 그리지만 1번 칸은 볼 것이 없어서, 여기서 빠지면 세트마다 다른 사람이 나옵니다."""
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), with_reference=False)
+
+    assert "단발" in prompt
+    assert "니트" in prompt
+
+
+def test_the_retired_whole_sheet_prompt_has_no_way_back() -> None:
+    """⚠️ 한 장에 6칸은 ADR-0017 이 폐기한 방식입니다. 규격이 산술적으로 달성되지 않으므로
+    (경계선을 그리는 한 칸은 1152px 보다 작아집니다) 조용히 되돌아갈 자리를 남기지 않습니다."""
+    with pytest.raises(TypeError, match="build_panel"):
+        render_prompt.build(comic_request())
 
 
 # ---- 호출 -------------------------------------------------------------------------
@@ -157,10 +260,38 @@ def test_the_requested_size_is_what_gets_sent(
     images = FakeImages(payload=png_bytes())
     install(monkeypatch, images)
 
-    render.render_image(comic_request(), model_settings)
+    render.render_image(single_ad_request(), model_settings)
 
-    assert images.calls[0]["size"] == "3456x2304"
+    assert images.calls[0]["size"] == "1088x1088"
     assert images.calls[0]["n"] == 1
+
+
+def test_the_panel_size_is_divided_out_of_the_requested_canvas() -> None:
+    """⚠️ 1152 를 상수로 두지 않습니다. 계약이 보낸 캔버스를 3x2 로 나눠 얻습니다 - 같은
+    숫자를 여기 또 적으면 한쪽만 고치는 순간 어긋납니다 (미결정_대장 N16).
+
+    운영 규격 3456 x 2304 가 정확히 1152 x 1152 여섯 칸으로 나뉜다는 것이 ADR-0017 의 전제이고,
+    한 장 생성 방식이 달성하지 못한 바로 그 값입니다 (실측 1101 ~ 1142px).
+    """
+    assert render._panel_size(ImageSpec(width=3456, height=2304)) == (1152, 1152)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected"),
+    [
+        (1088, 1088, "나누어떨어지지"),  # 1088 / 3 이 정수가 아닙니다
+        (96, 80, "16의 배수"),  # 96/3=32 는 되지만 80/2=40 이 16의 배수가 아닙니다
+    ],
+    ids=["격자로 안 나뉨", "칸이 16의 배수가 아님"],
+)
+def test_a_canvas_that_cannot_be_tiled_fails_before_any_call(
+    width: int, height: int, expected: str
+) -> None:
+    """⚠️ 호출 **전에** 막습니다. 그대로 보내면 첫 칸이 400 으로 돌아오는데 그때는 이미 요금이
+    나간 뒤이고, 나누어떨어지지 않는 쪽은 400 도 나지 않고 캔버스에 띠만 남습니다 - 그 띠가
+    이 방식으로 없앤 "회차마다 흔들리는 여백" 입니다."""
+    with pytest.raises(render.RenderFailedError, match=expected):
+        render._panel_size(ImageSpec(width=width, height=height))
 
 
 def test_the_request_decides_the_quality_tier(
@@ -174,12 +305,14 @@ def test_the_request_decides_the_quality_tier(
     """
     images = FakeImages(payload=png_bytes())
     install(monkeypatch, images)
-
     render.render_image(single_ad_request(), model_settings)
-    render.render_image(comic_request(), model_settings)
+
+    panels = FakePanels()
+    install(monkeypatch, panels)
+    render.render_image(comic_request(96, 64), model_settings)
 
     assert images.calls[0]["quality"] == "low"
-    assert images.calls[1]["quality"] == "medium"
+    assert {call["quality"] for call in panels.calls} == {"medium"}, "칸 6장이 같은 티어여야 합니다"
 
 
 def test_the_tier_is_always_sent(monkeypatch: pytest.MonkeyPatch, model_settings: Settings) -> None:
@@ -202,15 +335,18 @@ def test_the_dev_override_wins_and_leaves_a_warning(
     ⚠️ 경고가 함께 남아야 합니다. 조용히 덮어쓰면 이 상태로 잰 숫자가 운영 경로의 숫자로
     보고됩니다 - 스텁을 측정값으로 읽는 것과 같은 사고입니다.
     """
-    images = FakeImages(payload=png_bytes())
-    install(monkeypatch, images)
+    panels = FakePanels()
+    install(monkeypatch, panels)
     settings = Settings(generation_mode="model", model_api_key="k", image_quality_override="low")
 
     with caplog.at_level(logging.WARNING, logger="ai_engine.render"):
-        render.render_image(comic_request(), settings)
+        render.render_image(comic_request(96, 64), settings)
 
-    assert images.calls[0]["quality"] == "low"
+    assert {call["quality"] for call in panels.calls} == {"low"}
     assert "medium" in caplog.text, "덮어쓴 원래 티어가 로그에 남아야 합니다"
+    assert caplog.text.count("ADGEN_IMAGE_QUALITY_OVERRIDE") == 1, (
+        "칸마다 경고를 내면 세트 하나에 6줄이 쌓여 로그가 읽히지 않습니다"
+    )
 
 
 def test_the_result_is_lossless_webp_whatever_the_api_returned(
@@ -226,6 +362,130 @@ def test_the_result_is_lossless_webp_whatever_the_api_returned(
     assert payload[8:12] == b"WEBP"
     with Image.open(io.BytesIO(payload)) as image:
         assert image.size == (64, 64)
+
+
+# ---- 만화형: 컷별 생성과 합성 (ADR-0017) ------------------------------------------
+
+
+def test_a_comic_is_six_calls_with_the_first_panel_as_the_reference(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 1번 칸만 `generate` 이고 나머지 다섯은 `edit` 입니다.
+
+    이 모양이 병렬의 근거입니다 - 2 ~ 6번이 서로가 아니라 **전부 1번 칸만** 레퍼런스로 쓰므로
+    칸끼리 의존이 없습니다. 직전 칸을 넘기도록 바꾸면 의존이 생겨 병렬과 배타가 되고,
+    ADR-0017 의 결정 자체가 뒤집힙니다.
+    """
+    panels = FakePanels()
+    install(monkeypatch, panels)
+
+    render.render_image(comic_request(96, 64), model_settings)
+
+    assert len(panels.calls) == 6
+    assert len(panels.edits) == 5
+    references = {call["image"][0][1] for call in panels.edits}
+    assert len(references) == 1, "다섯 칸이 같은 1번 칸을 봐야 합니다"
+    assert {call["size"] for call in panels.calls} == {"32x32"}
+
+
+def test_every_reference_is_a_separate_object(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 다섯 스레드가 열린 파일 객체 하나를 함께 읽으면 읽기 위치가 섞여 본문이 깨집니다.
+    실험 하네스는 순차라 이 함정이 드러나지 않았습니다 - 바이트를 넘겨 SDK 가 각자 감싸게 합니다."""
+    panels = FakePanels()
+    install(monkeypatch, panels)
+
+    render.render_image(comic_request(96, 64), model_settings)
+
+    for call in panels.edits:
+        assert isinstance(call["image"][0][1], bytes)
+
+
+def test_the_five_later_panels_really_are_in_flight_together(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """A2. 순차로 돌면 `medium` 한 세트가 310.8초라 호출자의 300초 예산을 넘습니다.
+
+    ⚠️ 시간을 재지 않고 **동시 도착**을 잽니다. 다섯이 모두 도착해야 장벽이 열리므로, 순차
+    구현이면 첫 호출이 여기서 시간 초과로 깨집니다. `sleep` 으로 재는 방식은 느린 CI 에서
+    흔들려서 결국 아무도 믿지 않는 테스트가 됩니다.
+    """
+    panels = FakePanels(barrier=threading.Barrier(5, timeout=10))
+    install(monkeypatch, panels)
+
+    render.render_image(comic_request(96, 64), model_settings)
+
+    assert len(panels.edits) == 5
+
+
+def test_the_panels_land_in_reading_order_with_no_gaps(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """계약의 `Panel.index` 가 3x2 배치 위치와 1:1 입니다 (왼쪽 위에서 오른쪽으로).
+
+    ⚠️ **픽셀로 확인합니다.** "6칸이 균등한가" 를 Y/N 으로 보면 배치가 뒤바뀌어도 통과합니다 -
+    한 장 생성 방식의 규격 미달이 30건 내내 안 잡힌 이유가 그것이었습니다. 여기서는 칸마다
+    색을 달리하고 각 칸의 중앙 픽셀을 읽습니다.
+
+    바깥 여백이 0px 인 것도 같은 방식으로 잡힙니다. 여백이 있으면 모서리 픽셀이 배경색입니다.
+    """
+    panels = FakePanels()
+    install(monkeypatch, panels)
+
+    payload = render.render_image(comic_request(96, 64), model_settings)
+
+    with Image.open(io.BytesIO(payload)) as canvas:
+        image = canvas.convert("RGB")
+        assert image.size == (96, 64)
+        for index in range(1, 7):
+            column, row = (index - 1) % 3, (index - 1) // 3
+            center = (column * 32 + 16, row * 32 + 16)
+            assert image.getpixel(center) == FakePanels.color(index), f"{index}번 칸의 자리"
+        for corner in ((0, 0), (95, 0), (0, 63), (95, 63)):
+            assert image.getpixel(corner) != render.COMPOSE_BACKGROUND, "바깥 여백은 0px 입니다"
+
+
+def test_the_composed_comic_is_lossless_webp(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """합성 단계가 생겨도 계약이 정한 형식은 그대로입니다. 검증 1순위가 채점하는 것이 칸에
+    그려진 한글 글자라, 손실 압축을 한 번이라도 거치면 채점이 압축 아티팩트를 재게 됩니다."""
+    install(monkeypatch, FakePanels())
+
+    payload = render.render_image(comic_request(96, 64), model_settings)
+
+    assert payload[:4] == b"RIFF"
+    assert payload[8:12] == b"WEBP"
+
+
+def test_one_failed_panel_fails_the_whole_set(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """A3 / N20-a. 부분 재시도는 열지 않습니다 (ADR-0017).
+
+    불완전한 세트를 내보내는 것보다 명시적으로 실패하는 편이 낫고, 이는 열화를 브리프 자동
+    채움 하나로 한정한 ADR-0005 와 같은 방향입니다. **어느 칸이 깨졌는지는 메시지에 남습니다** -
+    6회 호출 중 하나가 실패한 것이라, 그 정보가 없으면 로그만 보고는 재현할 수 없습니다.
+    """
+    install(monkeypatch, FakePanels(fail_on=4))
+
+    with pytest.raises(render.RenderFailedError, match="4번 칸이 실패"):
+        render.render_image(comic_request(96, 64), model_settings)
+
+
+def test_a_failing_first_panel_never_fans_out(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """1번 칸이 실패하면 나머지 다섯은 레퍼런스가 없어 부를 수 없습니다. 그래도 부르면 요금이
+    다섯 번 더 나가고 결과는 어차피 실패입니다."""
+    panels = FakePanels(fail_on=1)
+    install(monkeypatch, panels)
+
+    with pytest.raises(render.RenderFailedError):
+        render.render_image(comic_request(96, 64), model_settings)
+
+    assert panels.edits == []
 
 
 # ---- 실패 -------------------------------------------------------------------------

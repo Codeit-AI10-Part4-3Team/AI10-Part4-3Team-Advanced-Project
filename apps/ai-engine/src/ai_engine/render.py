@@ -16,13 +16,14 @@ Two properties the stub keeps even though it draws nothing:
 import base64
 import io
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from PIL import Image, ImageDraw
 
 from ai_engine import render_prompt
 from ai_engine.config import Settings
-from ai_engine.models import ImageRenderRequest
+from ai_engine.models import ComicDraft, ImageRenderRequest, ImageSpec, Panel
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,19 @@ class RenderFailedError(RuntimeError):
 
 STUB_BACKGROUND = (238, 238, 244)
 STUB_FOREGROUND = (120, 120, 140)
+
+PANEL_COLS = 3
+PANEL_ROWS = 2
+"""만화형 격자 (생성_파이프라인 6절). 칸 수 6 은 계약의 `ComicDraft.panels` 가 강제합니다.
+
+⚠️ **칸의 픽셀 크기는 여기 없습니다.** `spec` 을 이 격자로 나눠 얻습니다 - 1152 를 상수로
+적어 두면 기획서 10.2 의 숫자가 계약과 여기 두 곳에 생기고, 호출자가 다른 크기를 보내는 순간
+조용히 어긋납니다 (`ImageSpec` 이 유도되지 않는 것과 같은 이유).
+"""
+
+COMPOSE_BACKGROUND = (255, 255, 255)
+"""칸이 캔버스를 빈틈없이 덮으므로 보일 일이 없습니다. 그래도 흰색인 이유는, 보인다면 그것이
+합성이 어긋났다는 신호이고 흰 띠가 검은 띠보다 눈에 띄기 때문입니다."""
 
 
 def render_image(request: ImageRenderRequest, settings: Settings) -> bytes:
@@ -89,10 +103,9 @@ def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes
     placeholder returned from this branch would be indistinguishable from a successful
     render in every log, metric and screenshot.
 
-    ⚠️ The call shape is the one 검증 1순위 actually got images out of
-    (`notebooks/hj/verify01_korean_text_rendering/run_experiment.py`, 2026-08-14): one
-    request, `n=1`, inline base64. A URL response is refused rather than downloaded — the
-    experiment never exercised that path, so treating it as equivalent would be a guess.
+    출력 유형에 따라 호출 수가 다릅니다. 단일 광고형은 1회, 만화형은 **6회** 입니다
+    (ADR-0017). 세션당 렌더 1회를 세는 INV-3 은 렌더 요청을 세지 외부 호출을 세지 않으므로
+    그대로입니다.
     """
     if not settings.model_api_key:
         raise RenderFailedError(
@@ -100,37 +113,234 @@ def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes
             "스텁으로 되돌아가면 그 결과가 측정값처럼 보입니다 (구현_범위 1.1절)."
         )
 
-    prompt = render_prompt.build(request)
-    size = f"{request.spec.width}x{request.spec.height}"
+    client = _client(settings)
+    quality = _quality(request, settings)
+    if isinstance(request.draft, ComicDraft):
+        return _render_panels(request, request.draft, settings, client, quality)
+    return _to_lossless_webp(_render_one_shot(request, settings, client, quality))
 
-    # ⚠️ 지연 import. `openai` 는 optional extra 라 스텁만 돌리는 CI 와 컨테이너에는 없습니다.
-    # 모듈 최상단에서 import 하면 이 파일을 읽는 것만으로 ImportError 가 나고, 증상은
-    # "스텁 모드인데 엔진이 기동하지 않는다" 로 보입니다.
+
+def _client(settings: Settings) -> Any:
+    """벤더 클라이언트. **지연 import 를 여기 하나로 모읍니다.**
+
+    ⚠️ `openai` 는 optional extra 라 스텁만 돌리는 CI 와 컨테이너에는 없습니다. 모듈
+    최상단에서 import 하면 이 파일을 읽는 것만으로 ImportError 가 나고, 증상은 "스텁 모드인데
+    엔진이 기동하지 않는다" 로 보입니다.
+
+    ⚠️ `timeout` 은 **호출 하나**의 상한입니다. 만화형은 1번 칸을 만든 뒤 나머지 다섯을 동시에
+    부르므로 최악의 대기가 이 값의 2배까지 늘어납니다 (칸 하나가 실제로 이 상한까지 갔을 때).
+    호출자의 `render_timeout_s` 예산과 맞물리는 값이라 이슈 #141 에서 함께 정합니다.
+    """
     try:
         from openai import OpenAI
     except ImportError as exc:  # pragma: no cover - 설치 여부에 따라 갈리는 경로
         raise RenderFailedError(
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
+    return OpenAI(api_key=settings.model_api_key, timeout=settings.image_timeout_s)
 
-    client = OpenAI(api_key=settings.model_api_key, timeout=settings.image_timeout_s)
+
+def _render_one_shot(
+    request: ImageRenderRequest, settings: Settings, client: Any, quality: str
+) -> bytes:
+    """단일 광고형 1장. 칸이 하나뿐이라 합성 단계를 지나지 않습니다 (생성_파이프라인 6절).
+
+    ⚠️ The call shape is the one 검증 1순위 actually got images out of
+    (`notebooks/hj/verify01_korean_text_rendering/run_experiment.py`, 2026-08-14): one
+    request, `n=1`, inline base64. A URL response is refused rather than downloaded — the
+    experiment never exercised that path, so treating it as equivalent would be a guess.
+    """
+    return _generate(
+        client,
+        settings,
+        prompt=render_prompt.build(request),
+        size=f"{request.spec.width}x{request.spec.height}",
+        quality=quality,
+        reference=None,
+    )
+
+
+def _render_panels(
+    request: ImageRenderRequest,
+    draft: ComicDraft,
+    settings: Settings,
+    client: Any,
+    quality: str,
+) -> bytes:
+    """만화형: 칸을 따로 만들어 3x2 로 붙입니다 (ADR-0017).
+
+    한 장에 6칸을 그리게 하는 방식은 **규격이 산술적으로 달성되지 않아** 폐기됐습니다 -
+    3456 / 3 = 1152 는 경계선과 바깥 여백이 0 일 때만 성립하는데, 경계선을 그리라고 지시한
+    이상 칸은 반드시 그보다 작아집니다 (실측 1101 ~ 1142px, 여백 14 ~ 36px).
+
+    **1번 칸을 먼저 만들고 2 ~ 6번을 동시에 부릅니다.** 순서가 아니라 의존이 이유입니다 -
+    2 ~ 6번은 서로가 아니라 전부 1번 칸만 레퍼런스로 쓰므로 칸끼리 의존이 없습니다. 직전 칸을
+    레퍼런스로 넘기는 방식은 이 성질을 깨서 병렬과 배타이고, ADR-0017 이 함께 쓰지 않기로
+    했습니다.
+
+    | | 순차 | 병렬 |
+    |---|---|---|
+    | `medium` 한 세트 | 310.8초 (`render_timeout_s` 300초 초과) | 102.6 ~ 139.2초 |
+
+    호출 수와 비용은 두 방식이 같습니다. 줄어드는 것은 대기 시간뿐입니다.
+    """
+    panel_size = _panel_size(request.spec)
+    size = f"{panel_size[0]}x{panel_size[1]}"
+    panels = sorted(draft.panels, key=lambda panel: panel.index)
+    logger.info("만화형 컷별 생성: %d칸 %s (1번 뒤 %d건 동시)", len(panels), size, len(panels) - 1)
+
+    def draw(panel: Panel, reference: bytes | None) -> bytes:
+        return _generate(
+            client,
+            settings,
+            prompt=render_prompt.build_panel(request, panel, with_reference=reference is not None),
+            size=size,
+            quality=quality,
+            reference=reference,
+        )
+
+    head, rest = panels[0], panels[1:]
+    first = _as_png(draw(head, None))
+
+    # 네트워크 대기가 지배적이라 스레드로 충분합니다. GIL 은 문제가 되지 않습니다.
+    #
+    # ⚠️ **잡 하나 안에서만 동시입니다.** 잡끼리는 여전히 직렬 1건이고 그것은 호출자의
+    # `jobs.next_queued` 가 강제합니다 (ADR-0015). 두 층을 섞으면 동시 외부 호출이 잡 수만큼
+    # 곱해집니다.
+    with ThreadPoolExecutor(max_workers=len(rest)) as pool:
+        pending = [(panel, pool.submit(draw, panel, first)) for panel in rest]
+        tiles = [first]
+        for panel, future in pending:
+            try:
+                tiles.append(future.result())
+            except RenderFailedError as exc:
+                # A3 / N20-a. **한 칸이라도 실패하면 세트 전체가 실패입니다.** 부분 재시도는
+                # 열지 않습니다 (ADR-0017) - 불완전한 세트를 내보내는 것보다 명시적으로
+                # 실패하는 편이 낫고, 이는 열화를 브리프 자동 채움 하나로 한정한 ADR-0005 와
+                # 같은 방향입니다. 이미 나간 다른 칸의 요금은 돌아오지 않습니다.
+                raise RenderFailedError(
+                    f"{panel.index}번 칸이 실패해 세트 전체를 버립니다: {exc}"
+                ) from exc
+
+    return _compose(tiles, panel_size, request.spec)
+
+
+def _panel_size(spec: ImageSpec) -> tuple[int, int]:
+    """칸 하나의 픽셀 크기. **호출자가 보낸 캔버스를 격자로 나눠 얻습니다.**
+
+    ⚠️ 1152 를 상수로 두지 않는 이유는 `ImageSpec` 을 유도하지 않는 이유와 같습니다 - 같은
+    숫자가 계약과 구현 두 곳에 생기면 한쪽만 고치는 순간 어긋납니다 (미결정_대장 N16).
+
+    나누어떨어지지 않으면 여기서 멈춥니다. 그대로 진행하면 반올림한 만큼 캔버스에 띠가
+    남는데, 그것이 바로 이 방식으로 없앤 "회차마다 흔들리는 여백" 입니다.
+    """
+    width, height = spec.width // PANEL_COLS, spec.height // PANEL_ROWS
+    if width * PANEL_COLS != spec.width or height * PANEL_ROWS != spec.height:
+        raise RenderFailedError(
+            f"{spec.width}x{spec.height} 는 {PANEL_COLS}x{PANEL_ROWS} 격자로 "
+            "나누어떨어지지 않습니다. 만화형 캔버스는 칸의 정수배여야 합니다 "
+            "(생성_파이프라인 6절: 3456x2304)."
+        )
+    if width % 16 or height % 16:
+        # 벤더 제약(가로 세로 모두 16의 배수). 여기서 막지 않으면 6회 중 첫 호출이 400 으로
+        # 돌아오는데, 그때는 이미 요금이 나간 뒤입니다.
+        raise RenderFailedError(
+            f"칸 크기 {width}x{height} 가 16의 배수가 아닙니다 (gpt-image-2 제약)."
+        )
+    return width, height
+
+
+def _generate(
+    client: Any,
+    settings: Settings,
+    *,
+    prompt: str,
+    size: str,
+    quality: str,
+    reference: bytes | None,
+) -> bytes:
+    """외부 API 호출 1회. 레퍼런스가 있으면 `images.edit`, 없으면 `images.generate`.
+
+    두 경로 모두 검증 1순위가 실제로 이미지를 받아낸 모양입니다 (`run_panels.py`, 2026-08-20
+    기준 42회). 인자를 바꾸면 그 실측치가 이전되지 않습니다.
+    """
     kwargs: dict[str, Any] = {
         "model": settings.image_model,
         "prompt": prompt,
         "size": size,
         "n": 1,
-        "quality": _quality(request, settings),
+        "quality": quality,
     }
 
     try:
-        response = client.images.generate(**kwargs)
+        if reference is None:
+            response = client.images.generate(**kwargs)
+        else:
+            # ⚠️ 스레드마다 **새 튜플**을 만듭니다. 열린 파일 객체 하나를 다섯 스레드가 함께
+            # 읽으면 읽기 위치가 섞여 본문이 깨집니다 - 실험 하네스는 순차라 이 함정이
+            # 드러나지 않았습니다. 바이트를 그대로 넘기면 SDK 가 각자 감쌉니다.
+            response = client.images.edit(image=[("panel.png", reference, "image/png")], **kwargs)
     except Exception as exc:
         # 벤더 예외 계층에 의존하지 않습니다.
         # 인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음.
         # 벤더의 예외 클래스를 나눠 잡으면 SDK 버전이 오를 때 조용히 빠지는 갈래가 생깁니다.
         raise RenderFailedError(f"{type(exc).__name__}: {exc}") from exc
 
-    return _to_lossless_webp(_inline_bytes(response))
+    return _inline_bytes(response)
+
+
+def _as_png(payload: bytes) -> bytes:
+    """레퍼런스로 넘길 바이트를 PNG 로 맞춥니다.
+
+    `images.edit` 에 형식을 선언해서 보내는데, 벤더가 무엇을 돌려주는지는 우리가 정하는 값이
+    아닙니다. 선언과 내용이 다르면 5건이 한꺼번에 400 으로 돌아옵니다. PNG 는 무손실이라 이
+    한 번의 재인코딩이 1번 칸의 픽셀을 바꾸지 않습니다 - 그 칸도 최종 합성에 그대로 들어가므로
+    손실 압축을 끼워 넣을 수 없는 자리입니다.
+    """
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="PNG")
+    except OSError as exc:
+        raise RenderFailedError(f"1번 칸 이미지를 읽지 못했습니다: {exc}") from exc
+    return buffer.getvalue()
+
+
+def _compose(tiles: list[bytes], panel_size: tuple[int, int], spec: ImageSpec) -> bytes:
+    """칸 6장을 3x2 로 붙여 무손실 WebP 로 내보냅니다.
+
+    읽는 순서대로 왼쪽 위에서 오른쪽으로 채웁니다 (계약 `Panel.index` 가 배치 위치와 1:1).
+
+    **경계선과 바깥 여백은 0px 이고, 그것이 이 방식을 택한 이유입니다.** 여백을 합성 단계가
+    결정하므로 회차 편차가 존재하지 않고, 고정 좌표 크롭이 성립합니다 - 인스타그램 그리드로
+    자를 때 칸이 어긋나지 않습니다.
+    """
+    panel_width, panel_height = panel_size
+    canvas = Image.new("RGB", (spec.width, spec.height), COMPOSE_BACKGROUND)
+    try:
+        for index, payload in enumerate(tiles):
+            with Image.open(io.BytesIO(payload)) as tile:
+                image = tile.convert("RGB")
+                if image.size != panel_size:
+                    # ⚠️ 여기 걸리면 "칸 1152px 정확" 이 이미 깨진 것입니다. 붙이기는 하되
+                    # 조용히 넘기지 않습니다 - 크기를 지정해 보냈는데 다른 것이 왔다는 뜻이고,
+                    # 그 사실이 로그에 없으면 다음 사람이 픽셀을 재기 전까지 모릅니다.
+                    logger.warning(
+                        "%d번 칸이 %s 로 왔습니다. 요청은 %s 였습니다. 늘려 붙입니다.",
+                        index + 1,
+                        image.size,
+                        panel_size,
+                    )
+                    image = image.resize(panel_size, Image.Resampling.LANCZOS)
+                canvas.paste(
+                    image,
+                    ((index % PANEL_COLS) * panel_width, (index // PANEL_COLS) * panel_height),
+                )
+        buffer = io.BytesIO()
+        canvas.save(buffer, format="WEBP", lossless=True)
+    except OSError as exc:
+        raise RenderFailedError(f"칸을 합성하지 못했습니다: {exc}") from exc
+    return buffer.getvalue()
 
 
 def _quality(request: ImageRenderRequest, settings: Settings) -> str:

@@ -10,6 +10,7 @@ The three questions this file exists to answer:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,272 @@ def test_the_degraded_and_needs_input_cases_are_told_apart_by_one_key(
     assert degraded["state"] == asked["state"] == "brief_filling"
     assert "needsInput" not in degraded
     assert "needsInput" in asked
+
+
+# ---- answering needsInput: the retry (계약 `PATCH .../brief`, 미결정_대장 B-11) ---------
+
+
+def _patch_brief(client: TestClient, body: dict[str, Any], **patch: Any) -> dict[str, Any]:
+    """PATCH the brief the way a client does — **camelCase keys**.
+
+    ⚠️ The conversion is not cosmetic. `Base` sets `populate_by_name=True`, so `art_style`
+    would also be accepted and the test would pass while pinning the wrong thing: "the cost
+    guard skips `art_style`" instead of "the cost guard skips `artStyle`", which is the name
+    the contract and the screen actually use (PR #148 리뷰, 신호정).
+    """
+    camel = {
+        re.sub(r"_(.)", lambda m: m.group(1).upper(), field): value
+        for field, value in patch.items()
+    }
+    response = client.patch(
+        f"/v1/sessions/{body['sessionId']}/brief",
+        json={"revision": body["revision"], "patch": camel},
+    )
+    assert response.status_code == 200, response.text
+    answer: dict[str, Any] = response.json()
+    return answer
+
+
+def test_answering_needs_input_asks_the_engine_again_and_lets_the_session_out(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """The contract: "`needsInput`이 걸린 세션에서 `note`를 채우면 서버가 추론을 다시 시도합니다".
+
+    ⚠️ **Without the retry this session has no exit.** `category` and `target` are filled by
+    inference, nobody else writes them on this path, and `brief_filling -> brief_filling` is
+    a legal edge — so the screen would ask for a note for ever however much the user typed.
+    That was unreachable while `brief:fill` was a stub and became reachable the day it was
+    not (2026-08-20).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+    assert created["state"] == "brief_filling"
+
+    ai.needs_input = None
+    answered = _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    assert answered["state"] == "brief_ready"
+    assert answered["brief"]["category"] == FILLED_CATEGORY
+    assert "needsInput" not in answered
+    # The retry has to have seen the new note, not the one that already failed.
+    assert ai.briefs_requested[-1][2] == "여름용 수분 크림입니다"
+
+
+def test_the_retry_does_not_overwrite_a_value_the_user_typed_in_the_same_patch(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """기획서 5.4 read from the other side: a correction the person just made stands.
+
+    Filling the blanks is the retry's job; replacing an answer is not. If the user names a
+    `category` in the very request that triggers the retry, the model's guess for that field
+    is late and wrong to apply.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.needs_input = None
+    answered = _patch_brief(client, created, note="여름용 수분 크림", category="직접 고른 카테고리")
+
+    assert answered["brief"]["category"] == "직접 고른 카테고리"
+    assert answered["briefMeta"]["category"]["filledBy"] == "user"
+    # The field the user left alone is the model's, and says so.
+    assert answered["brief"]["target"] == FILLED_TARGET
+    assert answered["briefMeta"]["target"]["filledBy"] == "inferred"
+
+
+def test_a_patch_that_cannot_change_the_answer_does_not_pay_for_a_retry(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """`artStyle` is not an input to `brief:fill`, so asking again would buy the same answer.
+
+    The guard is about money, not correctness: every retry is a vendor call, and a screen
+    that patches on each edit would multiply them by the number of keystrokes.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+    calls = len(ai.briefs_requested)
+
+    _patch_brief(client, created, art_style="minimal")
+
+    assert len(ai.briefs_requested) == calls
+
+
+def test_an_ordinary_patch_on_a_settled_brief_never_calls_the_engine(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """No `needsInput`, no retry. A `brief_ready` session is not waiting on an inference."""
+    created = _create(client)
+    assert "needsInput" not in created
+    calls = len(ai.briefs_requested)
+
+    _patch_brief(client, created, selling_point="가볍게 발립니다")
+
+    assert len(ai.briefs_requested) == calls
+
+
+def test_a_retry_that_cannot_run_degrades_and_hands_the_user_the_other_way_out(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """The engine went down between the question and the answer.
+
+    ⚠️ `needsInput` is **cleared**, and that is the point rather than a side effect. The
+    contract splits the two brief_filling cases on that key: `needsInput` means inference
+    ran and could not decide, `degraded` means it could not run. Leaving the key on would
+    keep the screen asking for a note that now leads nowhere, while `degraded` is the state
+    whose documented exit is "the user fills `category` and `target` themselves".
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.available = False
+    answered = _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    assert answered["state"] == "brief_filling"
+    assert answered["messageMode"] == "degraded"
+    assert "needsInput" not in answered
+
+    # And that exit actually works: filling the two by hand reaches brief_ready.
+    settled = _patch_brief(client, answered, category="스킨케어", target="20대 여성")
+    assert settled["state"] == "brief_ready"
+
+
+def test_a_retry_that_is_still_undecided_stays_put_rather_than_failing(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """⚠️ **This is the open case, pinned as it is today rather than as the contract wants.**
+
+    The contract promises 422 `INSUFFICIENT_INPUT` and a `failed` session here. It does not
+    happen yet, and deliberately: *when* to give up (first failure? third?) is
+    미결정_대장 B-11, whose 확정 근거 is 회의록 — the ledger's own rule forbids picking a
+    number in code. This test exists so the day that number is decided, the change shows up
+    here as a failure instead of passing unnoticed.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.needs_input = NeedsInput(field="note", reason="아직도 판단이 서지 않습니다.")
+    answered = _patch_brief(client, created, note="음")
+
+    assert answered["state"] == "brief_filling"
+    assert answered["messageMode"] == "normal"
+    # The reason is refreshed, so the screen shows what is missing *now*.
+    assert answered["needsInput"]["reason"] == "아직도 판단이 서지 않습니다."
+
+
+def test_a_degraded_session_is_still_allowed_to_try_again(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """An outage must not cost the session its retry for ever.
+
+    ⚠️ **This is the trap `wants_refill` fell into** (PR #148 리뷰, 신호정): a failed retry
+    clears `needsInput`, so a rule keyed only on `needsInput` turned one bad second into a
+    permanent loss of auto-fill — with nothing on screen to say why. The user would keep
+    rewriting the note and keep getting blanks.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.available = False
+    degraded = _patch_brief(client, created, note="여름용 수분 크림")
+    assert degraded["messageMode"] == "degraded"
+
+    ai.available = True
+    ai.needs_input = None
+    recovered = _patch_brief(client, degraded, note="여름용 수분 크림, 무향입니다")
+
+    assert recovered["state"] == "brief_ready"
+    assert recovered["messageMode"] == "normal"
+    assert recovered["brief"]["category"] == FILLED_CATEGORY
+
+
+def test_saving_the_same_note_again_does_not_pay_for_the_same_answer(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """The guard compares values, not keys.
+
+    A screen that autosaves, or a person fixing a typo and saving twice, sends `note` every
+    time. Billing each one buys the identical answer repeatedly (PR #148 리뷰, 신호정).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.needs_input = NeedsInput(field="note", reason="아직도 판단이 서지 않습니다.")
+    once = _patch_brief(client, created, note="여름용 수분 크림")
+    after_first = len(ai.briefs_requested)
+
+    twice = _patch_brief(client, once, note="여름용 수분 크림")
+
+    assert len(ai.briefs_requested) == after_first
+    assert twice["needsInput"]["reason"] == "아직도 판단이 서지 않습니다."
+
+
+def test_a_brief_with_nothing_left_to_infer_does_not_call_the_engine(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """A settled brief has no blank for the retry to fill, so the call is bought to be thrown away.
+
+    ⚠️ The reachable case is a **degraded session the user finished by hand**: `messageMode`
+    stays `degraded` after `replace_brief` moves it to `brief_ready`, so a rule keyed only on
+    the mode would keep paying for retries on a brief that is already complete. `_fold_refill`
+    fills blanks only, so every one of those answers would be discarded.
+    """
+    ai.available = False
+    degraded = _create(client)
+    settled = _patch_brief(client, degraded, category="스킨케어", target="20대 여성")
+    assert settled["state"] == "brief_ready"
+    assert settled["messageMode"] == "degraded"
+
+    ai.available = True
+    calls = len(ai.briefs_requested)
+    _patch_brief(client, settled, note="나중에 덧붙인 메모")
+
+    assert len(ai.briefs_requested) == calls
+
+
+def test_a_photo_deleted_between_finding_it_and_reading_it_degrades(
+    client: TestClient, ai: FakeAiEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweeper runs on a timer **in this process**, so the two calls are a race.
+
+    ⚠️ Finding the file and opening it are separate syscalls, and the window is widest at
+    exactly 24 hours — which is when the user is most likely to be answering yesterday's
+    `needsInput`. Before the fix this answered a 500 to the very request carrying them to
+    the exit (PR #148 리뷰에서 신호정 재현).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    def vanished(self: Path) -> bytes:
+        raise FileNotFoundError(self)
+
+    monkeypatch.setattr(Path, "read_bytes", vanished)
+    answered = _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    assert answered["messageMode"] == "degraded"
+    assert "needsInput" not in answered
+
+
+def test_a_retry_whose_photo_expired_degrades_rather_than_asking_without_it(
+    client: TestClient, ai: FakeAiEngine, env: Path
+) -> None:
+    """`brief:fill` reads the picture as well as the words, and the picture lives 24 hours.
+
+    Sending the words alone would be a different question with a worse answer, and the
+    answer would be recorded as the model's. Degrading is the honest report — the inference
+    could not run — and it is the retention policy working, not a fault (세션_보관_정책 2절).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    for photo in (env / "images").iterdir():
+        photo.unlink()
+    calls = len(ai.briefs_requested)
+
+    answered = _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    assert len(ai.briefs_requested) == calls
+    assert answered["messageMode"] == "degraded"
+    assert "needsInput" not in answered
 
 
 # ---- durability (S2's completion condition, ADR-0010) -----------------------------------

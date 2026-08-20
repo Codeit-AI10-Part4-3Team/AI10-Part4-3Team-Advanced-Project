@@ -220,6 +220,11 @@ def prompt_hard() -> str:
 # 문서의 "6 ~ 14자" 같은 표기는 이 기준과 어긋나 있습니다 (README 의 주의 참고).
 LINE_LENGTH_BAND = (15, 25)
 
+# ⚠️ 구간 안에 있다고 설계가 유지되는 것은 아닙니다. 빈 구간을 **두 자 간격으로** 훑는 것이 이
+# 회차의 목적이라, 17자를 16자로 고쳐도 구간 검사와 중복 검사는 통과하고 커버리지만 조용히
+# 무너집니다. 그래서 간격 자체를 상수로 두고 아래에서 그대로 대조합니다.
+LINE_LENGTH_STEPS = (15, 17, 19, 21, 23, 25)
+
 PANELS_MID: tuple[Panel, ...] = (
     Panel(1, "아침, 식탁에 커피를 쏟고 당황한 표정의 30대 여성", "아침부터 커피를 또 쏟았네."),
     Panel(2, "선반에서 물티슈를 꺼내는 손", "이럴 때 쓰려고 미리 사 뒀지."),
@@ -250,13 +255,16 @@ def line_lengths(panels: tuple[Panel, ...] = PANELS_MID) -> tuple[int, ...]:
 
 
 def check_mid_band() -> None:
-    """대사가 의도한 구간 안에 있는지. 문장을 고치면 길이가 소리 없이 벗어납니다."""
+    """대사가 의도한 길이 구성인지. 문장을 고치면 길이가 소리 없이 벗어납니다."""
     low, high = LINE_LENGTH_BAND
     bad = [(p.index, len(p.line), p.line) for p in PANELS_MID if not low <= len(p.line) <= high]
     if bad:
         raise ValueError(f"길이 구간 {low} ~ {high} 를 벗어난 대사: {bad}")
-    if len(set(line_lengths())) != len(PANELS_MID):
-        raise ValueError(f"길이가 겹칩니다: {line_lengths()} - 겹치면 그 길이의 표본만 늘어납니다")
+    if line_lengths() != LINE_LENGTH_STEPS:
+        raise ValueError(
+            f"길이 구성이 설계와 다릅니다: {line_lengths()} != {LINE_LENGTH_STEPS} - "
+            "간격이 바뀌면 메우려던 빈 구간이 그대로 남고, 길이가 겹치면 그 길이의 표본만 늘어납니다"
+        )
 
 
 def prompt_mid() -> str:

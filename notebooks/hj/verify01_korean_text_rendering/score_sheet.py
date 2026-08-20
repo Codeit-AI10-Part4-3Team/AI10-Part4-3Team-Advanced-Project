@@ -178,6 +178,10 @@ def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int)
     ⚠️ **"틀린 칸 번호" 열이 비어 있으면 무오탈자로 셉니다.** 칸 수 열이 6이면 실제로 그렇고,
     6 미만인데 번호가 비면 어느 길이가 틀렸는지 알 수 없으므로 그 회차는 길이 집계에서
     빠집니다 - 회차 수와 길이 표본 수가 다르게 나오면 그것이 이유입니다.
+
+    ⚠️ **두 열이 서로 어긋나는 회차도 뺍니다.** 칸 수 6에 번호가 적혀 있거나, 칸 수 4에 번호가
+    하나뿐인 경우입니다. 어느 쪽이 맞는지 알 수 없는데 그대로 세면 없는 실패가 생기거나, 빠진
+    칸이 정상 표본으로 들어가 **상한이 실제보다 높게** 잡힙니다.
     """
     by_index = {p.index: len(p.line) for p in conditions.PANELS_MID}
     fails: dict[int, int] = {index: 0 for index in by_index}
@@ -190,7 +194,12 @@ def _tally_by_length(run_dir: Path, sheets: list[Path], prefix: str, total: int)
             bad = _bad_panels(cell)
             if panels_ok < conditions.PANEL_COUNT and not bad:
                 continue  # 틀렸다는데 어느 칸인지 안 적혔습니다
-            del run_id
+            if len(bad) != conditions.PANEL_COUNT - panels_ok:
+                print(
+                    f"    주의: {sheet.name} 의 {run_id}번 회차 - 칸 수 {panels_ok}, "
+                    f"틀린 칸 {sorted(bad)} - 두 열이 맞지 않아 길이 집계에서 뺍니다"
+                )
+                continue
             for index in by_index:
                 samples[index] += 1
                 if index in bad:

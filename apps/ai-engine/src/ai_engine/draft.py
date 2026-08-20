@@ -381,7 +381,10 @@ def _patched_comic(
         answer = cells.get(key)
         if not isinstance(answer, dict):
             raise DraftFailedError(f"{key}번 칸의 응답이 없습니다.")
-        changes = {
+        # ⚠️ `dict[str, str]` 을 명시합니다. 튜플 리터럴을 도는 컴프리헨션은 키를
+        # `Literal["scene", "dialogue"]` 로 추론하는데, `Mapping` 은 키에 불변이라
+        # `model_copy(update=...)` 가 그 타입을 받지 않습니다.
+        changes: dict[str, str] = {
             name: _text_at(answer, name)
             for name in ("scene", "dialogue")
             if name in cell_patch.model_fields_set

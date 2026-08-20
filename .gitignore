@@ -208,6 +208,12 @@ qdrant_storage/
 # AGENTS.md / CLAUDE.md 는 팀 공유 자산으로 커밋합니다.
 # 개인별 지침은 홈 디렉토리(~/.claude/CLAUDE.md 등)에 두세요.
 .claude/settings.local.json
+# 에이전트가 병렬 작업용 worktree 를 여기에 잡습니다. 무시하지 않으면 저장소 안에 중첩
+# 저장소가 생겨 `git add -A` 가 **gitlink(mode 160000) 한 줄**을 index 에 박습니다. git 이
+# 경고를 내므로 조용히 새지는 않지만, 그 커밋을 받은 사람은 해결할 수 없는 서브모듈 참조를
+# 들고 있게 되고 일부 CI 체크아웃이 거기서 실패합니다.
+# `.claude/` 를 통째로 무시하지 않는 이유는 위 두 줄의 방침입니다 - 공유 자산이 그 아래 옵니다.
+/.claude/worktrees/
 
 # --- OS & IDE Specifics ---
 .DS_Store

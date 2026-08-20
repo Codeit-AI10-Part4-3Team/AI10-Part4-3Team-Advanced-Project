@@ -6,7 +6,7 @@ Contract: packages/contracts/openapi.yaml. Edit it first (AGENTS.md 교체 순�
 drawn before the user confirms", which is the cost defence for the whole flow (INV-3).
 """
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import Field
 
@@ -25,6 +25,19 @@ PanelRole = Literal["hook", "setup", "problem", "solution", "proof", "cta"]
 
 ⚠️ `index` decides `role`; the user never picks it (INV-5). The six-beat structure is the
 planning rationale, so letting it be reordered discards the reason the format exists.
+"""
+
+PANEL_ROLES: tuple[PanelRole, ...] = get_args(PanelRole)
+"""The roles in reading order: `PANEL_ROLES[index - 1]` is panel `index`'s role (INV-5).
+
+⚠️ **Derived from the `Literal` rather than retyped**, so the two cannot part ways. Writing
+the list out again would put 기획서 7.3's six beats in two places, and whoever reordered one
+would have no reason to look at the other.
+
+The order is load-bearing, not incidental: it is 기획서 7.3's table read top to bottom
+(후킹 / 상황 제시 / 문제 / 해결 / 성능 / 만족과 CTA). `tests/models/test_pairing.py` asserts
+it against that table, because "the declaration happens to be in the right order" is exactly
+the kind of fact that stops being true silently.
 """
 
 

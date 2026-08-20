@@ -114,40 +114,28 @@ def fill_request() -> BriefFillRequest:
 # ---- 분기가 설정 하나로 갈리는가 ------------------------------------------------
 
 
-def test_model_branch_fails_loudly_on_the_unwritten_seams(model_settings: Settings) -> None:
-    """⚠️ The point of the whole design. An unwritten branch must not degrade politely.
+def test_no_model_branch_pretends_to_be_unwritten_any_more(model_settings: Settings) -> None:
+    """`NotImplementedError` 가 아니라 이음매별 실패 예외입니다.
 
-    A stub returned from the model branch would be indistinguishable from a real result in
-    every log, metric and screenshot.
+    ⚠️ 라우트에서는 셋 다 같은 503 이 되지만 뜻이 다릅니다 - "아직 안 만들었다"와 "지금 못
+    만든다" 입니다. 이 구분이 사라지면 배포에서 키가 빠졌을 때 로그가 "미구현" 이라고 말하고,
+    고칠 사람이 코드를 찾으러 갑니다.
 
-    ⚠️ `image:render` left this list on 2026-08-15 — its model branch is written now and
-    calls the external API (ADR-0003). It still fails loudly, but for a different reason
-    (no key, or the vendor said no), and `tests/test_render_model.py` covers that.
+    ⚠️ `image:render` 가 2026-08-15 에, 나머지 셋이 2026-08-20 에 이 목록을 떠났습니다. 그래도
+    **크게 실패한다는 성질은 그대로입니다** - 실물 분기가 조용히 그럴듯한 값을 돌려주면 로그에도
+    지표에도 스크린샷에도 성공한 생성과 똑같이 보입니다 (구현_범위 1.1절).
     """
     # Requests are built outside the blocks: a failure while building one would pass these
     # tests for the wrong reason, and then the branch could stop raising unnoticed.
     fill, generate = fill_request(), draft_request()
-    patch = patch_request(copy="새 카피")
+    patch, image = patch_request(copy="새 카피"), render_request()
 
-    with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
+    with pytest.raises(brief_fill.BriefFillFailedError):
         brief_fill.fill_brief(fill, model_settings)
-    with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
+    with pytest.raises(draft.DraftFailedError):
         draft.generate_draft(generate, model_settings)
-    with pytest.raises(NotImplementedError, match="ADGEN_GENERATION_MODE"):
+    with pytest.raises(draft.DraftFailedError):
         draft.patch_draft(patch, model_settings)
-
-
-def test_the_render_model_branch_no_longer_pretends_to_be_unwritten(
-    model_settings: Settings,
-) -> None:
-    """`NotImplementedError` 가 아니라 `RenderFailedError` 입니다.
-
-    ⚠️ 둘은 라우트에서 같은 503 이 되지만 뜻이 다릅니다 - "아직 안 만들었다"와 "지금 못
-    만든다" 입니다. 이 구분이 사라지면 배포에서 키가 빠졌을 때 로그가 "미구현" 이라고 말합니다.
-    """
-    # 위와 같은 이유로 요청은 블록 밖에서 만듭니다.
-    image = render_request()
-
     with pytest.raises(render.RenderFailedError):
         render.render_image(image, model_settings)
 
@@ -197,7 +185,12 @@ def test_draft_stub_echoes_guardrail_applied(stub_settings: Settings) -> None:
 
 def test_comic_branch_exists_but_is_not_faked(stub_settings: Settings) -> None:
     """The branch is structure (기획서 5.3); filling it with six fake panels would make the
-    comic path look finished."""
+    comic path look finished.
+
+    ⚠️ **스텁 이야기입니다.** 실물 분기는 2026-08-20 부터 여섯 칸을 실제로 씁니다 - 칸 수와
+    역할이 계약과 기획서 7.3 에 있으므로 거기서 새로 정하는 값이 없기 때문입니다. 스텁이
+    같은 일을 하면 지어내는 것이 됩니다.
+    """
     comic = Brief.model_validate(
         {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
     )
@@ -301,13 +294,14 @@ def test_every_generation_path_documents_503(client: TestClient) -> None:
         assert "503" in spec["paths"][path]["post"]["responses"], path
 
 
-def test_unimplemented_model_branch_surfaces_as_503_not_500(
+def test_a_model_branch_failure_surfaces_as_503_not_500(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """호출자에게는 재시도 가능한 상태여야 합니다. 500 은 계약에 없는 답입니다.
 
-    ⚠️ 스텁이 아니라 **실물 분기가 비어 있을 때**의 동작입니다. 이것이 500 으로 새면 화면이
-    분기할 근거가 없고, 로그에서도 우리 결함과 상류 장애가 구분되지 않습니다.
+    ⚠️ 스텁이 아니라 **실물 분기가 실패했을 때**의 동작입니다 (여기서는 키가 없는 배포).
+    이것이 500 으로 새면 화면이 분기할 근거가 없고, 로그에서도 우리 결함과 상류 장애가
+    구분되지 않습니다.
     """
     monkeypatch.setattr(service, "settings", lambda: Settings(generation_mode="model"))
     response = client.post(

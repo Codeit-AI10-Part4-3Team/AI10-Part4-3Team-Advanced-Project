@@ -150,7 +150,9 @@ def fill_brief(
     """
     try:
         return brief_fill.fill_brief(body, settings())
-    except NotImplementedError as exc:
+    except brief_fill.BriefFillFailedError as exc:
+        # ⚠️ 열화는 여기가 아니라 호출자가 합니다 (ADR-0005). 이 서비스가 그럴듯한 값을 만들어
+        # 200 을 내면 호출자는 열화한 줄 모르고, 지어낸 카테고리가 브리프에 저장됩니다.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -163,7 +165,10 @@ def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
     """
     try:
         return draft.generate_draft(request, settings())
-    except NotImplementedError as exc:
+    except (NotImplementedError, draft.DraftFailedError) as exc:
+        # ⚠️ 둘 다 503 입니다. "아직 안 만들었다"(스텁의 만화형 갈래)와 "지금 못 만든다"는
+        # 우리에게는 다른 이야기지만 호출자에게는 같은 답이고, 계약이 이 경로에 준 실패 코드는
+        # 하나입니다. 거절은 여기로 오지 않습니다 - 그것은 200 입니다.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -179,7 +184,7 @@ def patch_draft(request: DraftPatchEngineRequest) -> DraftGenerateResponse:
     """
     try:
         return draft.patch_draft(request, settings())
-    except NotImplementedError as exc:
+    except (NotImplementedError, draft.DraftFailedError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

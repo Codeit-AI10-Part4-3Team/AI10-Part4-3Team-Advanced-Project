@@ -20,6 +20,7 @@ Two exceptions to "all contract schemas live here":
 from ai_engine.models.brief import Brief, Character, NeedsInput, check_brief_matches_output_type
 from ai_engine.models.common import Base, Error, ErrorCode, Omittable, OutputType
 from ai_engine.models.draft import (
+    PANEL_ROLES,
     AdPlan,
     ComicDraft,
     Draft,
@@ -47,6 +48,7 @@ from ai_engine.models.patch import (
 )
 
 __all__ = [
+    "PANEL_ROLES",
     "AdPlan",
     "Base",
     "Brief",

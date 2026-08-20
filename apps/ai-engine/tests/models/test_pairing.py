@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from ai_engine.models import (
+    PANEL_ROLES,
     Brief,
     ComicDraft,
     DraftGenerateRequest,
@@ -143,6 +144,17 @@ def test_a_comic_draft_needs_exactly_six_panels() -> None:
     """0 and 7 are both invalid (INV-1) — six beats are the planning rationale itself."""
     with pytest.raises(ValidationError):
         ComicDraft(ad_plan="기획안", panels=COMIC_DRAFT.panels[:5])
+
+
+def test_the_panel_roles_are_in_the_order_the_planning_document_gives() -> None:
+    """⚠️ `PANEL_ROLES[index - 1]` 이 그 칸의 역할이라는 규약이 여기 걸려 있습니다 (INV-5).
+
+    순서가 `Literal` 선언 순서에서 나오므로, 누군가 열거값을 알파벳순으로 정리하는 것만으로도
+    4번 칸이 "제품 등장과 해결" 이 아니게 됩니다 - 스키마는 그대로 통과하고 생성된 만화의
+    이야기 구조만 조용히 무너집니다. 기준은 기획서 7.3 의 표입니다.
+    """
+    assert PANEL_ROLES == ("hook", "setup", "problem", "solution", "proof", "cta")
+    assert len(PANEL_ROLES) == 6
 
 
 def test_image_spec_rejects_sizes_the_model_cannot_produce() -> None:

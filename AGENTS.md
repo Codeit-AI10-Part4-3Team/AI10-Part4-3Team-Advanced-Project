@@ -98,12 +98,13 @@
   | `brief:fill` | 비어 있음 |
   | `draft:generate` | 비어 있음 |
 
-- **템플릿의 질의응답(`/v1/ask` → `/v1/generate`)은 아직 남아 있고, 지울 조건은 이미 충족됐습니다.**
-  "프론트가 광고 경로로 옮겨간 뒤"가 그 조건이었고 08-19 에 옮겨갔습니다. 이 경로는 계약
-  (`openapi.yaml` v0.2.0)에 없으면서 **인증도 없습니다**
-  ([API_계약.md](docs/기술문서/API_계약.md) 7.1절). 지우는 PR 에서
-  `backend_core.pipeline.FALLBACK_TEXT` 도 함께 없앱니다 (ADR-0005).
-  이음매 목록: [아키텍처.md](docs/공통_가이드/아키텍처.md) 5절.
+- **템플릿의 질의응답은 backend 에서 삭제됐습니다** (2026-08-19). `/v1/ask` 와
+  `backend_core.pipeline`(`FALLBACK_TEXT` 포함, ADR-0005)이 사라졌고, **backend 가 서빙하는
+  `/v1` 경로는 이제 전부 계약에 있고 전부 인증 뒤에 있습니다.**
+  ⚠️ **ai-engine 쪽 `/v1/generate` 는 남아 있습니다** — 가드레일(`ai_engine.guardrail`)의
+  유일한 라우트 수준 사용처이고, 그 가드레일이 F11/F12 라 광고 경로로 옮긴 뒤에 지웁니다.
+  8100 은 루프백이라 노출 문제는 없습니다. 이음매 목록:
+  [아키텍처.md](docs/공통_가이드/아키텍처.md) 5절.
 - 새 경로를 만들 때도 **옆에 새로 만들지 말고 같은 이음매에서 갈아끼웁니다** — 우회하면
   스켈레톤이 검증하던 성질(폴백·가드레일·계약)이 조용히 사라집니다.
 - 교체 순서: 계약(`packages/contracts/openapi.yaml`) → 스키마 → 구현 → 테스트.
@@ -155,7 +156,7 @@
 - `eval/`은 `apps/ai-engine/` 안 — 채점 대상과 함께 버전이 움직여야 함
 - `CODEOWNERS`는 레포 루트 한 곳만 — GitHub이 한 곳만 읽으므로 사본 금지
 - 루트 `pyproject.toml`은 툴링 전용(ruff) — 루트에서 `pip install .`은 실수
-- `apps/frontend/`는 미스캐폴딩 — 시작 전 그 `AGENTS.md`와 README 필독(루트 `.gitignore` 함정)
+- `apps/frontend/`는 스캐폴딩 완료 — 시작 전 그 `AGENTS.md`와 README 필독(루트 `.gitignore` 함정)
 
 ## 빌드 / 실행 / 테스트
 
@@ -171,8 +172,9 @@ uvicorn ai_engine.service:app --reload --port 8100     # ai-engine  → :8100/do
 bash scripts/run-tests.sh          # 품질 게이트: ruff + mypy + pytest 전 앱 (= CI)
 ```
 
-- ai-engine을 꺼도 `/v1/ask`가 **200 + `messageMode: official_fallback`** 을 돌려주면 정상 —
-  설계된 열화이지 버그가 아닙니다.
+- ai-engine을 꺼도 **세션 생성이 201 + `messageMode: degraded`** 로 진행되면 정상 — 설계된
+  열화이지 버그가 아닙니다 (ADR-0005). 열화가 허용된 자리는 `brief:fill` 하나뿐이고, 시안
+  생성과 렌더는 명시적으로 실패합니다.
 - ⚠️ **레포 루트에서 `pytest`·`mypy` 금지** — 두 앱이 한 세션에 섞여 수집이 깨집니다.
   **앱 디렉토리를 cwd로** 실행하세요. 개별 실행 예시는 각 앱의 `AGENTS.md`.
 - import는 `from api import …` / `import backend_core` / `from ai_engine import …` —

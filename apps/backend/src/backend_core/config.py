@@ -127,6 +127,19 @@ class Settings(BaseSettings):
 
     # How long a single render may take. Minutes, not seconds — the waiter is the job worker
     # and no user is holding a connection open (ADR-0015, API_계약.md 2.1절).
+    #
+    # ⚠️ **Do not lower this below the engine's own budget for one render**, which is
+    # `ADGEN_RENDER_BUDGET_S` (240 as of 2026-08-20, 이슈 #141). Whichever side gives up
+    # first is the side that gets to say why: the engine knows which panel stalled and how
+    # many were already paid for, while backend has only `GENERATION_TIMEOUT`. And a session
+    # that times out here goes to `failed`, which `state.py` gives no outgoing edge — there
+    # is no retry, so the user starts over from the photo upload while the spent image API
+    # calls stay spent. 세션_보관_정책 6.1절 holds the pair and 미결정_대장 N19-a the history.
+    #
+    # ⚠️ This is an httpx timeout: it caps connect/read/write *each*, not the wall clock of
+    # the whole call. It acts as a total budget only because the engine answers in one shot
+    # instead of streaming — do not read the number as a hard deadline, and do not let the
+    # gap to the engine's budget shrink on the assumption that it is one.
     render_timeout_s: float = 300.0
 
     # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which

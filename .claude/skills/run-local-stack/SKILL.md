@@ -9,6 +9,12 @@ description: 로컬에서 이 서비스를 띄우고 화면을 확인합니다 (
 (`apps/frontend/vite.config.ts`). 세션 쿠키가 `Secure` + `SameSite=Lax` 라 출처가 갈리면 로그인이
 성립하지 않기 때문이며, 배포에서는 nginx 가 같은 일을 합니다 (`apps/frontend/nginx.conf`).
 
+> 아래는 `127.0.0.1` 을 씁니다. 쿠키의 `Secure` 는 설정으로 끌 수 없는데
+> (`apps/backend/src/api/routes/auth.py` 의 `_COOKIE_ATTRS`), 그 주석은 `http://localhost` 를
+> 기준으로 적혀 있습니다. Chrome 과 Firefox 는 `127.0.0.0/8` 도 신뢰 출처로 보므로 그대로
+> 동작합니다(실측). 다른 브라우저에서 **"로그인은 200 인데 곧바로 로그아웃"** 이 나오면 이
+> 차이를 의심하고 `localhost` 로 바꿔 보세요.
+
 | 포트 | 프로세스 |
 |---|---|
 | 5173 | vite 개발 서버 (프론트, `/v1` 프록시) |
@@ -19,16 +25,59 @@ description: 로컬에서 이 서비스를 띄우고 화면을 확인합니다 (
 
 ## 0. 사전 준비
 
+아래 `REPO` 와 `NODE_BIN` 두 변수를 이 세션 내내 씁니다. 새 셸을 열면 다시 정하세요.
+
+### 0-a. 파이썬
+
+⚠️ **검사 대상과 실행 대상이 같아야 합니다.** 아래 절들이 `$REPO/.venv/bin/...` 절대경로로
+실행하므로, 확인도 그 인터프리터로 합니다. PATH 의 `python3` 를 검사하면 활성화하지 않은
+셸에서 conda `ai` 를 보게 되는데, 그것이 바로 `CLAUDE.md` 가 경고하는 함정입니다.
+
 ```bash
-# 파이썬: 레포 루트 .venv (conda `ai` 아님 - CLAUDE.md 의 인터프리터 함정)
-python3 -c "import ai_engine, backend_core; print(ai_engine.__file__)"   # 이 레포 경로여야 정상
+REPO=$(git rev-parse --show-toplevel)
+"$REPO/.venv/bin/python" -c "import ai_engine, backend_core; print(ai_engine.__file__)"
+# 이 레포 경로가 나와야 정상입니다.
+# 파일이 없거나 다른 레포 경로가 나오면 .venv 부터 만드세요 -
+# 루트 AGENTS.md 의 "빌드 / 실행 / 테스트" 절 (python3 -m venv .venv + pip install -e).
+```
 
-# Node 22. Dockerfile 이 node:22-slim 이고 package.json engines 가 >=22.13 이라 최신판이 아니라 22.
+### 0-b. Node
+
+`package.json` 의 `engines` 가 `>=22.13` 이고 Dockerfile 이 `node:22-slim` 이라 **22 계열**입니다.
+이미 맞는 node 가 있으면 설치할 것이 없습니다.
+
+```bash
+node -v        # v22.13 이상이면 아래 설치 단계를 건너뜁니다
+NODE_BIN=""    # 시스템 node 를 그대로 쓸 때는 비워 둡니다
+```
+
+버전이 맞지 않을 때만 설치합니다. **OS 마다 다릅니다.**
+
+```bash
+# macOS (Homebrew). keg-only 라 PATH 에 직접 넣어야 합니다.
 brew install node@22
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"    # ⚠️ keg-only 라 PATH 에 직접 넣어야 합니다
-corepack enable                                       # pnpm 은 packageManager 핀(11.19.0)을 따라갑니다
+NODE_BIN=/opt/homebrew/opt/node@22/bin        # Intel 맥은 /usr/local/opt/node@22/bin
 
-cd apps/frontend && pnpm install --frozen-lockfile
+# Ubuntu / WSL2 (nodesource)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
+NODE_BIN=""
+
+# nvm 을 쓴다면
+nvm install 22 && nvm use 22
+NODE_BIN=""
+```
+
+⚠️ **`export PATH="...:$PATH"` 로 없는 디렉토리를 붙여도 오류가 나지 않습니다.** macOS 경로를
+그대로 복사해 다른 OS 에서 돌리면 `pnpm dev` 가 그 사람 PATH 에 있던 아무 node 로 돌고,
+`engines` 위반은 경고 한 줄로 지나갑니다. 증상이 "기동은 되는데 화면이 이상하다" 로 나오면
+원인을 node 버전에서 찾기 어렵습니다. 그래서 위에서 `node -v` 를 먼저 봅니다.
+
+```bash
+export PATH="${NODE_BIN:+$NODE_BIN:}$PATH"   # NODE_BIN 이 비어 있으면 PATH 를 건드리지 않습니다
+node -v                                       # 여기서 v22.x 가 나와야 다음으로 갑니다
+corepack enable                               # pnpm 은 packageManager 핀(11.19.0)을 따라갑니다
+
+cd "$REPO/apps/frontend" && pnpm install --frozen-lockfile
 ```
 
 ## 1. 로컬 환경 파일
@@ -80,8 +129,7 @@ cd "$REPO/apps/ai-engine" && set -a && . "$REPO/data/run.env" && set +a && \
 cd "$REPO/apps/backend" && set -a && . "$REPO/data/run.env" && set +a && \
   "$REPO/.venv/bin/uvicorn" api.main:app --host 127.0.0.1 --port 8000 --log-level warning &
 
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-cd "$REPO/apps/frontend" && pnpm dev --host 127.0.0.1 &
+cd "$REPO/apps/frontend" && pnpm dev --host 127.0.0.1 --strictPort &
 ```
 
 `depends_on` 이 없으므로 backend 가 늦게 떠도 화면은 뜹니다. 그때 사용자가 보는 것은 502 가
@@ -112,11 +160,14 @@ health 는 `/health` 이지 `/v1/health` 가 아닙니다. HTML 이 오면 프�
 
 브라우저에서 **http://127.0.0.1:5173**, 계정은 `demo1` / `demo-pass-1`.
 
+**화풍 select 가 비활성인 것은 정상입니다.** `ADGEN_ART_STYLES` 를 넣지 않았으므로
+`GET /v1/art-styles` 가 빈 배열을 주고, 화면이 "서버가 무작위로 채웁니다" 를 안내합니다
+(미결정_대장 A-3 의 예시 이미지가 아직 없습니다). 기동 실패가 아닙니다.
+
 무인 확인이 필요하면 Playwright 로 몰아 봅니다. **레포 밖에 설치하세요** - `apps/frontend` 에
 넣으면 `package.json` 과 lockfile 이 바뀝니다.
 
 ```bash
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 D=$(mktemp -d) && cd "$D" && echo '{"name":"shot","private":true}' > package.json
 npm i -D playwright@latest --silent && npx playwright install chromium
 ```
@@ -174,7 +225,9 @@ curl -s -b "$J" -D - "$B/v1/jobs/$JID" -o /dev/null | grep -i retry-after   # qu
 ## 6. 종료
 
 ```bash
-pkill -f "vite"
+# ⚠️ vite 는 경로로 좁힙니다. `pkill -f "vite"` 는 같은 머신에서 돌던 **다른 프로젝트의**
+#    개발 서버까지 함께 죽입니다.
+pkill -f "$REPO/apps/frontend"
 pkill -f "uvicorn api.main:app"
 pkill -f "uvicorn ai_engine.service:app"
 ```

@@ -36,7 +36,8 @@
   이 레포는 `AGENTS.md`가 지시하는 대로 **레포 루트의 `.venv`**에서 작업합니다 (conda `ai` 아님).
 
 - **루트에서 `pytest`·`mypy`를 실행하지 마세요.** 두 앱이 한 세션에 섞여 수집 단계에서 깨집니다.
-  개별 테스트 실행법과 `eval/` 수집 규칙은 `AGENTS.md`의 "빌드 / 실행 / 테스트 > 개별 테스트 실행".
+  개별 실행 형태는 각 앱의 `AGENTS.md`에 있습니다 (`apps/backend/AGENTS.md`,
+  `apps/ai-engine/AGENTS.md`). `eval/` 수집 규칙도 후자와 그 앱의 `pyproject.toml` 주석이 정본입니다.
 
 - **`e2e/`는 `run-tests.sh` 대상이 아닙니다.** 스택 기동과 외부 키가 필요하므로 별도 워크플로와
   `cd e2e && pytest`로만 실행합니다. 게이트가 통과했다고 관통 경로가 검증된 것은 아닙니다.
@@ -62,22 +63,6 @@ CI의 `.github/workflows/ai-review.yml`, 그리고 이 세션에서 직접 쓰�
 `docs/TEMPLATE_GUIDE.md` · `docs/DESIGN_DECISIONS.md`는 **이 프로젝트가 아니라 원본 템플릿**을
 설명하는 문서입니다(초기화 후 삭제 가능). 프로젝트 사실의 근거로 인용하지 말고, 판단 근거는
 `AGENTS.md`와 `docs/adr/`에서 찾으세요.
-
-## 부분 실행 (전체 게이트를 돌리기엔 느릴 때)
-
-`AGENTS.md`의 `run-tests.sh`가 정본이고, 아래는 **한 개만 돌릴 때**의 형태입니다.
-⚠️ **mypy·pytest는 앱 디렉토리가 cwd여야 설정을 집습니다** — 루트에서
-`pytest apps/ai-engine/tests/...`를 돌리면 `[tool.pytest.ini_options]`가 적용되지 않습니다.
-
-```bash
-cd apps/ai-engine && pytest tests/test_guardrail.py -q                    # 파일 하나
-cd apps/ai-engine && pytest tests/test_guardrail.py::test_이름 -q         # 테스트 하나
-cd apps/ai-engine && pytest -k guardrail -q                              # 이름으로 필터
-cd apps/backend   && mypy                                                # 앱 하나 타입체크
-
-ruff check apps/backend --fix                                            # ruff만 루트에서 (상위 탐색)
-ruff format apps/backend
-```
 
 ## 초록색이 "통과"를 뜻하지 않는 지점
 

@@ -127,6 +127,28 @@ class Settings(BaseSettings):
 
     # How long a single render may take. Minutes, not seconds — the waiter is the job worker
     # and no user is holding a connection open (ADR-0015, API_계약.md 2.1절).
+    #
+    # ⚠️ **Do not lower this below the engine's own budget for one render**, which is
+    # `ADGEN_RENDER_BUDGET_S` (240 as of 2026-08-20, 이슈 #141). Whichever side gives up
+    # first is the side that gets to say why: the engine knows which panel stalled and how
+    # many were already paid for, while backend has only `GENERATION_TIMEOUT`. And a session
+    # that times out here goes to `failed`, which `state.py` gives no outgoing edge — there
+    # is no retry, so the user starts over from the photo upload while the spent image API
+    # calls stay spent. 세션_보관_정책 6.1절 holds the pair and 미결정_대장 N19-a the history.
+    #
+    # ⚠️ This is an httpx timeout: it caps connect/read/write *each*, not the wall clock of
+    # the whole call. It acts as a total budget only because the engine answers in one shot
+    # instead of streaming — do not read the number as a hard deadline, and do not let the
+    # gap to the engine's budget shrink on the assumption that it is one.
+    #
+    # ⚠️ **The engine's side of that pair is not a wall clock either, and by a larger factor.**
+    # `ADGEN_IMAGE_TIMEOUT_S` is handed to the vendor SDK, and none of ai_engine's three call
+    # sites pass `max_retries` — so the SDK's own default applies and one call can become
+    # several attempts, retries included on timeout. The ordering this comment exists to
+    # protect ("the engine gives up first, so it can say which panel stalled") holds only
+    # while an attempt and a call are the same thing. Closing that is 03's, in
+    # `apps/ai-engine/` (PR #176 리뷰, 신호정); this note is here so nobody reads the 240 < 300
+    # gap as proof that they already are.
     render_timeout_s: float = 300.0
 
     # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which

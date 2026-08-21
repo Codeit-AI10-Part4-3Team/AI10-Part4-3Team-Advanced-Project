@@ -1,6 +1,7 @@
 import { apiRequest, apiRequestWithHeaders } from "../../shared/api/client";
 import type {
   ArtStyle,
+  BriefPatch,
   FinalizeAccepted,
   Job,
   Session,
@@ -50,6 +51,34 @@ export function createSession(input: SessionCreateInput): Promise<Session> {
   // 문자열까지 포함해 헤더를 만듭니다. 손으로 `multipart/form-data` 를 넣으면 경계가 빠져
   // 서버가 본문을 파싱하지 못하고, 증상은 422 라 입력값 문제처럼 보입니다.
   return apiRequest<Session>("/v1/sessions", { method: "POST", body: form });
+}
+
+/**
+ * 브리프 부분 교체. **바꾼 키만 보냅니다** - 전체 문서를 되돌려 보내면 원문을 지키는 쪽이
+ * 서버가 아니라 화면이 되고, 화면의 버그가 브리프를 조용히 덮어씁니다 (API_계약 PATCH 절).
+ *
+ * `revision` 은 낙관적 잠금입니다. 값이 뒤처졌으면 409 `REVISION_CONFLICT` 이고, 그때 화면이
+ * 할 일은 다시 읽는 것입니다 - `ETag` 왕복을 두지 않은 이유는 계약에 적혀 있습니다.
+ *
+ * ⚠️ **시안이 생긴 뒤에는 409 `STATE_CONFLICT` 입니다** (INV-7). 시안이 브리프에서 나온
+ * 산출물이라 근거가 나중에 바뀌면 시안이 무엇에 근거했는지 알 수 없게 됩니다. 그래서 화면은
+ * 잠긴 뒤에 고치기 버튼을 내려야 하며, 이 호출로 확인시키는 것은 안내가 아니라 오류입니다.
+ *
+ * ⚠️ 빈 patch 는 422 입니다 (`minProperties: 1`). 바뀐 값이 없으면 **부르지 마세요**.
+ *
+ * `needsInput` 이나 `degraded` 세션에서 `note` 를 채우면 서버가 추론을 다시 시도하므로,
+ * 응답의 `state` 와 `messageMode` 가 요청 전과 달라질 수 있습니다.
+ */
+export function patchBrief(
+  sessionId: string,
+  revision: number,
+  patch: BriefPatch,
+): Promise<Session> {
+  return apiRequest<Session>(`/v1/sessions/${encodeURIComponent(sessionId)}/brief`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ revision, patch }),
+  });
 }
 
 /**

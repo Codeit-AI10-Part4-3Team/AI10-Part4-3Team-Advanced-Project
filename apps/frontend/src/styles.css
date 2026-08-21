@@ -97,7 +97,14 @@ button { color: inherit; }
 /* 오류 배너 안에서는 문장의 일부입니다 - 파란 링크로 튀면 안내가 아니라 다른 곳으로 보내는 것처럼 읽힙니다. */
 .workspace-error .link-button { margin-top: 0; color: inherit; font-size: inherit; }
 
-/* 브리프 확인 화면. 입력 폼과 같은 자리를 쓰지만 읽기 전용입니다 - 고치는 것은 F5. */
+/* 브리프 확인 화면. 입력 폼과 같은 자리를 쓰고, 고치기를 누르면 같은 자리가 폼이 됩니다. */
+.brief-heading-actions { display: flex; align-items: center; gap: 10px; }
+.brief-edit { display: grid; gap: 13px; }
+.brief-edit-actions { display: flex; align-items: center; gap: 14px; }
+/* ⚠️ `.submit-button` 의 기본이 `width: 100%` 입니다. flex 안에서 그대로 두면 저장이 폭을 다
+   먹고 옆의 취소가 한 글자 폭으로 짜부라져 세로로 쪼개집니다(실측). 여기서만 폭을 풉니다. */
+.brief-edit-actions .submit-button { width: auto; flex: 0 0 auto; padding-inline: 26px; }
+.brief-edit-actions .link-button { margin-top: 0; flex: 0 0 auto; white-space: nowrap; }
 .product-image { width: 100%; max-height: 260px; margin-bottom: 15px; border-radius: 12px; object-fit: contain; background: #f2f3f6; }
 .image-expired { margin: 0 0 15px; padding: 12px; border-radius: 10px; color: var(--muted); background: #f2f3f6; font-size: 11px; }
 .brief-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }

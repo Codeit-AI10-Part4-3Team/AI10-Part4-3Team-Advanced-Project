@@ -1,9 +1,9 @@
 """Wire models for the ad-generation contract (packages/contracts/openapi.yaml).
 
-`from ai_engine.models import X` always gives a **contract** model. The template
-question-and-answer models the walking skeleton still runs on are not re-exported here —
-import them from `ai_engine.models.legacy_qa`, which makes every remaining call site visible
-and the eventual deletion mechanical.
+`from ai_engine.models import X` always gives a **contract** model. That is now the only
+kind this package holds: `legacy_qa` — the template's question-and-answer models — was
+deleted on 2026-08-20 with the `/v1/generate` route it served. Keeping it out of `__all__`
+until then is what made the deletion mechanical, since every call site had to name it.
 
 This package carries only what the internal `generation` paths use. Sessions, jobs, auth,
 catalog and `BriefMeta` are the caller's concern and are absent on purpose — copying schemas

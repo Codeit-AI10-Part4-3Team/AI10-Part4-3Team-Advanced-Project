@@ -385,9 +385,9 @@ def _refusal_of(payload: dict[str, Any]) -> RefusalReason | None:
     """거절인지 봅니다. 거절은 **정상 200** 이고 `draft` 가 빠집니다.
 
     ⚠️ `guardrail` 은 여기서 나올 수 없습니다. 그것은 재생성 1회 뒤에도 근거 밖 주장이 남은
-    경우이고 (생성_파이프라인 5.1.1절), 출력 검증(`ai_engine.guardrail.verify`)이 이 경로에
-    붙은 뒤에 생깁니다. 모델이 스스로 `"guardrail"` 이라고 말해도 그것은 검증을 거친 판정이
-    아니므로 받아들이지 않습니다.
+    경우이고 (생성_파이프라인 5.1.1절), 그 판정은 `_guarded_draft` 가
+    `ai_engine.guardrail.check_claims` 로 내립니다. 모델이 스스로 `"guardrail"` 이라고 말해도
+    그것은 검증을 거친 판정이 아니므로 받아들이지 않습니다.
     """
     refusal = payload.get("refusal")
     if refusal is None:

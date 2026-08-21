@@ -18,6 +18,37 @@ response for a measurement is the failure that quietly invalidates every number 
 turns the not-yet-written branches into explicit failures rather than silent fallbacks.
 """
 
+MODEL_MAX_RETRIES = 0
+"""벤더 SDK 의 자체 재시도를 끕니다. **세 호출 지점 모두 이 값을 넘겨야 합니다**
+(`render` · `brief_fill` · `draft`).
+
+⚠️ **끄지 않으면 아래 세 쌍의 순서가 뒤집힙니다** (이슈 #180). `openai` 3.0.0 의
+`DEFAULT_MAX_RETRIES` 는 2 이고 **타임아웃도 재시도 대상**이라
+(`_base_client.SyncAPIClient.request` 가 `httpx.TimeoutException` 을 잡아 `_sleep_for_retry`
+뒤 `continue` 하고, 재시도를 다 쓴 뒤에야 `APITimeoutError` 를 올립니다), 우리가 `timeout=`
+으로 넘기는 값은 **한 번의 시도**에 대한 상한이지 벽시계 상한이 아닙니다. 호출 1회가 최대
+3회 시도가 되면 이렇게 됩니다:
+
+| 이음매 | 엔진 상한 | x3 | 호출자 대기 | 먼저 끊는 쪽 |
+|---|---|---|---|---|
+| `brief:fill` | 12 | 36 | 15 | **호출자** |
+| `draft:generate` | 50 | 150 | 60 | **호출자** |
+| `image:render` 1번 칸 | 120 | 360 | 300 | **호출자** |
+
+2026-08-21 회의록 04절이 확정한 것은 값(120 / 240 / 300)이 아니라 **순서**입니다 - 엔진이
+먼저 포기해야 어디서 막혔는지가 로그에 남습니다. 재시도가 한 번만 붙어도 세 쌍 전부 그
+순서가 성립하지 않습니다.
+
+⚠️ **가장 급한 자리는 렌더가 아니라 `brief:fill` 입니다.** 렌더는 실패가 실패로 보이지만
+`brief:fill` 은 열화로 빠지므로(ADR-0005), 살아 있고 느렸을 뿐인 엔진이 죽은 것처럼 보이고
+`messageMode: degraded` 비율이 그만큼 부풀립니다 - 그 값은 보고 지표입니다.
+
+⚠️ **설정값으로 열지 않았습니다.** 환경변수로 되돌릴 수 있게 두면 그 순간 순서가 다시
+뒤집히는데, 증상은 배포된 뒤 벤더가 느려진 날에만 나타납니다. 일시적 오류에 대한 방어를
+되살리려면 **우리 예산 안에서** 재시도를 다뤄야 하고, 그 정책은 아직 정해지지 않았습니다
+(미결정_대장 N19-a, 다음 회의 안건).
+"""
+
 
 class Settings(BaseSettings):
     """`ADGEN_` prefix keeps our variables distinguishable from everything else on the host."""

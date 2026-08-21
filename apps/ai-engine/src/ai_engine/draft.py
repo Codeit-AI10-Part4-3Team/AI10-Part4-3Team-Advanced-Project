@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_engine import draft_prompt, guardrail, render_prompt, usage
-from ai_engine.config import Settings
+from ai_engine.config import MODEL_MAX_RETRIES, Settings
 from ai_engine.models import (
     PANEL_ROLES,
     Brief,
@@ -328,7 +328,14 @@ def _ask_model(prompt: str, settings: Settings, seam: str) -> dict[str, Any]:
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
 
-    client = OpenAI(api_key=settings.model_api_key, timeout=settings.draft_model_timeout_s)
+    # ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 50초가 **시도당** 상한이 되고,
+    # 최악 150초가 호출자의 60초를 넘깁니다 (이슈 #180). 이쪽은 열화가 없어 실패가 실패로
+    # 보이지만, 실패의 이유를 아는 쪽이 아무도 없게 됩니다.
+    client = OpenAI(
+        api_key=settings.model_api_key,
+        timeout=settings.draft_model_timeout_s,
+        max_retries=MODEL_MAX_RETRIES,
+    )
     try:
         response = client.chat.completions.create(
             model=settings.text_model,

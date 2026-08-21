@@ -120,11 +120,22 @@ class FakeCompletions:
         return str(self.calls[index]["messages"][0]["content"])
 
 
-def install(monkeypatch: pytest.MonkeyPatch, completions: FakeCompletions) -> None:
-    """`openai.OpenAI` 를 가로챕니다. `draft` 가 지연 import 하므로 모듈에 심습니다."""
+def install(monkeypatch: pytest.MonkeyPatch, completions: FakeCompletions) -> dict[str, Any]:
+    """`openai.OpenAI` 를 가로챕니다. `draft` 가 지연 import 하므로 모듈에 심습니다.
+
+    돌려주는 dict 에는 **클라이언트 생성 인자**가 담깁니다. 호출 인자가 아니라 그쪽을 봐야
+    하는 값이 있기 때문입니다 - 타임아웃과 재시도 횟수가 그렇습니다 (이슈 #180).
+    """
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    module = SimpleNamespace(OpenAI=lambda **_: client)
+    seen: dict[str, Any] = {}
+
+    def factory(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return client
+
+    module = SimpleNamespace(OpenAI=factory)
     monkeypatch.setitem(__import__("sys").modules, "openai", module)
+    return seen
 
 
 @pytest.fixture
@@ -757,3 +768,26 @@ def test_the_regeneration_is_counted_separately(
         draft.generate_draft(generate_request(), model_settings)
 
     assert usage_seams(caplog) == ["draft:generate", "draft:generate:retry"]
+
+
+# ---- 타임아웃 예산 (이슈 #180) --------------------------------------------------------
+
+
+def test_the_sdk_is_told_not_to_retry_behind_our_budget(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """넘기지 않으면 SDK 기본값 2 가 붙어 50초가 **시도당** 상한이 되고, 최악 150초가 호출자의
+    60초를 넘깁니다 (이슈 #180). 이쪽은 열화가 없어 실패가 실패로 보이지만, 호출자가 먼저
+    끊으면 어디서 막혔는지를 아는 쪽이 아무도 없습니다.
+    """
+    seen = install(monkeypatch, FakeCompletions(body=SINGLE_AD_BODY))
+
+    draft.generate_draft(generate_request(), model_settings)
+
+    assert seen["max_retries"] == 0
+    assert seen["timeout"] == model_settings.draft_model_timeout_s
+
+
+def test_the_engine_gives_up_before_the_caller_does() -> None:
+    """확정된 것은 값이 아니라 **순서**입니다 (2026-08-21 회의록 04절). 호출자는 60초입니다."""
+    assert Settings().draft_model_timeout_s < 60.0

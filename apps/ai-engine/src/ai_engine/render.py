@@ -17,13 +17,13 @@ import base64
 import io
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from PIL import Image, ImageDraw
 
 from ai_engine import render_prompt
-from ai_engine.config import Settings
+from ai_engine.config import MODEL_MAX_RETRIES, Settings
 from ai_engine.models import ComicDraft, ImageRenderRequest, ImageSpec, Panel
 
 logger = logging.getLogger(__name__)
@@ -133,6 +133,9 @@ def _client(settings: Settings) -> Any:
     그래서 응답 전체를 재는 `render_budget_s` 가 따로 있고, `_render_panels` 가 그것을 집행합니다
     (2026-08-20, 이슈 #141). 두 값은 **함께 움직여야 합니다** - 칸당 상한의 2배가 총 예산보다
     커지면 총 예산이 먼저 끊어 놓고도 칸은 계속 돌게 됩니다.
+
+    ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 `timeout` 이 시도당 상한이 되고,
+    그때 위 문단의 "2배" 는 6배가 됩니다 (이슈 #180). 근거는 `MODEL_MAX_RETRIES`.
     """
     try:
         from openai import OpenAI
@@ -140,7 +143,29 @@ def _client(settings: Settings) -> Any:
         raise RenderFailedError(
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
-    return OpenAI(api_key=settings.model_api_key, timeout=settings.image_timeout_s)
+    return OpenAI(
+        api_key=settings.model_api_key,
+        timeout=settings.image_timeout_s,
+        max_retries=MODEL_MAX_RETRIES,
+    )
+
+
+def _await_within_budget(future: Future[bytes], deadline: float, message: str) -> bytes:
+    """예산이 남은 만큼만 기다립니다. 넘기면 `RenderFailedError`.
+
+    ⚠️ **기다리기를 그만두는 것이지 호출을 취소하는 것이 아닙니다.** 이미 나간 요청은 벤더
+    쪽에서 계속 돌고 요금도 나갑니다 - 우리가 사는 것은 **호출자가 먼저 끊지 않게 하는 것**
+    하나뿐이고, 그래야 실패의 이유가 로그에 남습니다.
+
+    ⚠️ 벽시계로 재는 자리가 여기 하나여야 하는 이유는 `timeout=` 이 벽시계가 아니기
+    때문입니다 - httpx 는 connect/read/write 를 **각각** 재고, SDK 재시도를 껐어도
+    (`MODEL_MAX_RETRIES`) 한 번의 시도가 그 값을 넘을 수 있습니다. 산술로 맞춰 둔 여유는
+    값을 고치는 순간 사라지지만, 이 함수는 남습니다 (이슈 #180).
+    """
+    try:
+        return future.result(timeout=max(0.0, deadline - time.monotonic()))
+    except TimeoutError as exc:
+        raise RenderFailedError(message) from exc
 
 
 def _render_one_shot(
@@ -152,15 +177,34 @@ def _render_one_shot(
     (`notebooks/hj/verify01_korean_text_rendering/run_experiment.py`, 2026-08-14): one
     request, `n=1`, inline base64. A URL response is refused rather than downloaded — the
     experiment never exercised that path, so treating it as equivalent would be a guess.
+
+    ⚠️ **호출이 하나뿐이어도 `render_budget_s` 를 지납니다** (이슈 #180). 이 경로가 예산 밖에
+    있던 동안 지켜 준 것은 `image_timeout_s`(120) < `render_timeout_s`(300) 라는 산술뿐이고,
+    그것은 `timeout=` 이 벽시계일 때만 성립합니다. 예산이 만화형에만 붙어 있으면 "누가 먼저
+    포기하는가" 가 출력 유형에 따라 갈립니다.
     """
-    return _generate(
-        client,
-        settings,
-        prompt=render_prompt.build(request),
-        size=f"{request.spec.width}x{request.spec.height}",
-        quality=quality,
-        reference=None,
-    )
+    deadline = time.monotonic() + settings.render_budget_s
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(
+            _generate,
+            client,
+            settings,
+            prompt=render_prompt.build(request),
+            size=f"{request.spec.width}x{request.spec.height}",
+            quality=quality,
+            reference=None,
+        )
+        return _await_within_budget(
+            future,
+            deadline,
+            f"{settings.render_budget_s:.0f}초 예산 안에 그림이 오지 않았습니다. "
+            "호출자가 먼저 끊기 전에 버립니다.",
+        )
+    finally:
+        # `with` 를 쓰지 않는 이유는 `_render_panels` 와 같습니다 - `__exit__` 이
+        # `shutdown(wait=True)` 라, 예산을 넘겨 빠져나갈 때도 끝까지 기다립니다.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _render_panels(
@@ -205,17 +249,6 @@ def _render_panels(
     deadline = time.monotonic() + settings.render_budget_s
 
     head, rest = panels[0], panels[1:]
-    # ⚠️ 1번 칸의 크기는 **부채꼴로 퍼지기 전에** 봅니다. 이 칸은 나머지 다섯의 레퍼런스라,
-    # 어긋난 채로 넘어가면 잘못된 크기가 다섯 호출의 입력이 되고 그 요금이 다 나간 뒤에야
-    # 합성 단계에서 걸립니다.
-    first = _as_png(draw(head, None), panel_size)
-    if time.monotonic() >= deadline:
-        # 여기서 이미 예산을 다 썼으면 나머지 다섯은 부르지 않습니다. 불러 봐야 예산 안에
-        # 끝날 수 없고, 요금만 다섯 번 더 나갑니다.
-        raise RenderFailedError(
-            f"1번 칸까지 {settings.render_budget_s:.0f}초 예산을 다 썼습니다. "
-            "나머지 칸은 부르지 않습니다."
-        )
 
     # 네트워크 대기가 지배적이라 스레드로 충분합니다. GIL 은 문제가 되지 않습니다.
     #
@@ -227,6 +260,29 @@ def _render_panels(
     # 때도 남은 스레드를 끝까지 기다립니다 - 그러면 예산이 아무 일도 하지 않습니다.
     pool = ThreadPoolExecutor(max_workers=len(rest))
     try:
+        # ⚠️ 1번 칸도 **예산 안에서** 기다립니다 (이슈 #180). 이 칸이 예산 밖에 있던 동안
+        # 총 예산은 2 ~ 6번 칸에만 걸렸고, 정작 데드라인 감쌈이 없는 쪽은 여기였습니다.
+        #
+        # ⚠️ 1번 칸의 크기는 **부채꼴로 퍼지기 전에** 봅니다. 이 칸은 나머지 다섯의 레퍼런스라,
+        # 어긋난 채로 넘어가면 잘못된 크기가 다섯 호출의 입력이 되고 그 요금이 다 나간 뒤에야
+        # 합성 단계에서 걸립니다.
+        first = _as_png(
+            _await_within_budget(
+                pool.submit(draw, head, None),
+                deadline,
+                f"{settings.render_budget_s:.0f}초 예산 안에 1번 칸이 오지 않았습니다. "
+                "나머지 칸은 부르지 않습니다.",
+            ),
+            panel_size,
+        )
+        if time.monotonic() >= deadline:
+            # 1번 칸이 예산을 정확히 다 쓰고 돌아온 경우입니다. 나머지 다섯은 부르지 않습니다 -
+            # 불러 봐야 예산 안에 끝날 수 없고, 요금만 다섯 번 더 나갑니다.
+            raise RenderFailedError(
+                f"1번 칸까지 {settings.render_budget_s:.0f}초 예산을 다 썼습니다. "
+                "나머지 칸은 부르지 않습니다."
+            )
+
         pending = [(panel, pool.submit(draw, panel, first)) for panel in rest]
         tiles = [first]
         for panel, future in pending:

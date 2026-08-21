@@ -90,13 +90,22 @@ def png_bytes(width: int = 32, height: int = 32) -> bytes:
 class FakeImages:
     """`client.images.generate` 하나만 흉내냅니다."""
 
-    def __init__(self, payload: bytes | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        payload: bytes | None = None,
+        error: Exception | None = None,
+        block_until: threading.Event | None = None,
+    ) -> None:
         self.payload = payload
         self.error = error
+        self.block_until = block_until
         self.calls: list[dict[str, Any]] = []
 
     def generate(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
+        if self.block_until is not None:
+            # 예산 초과를 흉내냅니다. `FakePanels` 와 같은 이유로 `sleep` 을 쓰지 않습니다.
+            self.block_until.wait(timeout=30)
         if self.error is not None:
             raise self.error
         encoded = base64.b64encode(self.payload or b"").decode() if self.payload else None
@@ -120,11 +129,13 @@ class FakePanels:
         barrier: threading.Barrier | None = None,
         wrong_size_on: int | None = None,
         block_until: threading.Event | None = None,
+        block_first_until: threading.Event | None = None,
     ) -> None:
         self.fail_on = fail_on
         self.barrier = barrier
         self.wrong_size_on = wrong_size_on
         self.block_until = block_until
+        self.block_first_until = block_first_until
         self.lock = threading.Lock()
         self.calls: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
@@ -147,6 +158,10 @@ class FakePanels:
             # 예산 초과를 흉내냅니다. 테스트가 끝나면서 풀어 주므로 스레드가 남지 않습니다 -
             # 여기서 `sleep` 을 쓰면 그 시간만큼 세션 종료가 실제로 늦어집니다.
             self.block_until.wait(timeout=30)
+        if self.block_first_until is not None and not edit:
+            # 1번 칸만 붙잡습니다. `block_until` 과 나눈 이유는 예산이 걸리는 자리가 둘이고
+            # (이슈 #180), 한쪽만 막아야 어느 자리가 끊었는지를 가릴 수 있기 때문입니다.
+            self.block_first_until.wait(timeout=30)
         if index == self.fail_on:
             raise RuntimeError(f"{index}번 칸 벤더 오류")
         width, height = (int(part) for part in kwargs["size"].split("x"))
@@ -566,6 +581,56 @@ def test_the_per_call_timeout_reaches_the_client(monkeypatch: pytest.MonkeyPatch
     assert seen["timeout"] == 120.0
 
 
+def test_the_sdk_is_told_not_to_retry_behind_our_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """⚠️ **넘기지 않으면 SDK 기본값 2 가 붙습니다** (이슈 #180).
+
+    `openai` 는 타임아웃도 재시도하므로 (`_base_client` 가 `httpx.TimeoutException` 을 잡아
+    `_sleep_for_retry` 뒤 `continue`), 호출 1회가 최대 3회 시도가 되고 `timeout=` 은 벽시계가
+    아니라 **시도당** 상한이 됩니다. 그러면 120 x 3 = 360 이 호출자의 300 을 넘어,
+    2026-08-21 회의록 04절이 확정한 순서 - 엔진이 먼저 포기한다 - 가 뒤집힙니다.
+    """
+    seen: dict[str, Any] = {}
+
+    def client(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return type("Client", (), {"images": FakeImages(payload=png_bytes())})()
+
+    module = type("OpenAiModule", (), {})()
+    module.OpenAI = client  # type: ignore[attr-defined]
+    monkeypatch.setitem(__import__("sys").modules, "openai", module)
+
+    render.render_image(single_ad_request(), Settings(generation_mode="model", model_api_key="k"))
+
+    assert seen["max_retries"] == 0
+
+
+def test_a_slow_single_ad_is_cut_at_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """단일 광고형도 예산을 지납니다 (이슈 #180).
+
+    호출이 하나뿐이라 이 경로를 지켜 주던 것은 `image_timeout_s`(120) < `render_timeout_s`(300)
+    라는 산술뿐이었고, 그것은 `timeout=` 이 벽시계일 때만 성립합니다 - httpx 는
+    connect/read/write 를 **각각** 잽니다. 산술은 값을 고치는 순간 사라지고 예산은 남습니다.
+    """
+    release = threading.Event()
+    images = FakeImages(payload=png_bytes(), block_until=release)
+    module = type("OpenAiModule", (), {})()
+    module.OpenAI = lambda **_: type("Client", (), {"images": images})()  # type: ignore[attr-defined]
+    monkeypatch.setitem(__import__("sys").modules, "openai", module)
+    settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(render.RenderFailedError, match="예산 안에 그림이"):
+            render.render_image(single_ad_request(), settings)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert elapsed < 10.0, "붙잡힌 호출을 끝까지 기다렸습니다 - 예산이 집행되지 않은 것입니다"
+
+
 def test_a_slow_panel_fails_the_set_without_waiting_for_the_stragglers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -597,16 +662,45 @@ def test_a_slow_panel_fails_the_set_without_waiting_for_the_stragglers(
 
 def test_a_slow_first_panel_never_fans_out(monkeypatch: pytest.MonkeyPatch) -> None:
     """1번 칸까지 예산을 다 썼으면 나머지 다섯은 부르지 않습니다. 불러 봐야 예산 안에 끝날 수
-    없고 요금만 다섯 번 더 나갑니다."""
+    없고 요금만 다섯 번 더 나갑니다.
+
+    ⚠️ 예산 0 에서는 **기다림이 끊기는 경로와 돌아온 뒤 걸리는 경로 둘 다** 성립합니다
+    (이슈 #180 이후). 어느 쪽이 이길지는 스레드 기동 속도에 달렸으므로 두 메시지가 공유하는
+    문장으로 검사합니다 - 검사하려는 성질은 "부채꼴로 퍼지지 않는다" 하나입니다.
+    """
     panels = FakePanels()
     install(monkeypatch, panels)
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.0)
     request = comic_request(96, 64)
 
-    with pytest.raises(render.RenderFailedError, match="1번 칸까지"):
+    with pytest.raises(render.RenderFailedError, match="나머지 칸은 부르지 않습니다"):
         render.render_image(request, settings)
 
     assert panels.edits == []
+
+
+def test_a_hanging_first_panel_is_cut_at_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1번 칸도 **예산 안에서** 기다립니다 (이슈 #180).
+
+    이 칸은 데드라인 감쌈 없는 동기 호출이었고, 예산 확인은 그 호출이 **돌아온 뒤**였습니다.
+    즉 돌아오지 않으면 예산이 아무 일도 하지 않았고, 그동안 총 예산이 실제로 걸린 자리는
+    2 ~ 6번 칸뿐이었습니다.
+    """
+    release = threading.Event()
+    panels = FakePanels(block_first_until=release)
+    install(monkeypatch, panels)
+    settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(render.RenderFailedError, match="예산 안에 1번 칸이"):
+            render.render_image(comic_request(96, 64), settings)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert elapsed < 10.0, "붙잡힌 1번 칸을 끝까지 기다렸습니다 - 예산이 집행되지 않은 것입니다"
+    assert panels.edits == [], "1번 칸이 오지도 않았는데 나머지 다섯을 불렀습니다"
 
 
 # ---- 실패 -------------------------------------------------------------------------

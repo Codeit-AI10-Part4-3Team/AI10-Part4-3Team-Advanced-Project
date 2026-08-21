@@ -1,55 +1,16 @@
 """Guardrail behaviour — the part that makes hallucination suppression measurable.
 
-⚠️ If a test here starts failing, the fix is to change the generator or the corpus, never
-to loosen `SUPPORT_THRESHOLD` until it passes. The threshold is a measurement parameter.
+⚠️ 패턴을 느슨하게 고쳐 테스트를 통과시키지 마세요. 여기서 잡히는 건수가 곧 보고 지표의
+분자입니다 - 규칙을 깎으면 억제율이 오르는데, 오른 것은 품질이 아니라 눈감은 양입니다.
+
+⚠️ 질의응답용 `verify` 계열 테스트 넷은 2026-08-20 에 그 경로와 함께 삭제됐습니다.
 """
 
 import pytest
 
-from ai_engine.guardrail import GuardrailContext, check_claims, verify
-from ai_engine.models.legacy_qa import Passage
-
-PASSAGE = Passage(
-    id="p1",
-    title="[더미] 안내",
-    text="환불은 결제일로부터 7일 이내에 고객센터로 신청하면 처리됩니다.",
-)
-
-
-def context() -> GuardrailContext:
-    return GuardrailContext.from_passages([PASSAGE])
-
-
-def test_text_quoting_the_source_passes() -> None:
-    report = verify("환불은 결제일로부터 7일 이내에 고객센터로 신청하면 처리됩니다.", context())
-    assert report.passed
-    assert report.violations == []
-
-
-def test_invented_claim_is_caught() -> None:
-    """The sentence is plausible and entirely absent from the sources — the target case."""
-    report = verify("환불 수수료는 5000원이며 매장에서 현금으로 돌려받습니다.", context())
-    assert not report.passed
-    assert "unsupported_claim" in report.violations
-
-
-def test_no_evidence_is_a_violation() -> None:
-    report = verify("아무 말이나 씁니다.", GuardrailContext(sources=[]))
-    assert not report.passed
-    assert "no_evidence" in report.violations
-
-
-def test_disabled_guardrail_does_not_report_a_pass() -> None:
-    """Control-group runs must stay distinguishable from verified ones."""
-    report = verify("무엇이든", context(), enabled=False)
-    assert report.enabled is False
-    assert report.passed is False
-
+from ai_engine.guardrail import check_claims
 
 # ---- 광고 경로: 금지 표현 검사 (ADR-0019) -----------------------------------------------
-#
-# ⚠️ 위쪽 `verify` 와 판정 방식이 다릅니다. 광고 경로에서 `verify` 를 쓰면 지시문이 전부
-#    위반으로 잡히고 정작 타사 비교는 통과합니다 (2026-08-20 실측).
 
 EVIDENCE = "무향 무알코올, 두꺼운 원단 순한 대나무 물티슈"
 """`sellingPoint` + `note` + 제품명. `draft._evidence` 가 만드는 것과 같은 모양입니다."""
@@ -128,7 +89,7 @@ def test_every_text_is_checked_not_just_the_first() -> None:
 
 def test_a_disabled_guardrail_is_not_a_pass() -> None:
     """⚠️ 대조군 실행과 검증을 통과한 출력이 같은 값으로 보이면 환각 억제율의 분자와 분모가
-    섞입니다. `verify` 가 같은 이유로 같은 규약을 씁니다."""
+    섞입니다."""
     report = check_claims(["타사보다 2배 두꺼운 원단"], EVIDENCE, enabled=False)
 
     assert report.enabled is False

@@ -37,6 +37,47 @@ cd e2e && pytest -v      # ⚠️ cwd가 e2e여야 pyproject.toml의 testpaths/m
 > (실측: 2026-08-19에 이미 지운 mock 화면이 떠서 브라우저 테스트가 실패했습니다).
 > CI 는 러너가 매번 비어 있어 이 문제가 없습니다.
 
+### 배포된 VM 을 상대로 돌리기
+
+위는 로컬에서 스택을 직접 띄우는 경우입니다. **배포된 VM 을 상대로 돌릴 때는 다른 함정이 있습니다**
+(2026-08-21 에 처음 해 봤습니다. F17 소관은 05 입니다 -- [구현_범위.md](../docs/공통_가이드/구현_범위.md) 2절).
+
+```bash
+# VM 안에서. compose 를 새로 띄우지 않습니다 - 이미 떠 있는 배포를 상대합니다.
+python3 -m venv ~/e2e-venv
+~/e2e-venv/bin/pip install -r /srv/adcraft/app/e2e/requirements.txt
+~/e2e-venv/bin/playwright install --with-deps chromium
+
+export E2E_BASE_URL=https://<공개호스트>      # infra/.env 의 ADGEN_PUBLIC_HOST
+export E2E_WEB_URL=https://<공개호스트>
+export E2E_LOGIN_ID=... E2E_PASSWORD=...
+export E2E_OTHER_LOGIN_ID=... E2E_OTHER_PASSWORD=...
+
+cd /srv/adcraft/app/e2e && ~/e2e-venv/bin/pytest -v
+```
+
+⚠️ **venv 는 배포 체크아웃 밖에 만드세요.** `/srv/adcraft/app` 안에 만들면 다음 배포의 사전
+점검이 "추적되지 않는 파일"로 경고합니다. `.pytest_cache` 와 `__pycache__` 는 루트
+`.gitignore` 에 있어 문제되지 않습니다.
+
+⚠️ **`--with-deps` 를 빼지 마세요.** 헤드리스 리눅스에는 chromium 이 요구하는 시스템
+라이브러리가 없어서, 바이너리만 깔면 실행 시점에 `error while loading shared libraries` 로
+막힙니다. `--with-deps` 는 sudo 로 apt 를 부르고 디스크를 500MB ~ 1GB 씁니다 - 이미지 재빌드
+직후라면 `df -h /` 를 먼저 보세요.
+
+⚠️ **`E2E_BASE_URL` 과 `E2E_WEB_URL` 을 빠뜨리면 전부 skip 되고 초록으로 끝납니다.**
+2026-08-21 첫 실행이 정확히 그렇게 났습니다 - 계정 변수만 넣고 URL 둘을 빠뜨려 6건이 전부
+skip 됐는데, 종료 코드는 0 이었습니다. **`-v` 로 skip 개수를 보는 것이 절차의 일부입니다.**
+
+**공개 호스트 이름은 저장소에 적지 마세요.** 이 저장소는 public 이고 배포 호스트명에 외부 IP 가
+들어 있습니다 ([GCP_VM_사용_가이드.md](../docs/공통_가이드/GCP_VM_사용_가이드.md) 2-b절).
+
+> 2026-08-21 실측으로 하나 확인됐습니다. **VM 안에서 자기 공개 호스트로 붙는 것(헤어핀)이
+> 됩니다** - `curl` 이 `200` 을 답합니다. 그래서 `/etc/hosts` 를 건드리거나 `--resolve` 를
+> 쓸 필요가 없었습니다. 되지 않는 환경으로 옮기면 `127.0.0.1 <공개호스트>` 를 `/etc/hosts` 에
+> 한 줄 넣으면 됩니다 - httpx 와 Playwright 둘 다 OS 리졸버를 쓰므로 그것으로 충분하고,
+> SNI 와 Host 에는 진짜 이름이 실리므로 인증서 검증은 그대로 살아 있습니다.
+
 ### 환경변수와 skip 규칙
 
 **아무것도 없으면 전부 skip 됩니다.** "연결은 돼 있고 대상만 아직 없는" 상태를 초록으로

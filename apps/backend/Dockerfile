@@ -44,4 +44,10 @@ ENV ADGEN_DB_PATH=/data/adgen.sqlite \
 USER appuser
 
 EXPOSE 8000
+# ⚠️ **`--workers` 를 넣지 마세요.** 렌더 큐의 "한 번에 한 건"(N9)이 이 줄에 걸려 있습니다.
+#    `jobs.next_queued` 는 running 이 있으면 아무것도 내주지 않지만, 그 확인과 `mark_running`
+#    사이가 원자적이지 않습니다. 프로세스가 둘이면 둘 다 확인을 통과해 **같은 잡을 함께**
+#    렌더합니다 - 요금이 곱으로 나가고, 세션당 렌더 1회(INV-3)가 깨지고, 결과 파일을 서로
+#    덮어씁니다. **에러는 나지 않습니다.** 성능이 필요하면 워커 수가 아니라 큐를 보세요
+#    (미결정_대장 N19, ADR-0015).
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

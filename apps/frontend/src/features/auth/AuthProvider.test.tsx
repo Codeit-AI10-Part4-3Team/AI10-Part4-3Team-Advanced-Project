@@ -118,6 +118,10 @@ describe("AuthProvider", () => {
 
     expect(status()).toBe("signed_out");
     expect(screen.getByTestId("login-id").textContent).toBe("-");
+    // ⚠️ **조용한 쪽도 함께 잠급니다.** 아래 테스트가 `toHaveBeenCalled()` 만 보므로, 401
+    // 판별이 사라져 경고가 **늘어나는** 방향으로는 어느 쪽도 실패하지 않습니다. 그러면 정상적인
+    // 토큰 만료마다 콘솔에 경고가 쌓이고 진짜 장애의 경고가 그 사이에 묻힙니다.
+    expect(console.warn).not.toHaveBeenCalled();
   });
 
   it("401 이 아닌 로그아웃 실패는 흔적을 남긴다", async () => {

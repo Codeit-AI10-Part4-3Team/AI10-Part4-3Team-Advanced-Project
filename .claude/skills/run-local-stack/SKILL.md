@@ -43,11 +43,13 @@ REPO=$(git rev-parse --show-toplevel)
 
 ### 0-b. Node
 
-`package.json` 의 `engines` 가 `>=22.13` 이고 Dockerfile 이 `node:22-slim` 이라 **22 계열**입니다.
+**22 계열**입니다. `frontend-ci.yml` 의 `node-version: '22'` 과 Dockerfile 의 `node:22-slim` 이
+기준이고, `package.json` 의 `engines: >=22.13` 은 그보다 느슨합니다 - 24 나 26 은 `engines` 는
+통과하지만 CI 와 배포가 쓰는 버전이 아닙니다.
 이미 맞는 node 가 있으면 설치할 것이 없습니다.
 
 ```bash
-node -v        # v22.13 이상이면 아래 설치 단계를 건너뜁니다
+node -v        # v22.13 이상 v23 미만이면 아래 설치 단계를 건너뜁니다
 NODE_BIN=""    # 시스템 node 를 그대로 쓸 때는 비워 둡니다
 ```
 
@@ -227,10 +229,19 @@ curl -s -b "$J" -D - "$B/v1/jobs/$JID" -o /dev/null | grep -i retry-after   # qu
 ```bash
 # ⚠️ vite 는 경로로 좁힙니다. `pkill -f "vite"` 는 같은 머신에서 돌던 **다른 프로젝트의**
 #    개발 서버까지 함께 죽입니다.
+#
+#    이 패턴은 자식 vite 만 매칭합니다 - 부모 `pnpm dev` 의 커맨드라인에는 레포 경로가
+#    없습니다. 그래도 자식이 죽으면 부모가 따라 나가므로 둘 다 정리됩니다 (실측).
 pkill -f "$REPO/apps/frontend"
 pkill -f "uvicorn api.main:app"
 pkill -f "uvicorn ai_engine.service:app"
 ```
+
+⚠️ **종료했는데 다음 기동이 `Port 5173 is already in use` 로 죽으면 편집기를 보세요.**
+VS Code 는 감지한 포트를 자동 전달하고, 프로세스를 내린 뒤에도 그 포워딩이 잠깐 5173 을
+쥐고 있습니다(실측: 리스닝 주인이 `Code Helper` 였습니다). `--strictPort` 는 이때 조용히
+옮겨 뜨는 대신 실패하므로 증상이 눈에 띕니다. `lsof -i :5173 -sTCP:LISTEN` 으로 주인을
+확인하고, 편집기의 포트 전달을 끄거나 그 프로세스를 내리면 됩니다.
 
 ## 하지 말 것
 

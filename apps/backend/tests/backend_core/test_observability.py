@@ -106,7 +106,19 @@ def test_an_unusable_log_directory_does_not_stop_the_service(tmp_path: Path) -> 
 
     observability.install_file_log(blocker / "logs", retention_d=30)
 
-    assert not any(getattr(h, "_adgen_tag", None) is not None for h in logging.getLogger().handlers)
+    ours = [h for h in logging.getLogger().handlers if getattr(h, "_adgen_tag", None)]
+    try:
+        # ⚠️ **Standard output survives, and only the file is missing.** The stream handler is
+        # installed before the file is opened for exactly this case: a full or read-only volume
+        # is when good stdout matters most, and falling back to `lastResort` there would drop
+        # every `obs` line and strip the formatter from what remained (PR #181 리뷰, 신호정).
+        assert len(ours) == 1
+        assert isinstance(ours[0], logging.StreamHandler)
+        assert not isinstance(ours[0], logging.FileHandler)
+    finally:
+        for handler in ours:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
 
 
 def test_application_logs_still_reach_standard_output(tmp_path: Path, capsys) -> None:

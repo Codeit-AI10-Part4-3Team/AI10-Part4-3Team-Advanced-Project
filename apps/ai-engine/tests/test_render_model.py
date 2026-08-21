@@ -619,11 +619,12 @@ def test_a_slow_single_ad_is_cut_at_the_budget(monkeypatch: pytest.MonkeyPatch) 
     module.OpenAI = lambda **_: type("Client", (), {"images": images})()  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "openai", module)
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+    request = single_ad_request()
 
     started = time.monotonic()
     try:
         with pytest.raises(render.RenderFailedError, match="예산 안에 그림이"):
-            render.render_image(single_ad_request(), settings)
+            render.render_image(request, settings)
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -690,11 +691,12 @@ def test_a_hanging_first_panel_is_cut_at_the_budget(monkeypatch: pytest.MonkeyPa
     panels = FakePanels(block_first_until=release)
     install(monkeypatch, panels)
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+    request = comic_request(96, 64)
 
     started = time.monotonic()
     try:
         with pytest.raises(render.RenderFailedError, match="예산 안에 1번 칸이"):
-            render.render_image(comic_request(96, 64), settings)
+            render.render_image(request, settings)
         elapsed = time.monotonic() - started
     finally:
         release.set()

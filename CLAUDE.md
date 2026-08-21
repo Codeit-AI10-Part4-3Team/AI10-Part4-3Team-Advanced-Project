@@ -36,7 +36,8 @@
   이 레포는 `AGENTS.md`가 지시하는 대로 **레포 루트의 `.venv`**에서 작업합니다 (conda `ai` 아님).
 
 - **루트에서 `pytest`·`mypy`를 실행하지 마세요.** 두 앱이 한 세션에 섞여 수집 단계에서 깨집니다.
-  개별 테스트 실행법과 `eval/` 수집 규칙은 `AGENTS.md`의 "빌드 / 실행 / 테스트 > 개별 테스트 실행".
+  개별 실행 형태는 각 앱의 `AGENTS.md`에 있습니다 (`apps/backend/AGENTS.md`,
+  `apps/ai-engine/AGENTS.md`). `eval/` 수집 규칙도 후자와 그 앱의 `pyproject.toml` 주석이 정본입니다.
 
 - **`e2e/`는 `run-tests.sh` 대상이 아닙니다.** 스택 기동과 외부 키가 필요하므로 별도 워크플로와
   `cd e2e && pytest`로만 실행합니다. 게이트가 통과했다고 관통 경로가 검증된 것은 아닙니다.
@@ -62,3 +63,19 @@ CI의 `.github/workflows/ai-review.yml`, 그리고 이 세션에서 직접 쓰�
 `docs/TEMPLATE_GUIDE.md` · `docs/DESIGN_DECISIONS.md`는 **이 프로젝트가 아니라 원본 템플릿**을
 설명하는 문서입니다(초기화 후 삭제 가능). 프로젝트 사실의 근거로 인용하지 말고, 판단 근거는
 `AGENTS.md`와 `docs/adr/`에서 찾으세요.
+
+## 초록색이 "통과"를 뜻하지 않는 지점
+
+에이전트가 결과를 잘못 보고하기 쉬운 세 곳입니다. **돌렸다고 보고하기 전에 확인하세요.**
+
+- **`cd e2e && pytest`는 `E2E_BASE_URL`이 없으면 전 테스트가 skip**됩니다(설계된 동작).
+  스택을 띄우지 않고 나온 초록은 검증이 아니라 "아무것도 안 했다"입니다 —
+  기동 절차는 [e2e/README.md](e2e/README.md).
+- **`run-tests.sh`는 e2e를 포함하지 않습니다** (backend·ai-engine + 전체 모드의 pre-commit 전량).
+  "전부 통과"라고 쓰지 말고 무엇을 돌렸는지 적으세요.
+- **`apps/ai-engine`의 pytest는 `eval/`도 수집합니다.** `eval/`에서 `test_*.py` 이름은 순수 지표
+  함수 단위 테스트 전용이고, 실제 채점 실행 스크립트는 `run_*.py`로 지으세요 —
+  `test_`로 시작하면 CI가 외부 API를 호출합니다(비용·비결정성).
+
+> TODO: 프로젝트 진행 중 Claude Code에만 해당하는 규칙이 더 생기면 여기에 추가하세요
+> (예: 자주 쓰는 슬래시 커맨드, 이 레포에서 특히 조심할 도구 사용 패턴).

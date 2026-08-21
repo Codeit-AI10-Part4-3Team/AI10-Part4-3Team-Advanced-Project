@@ -94,7 +94,7 @@ jobs:
           cp infra/.env.example infra/.env 2>/dev/null || true
           docker compose -f infra/docker-compose.yml config -q
 
-      # ai-engine의 내부 계약 경로(/v1/generate)에는 인증이 없습니다. VPC가 학원의 공용
+      # ai-engine의 내부 계약 경로(`/v1/brief:fill` 등 넷)에는 인증이 없습니다. VPC가 학원의 공용
       # default 네트워크라 태그 없는 방화벽 규칙이 우리 VM에도 걸리고, 우리는 그 규칙을
       # 늘리지도 막지도 못합니다 (infra/README.md "방화벽은 우리 통제 밖입니다",
       # docs/adr/0011). 따라서 `127.0.0.1:` 바인딩이 우리 손에 있는 유일한 방어선이고,

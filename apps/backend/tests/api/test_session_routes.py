@@ -10,6 +10,7 @@ The three questions this file exists to answer:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -161,6 +162,62 @@ def test_the_degraded_and_needs_input_cases_are_told_apart_by_one_key(
     assert degraded["state"] == asked["state"] == "brief_filling"
     assert "needsInput" not in degraded
     assert "needsInput" in asked
+
+
+# ---- 운영 관측 (05 일정 08-26) --------------------------------------------------------
+#
+# ⚠️ These pin the *outcome names*, not the numbers. The 08-26 report counts lines by
+# outcome, so a rename here silently changes what the report says happened - and a degraded
+# rate that reads zero because the word changed looks like good news.
+
+
+def test_a_degraded_brief_fill_is_recorded_as_degraded_not_as_a_failure(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`degraded` is a designed outcome (ADR-0005) and a reported metric in its own right.
+
+    ⚠️ Counting it as a failure would break both numbers at once: the failure rate would
+    climb for something that is working as designed, and the degraded rate - which the report
+    asks for by name - would have nothing left to count.
+    """
+    ai.available = False
+    with caplog.at_level(logging.INFO):
+        _create(client)
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=brief:fill")]
+    assert len(lines) == 1
+    assert "outcome=degraded" in lines[0]
+    assert "outcome=failed" not in lines[0]
+
+
+def test_a_needs_input_answer_is_told_apart_from_a_plain_fill(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Both are successful calls, and the report has to see them separately."""
+    ai.needs_input = NeedsInput(field="target", reason="대상을 판단하지 못했습니다.")
+    with caplog.at_level(logging.INFO):
+        _create(client)
+
+    assert any("obs seam=brief:fill outcome=needs_input" in m for m in caplog.messages)
+
+
+def test_a_guardrail_refusal_is_recorded_as_refused_not_unavailable(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A refusal is the guardrail working (INV-6), not the engine being down.
+
+    ⚠️ These two end at different status codes and mean opposite things - one says the input
+    was too thin, the other says the dependency is gone. Folding them together would make the
+    guardrail's own delta unmeasurable, and that delta is a reported figure.
+    """
+    session = _create(client)
+    ai.refuses = True
+    with caplog.at_level(logging.INFO):
+        client.post(f"/v1/sessions/{session['sessionId']}/draft")
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=draft:generate")]
+    assert len(lines) == 1
+    assert "outcome=refused" in lines[0]
 
 
 # ---- answering needsInput: the retry (계약 `PATCH .../brief`, 미결정_대장 B-11) ---------

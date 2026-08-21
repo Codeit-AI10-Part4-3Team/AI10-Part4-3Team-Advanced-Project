@@ -37,7 +37,7 @@ from api.errors import (
     upstream_unavailable,
 )
 from api.schemas import SessionCreateRequest
-from backend_core import images, jobs, session_flow, sessions
+from backend_core import images, jobs, observability, session_flow, sessions
 from backend_core.accounts import Account
 from backend_core.ai_client import (
     AiEngineClient,
@@ -214,29 +214,40 @@ def generate_draft(
     # precondition moves with it.
     was = sessions.Precondition(state=session.state, revision=session.revision)
 
-    try:
-        result = engine.generate_draft(
-            DraftGenerateRequest(output_type=session.output_type, brief=session.brief)
-        )
-    except GenerationTimeoutError:
-        _unlock(connection, account, session, was)
-        generation_timeout()
-    except AiEngineUnavailableError as exc:
-        # ⚠️ No fallback here, by decision. `brief:fill` degrades because skipping an
-        # inference still leaves the user's own words; a draft has nothing to fall back to,
-        # and "something reasonable" would be invented ad copy (ADR-0005).
-        _unlock(connection, account, session, was)
-        upstream_unavailable(str(exc))
+    # ⚠️ Four outcomes, recorded separately. `refused` is the guardrail working (INV-6) and
+    # `timeout` is the engine giving up before we do - collapsing either into "failed" would
+    # hide the two numbers most worth watching. Each branch records before it raises, because
+    # the helpers below (`generation_timeout` and friends) do not return
+    # (backend_core.observability).
+    with observability.measured() as elapsed_ms:
+        try:
+            result = engine.generate_draft(
+                DraftGenerateRequest(output_type=session.output_type, brief=session.brief)
+            )
+        except GenerationTimeoutError:
+            observability.record(logger, "draft:generate", "timeout", elapsed_ms())
+            _unlock(connection, account, session, was)
+            generation_timeout()
+        except AiEngineUnavailableError as exc:
+            # ⚠️ No fallback here, by decision. `brief:fill` degrades because skipping an
+            # inference still leaves the user's own words; a draft has nothing to fall back
+            # to, and "something reasonable" would be invented ad copy (ADR-0005).
+            observability.record(logger, "draft:generate", "unavailable", elapsed_ms())
+            _unlock(connection, account, session, was)
+            upstream_unavailable(str(exc))
 
-    if result.draft is None:
-        # A refusal is a successful call: the engine could have written something and
-        # declined to invent it. Not something to retry around — the guardrail refusing is
-        # the design working (INV-6).
-        _unlock(connection, account, session, was)
-        content_policy_rejected(
-            "입력한 제품 정보만으로는 광고 문구의 근거가 부족합니다. "
-            f"소구점을 구체적으로 적어 주세요. (사유: {result.refusal_reason})"
-        )
+        if result.draft is None:
+            # A refusal is a successful call: the engine could have written something and
+            # declined to invent it. Not something to retry around — the guardrail refusing
+            # is the design working (INV-6).
+            observability.record(logger, "draft:generate", "refused", elapsed_ms())
+            _unlock(connection, account, session, was)
+            content_policy_rejected(
+                "입력한 제품 정보만으로는 광고 문구의 근거가 부족합니다. "
+                f"소구점을 구체적으로 적어 주세요. (사유: {result.refusal_reason})"
+            )
+
+        observability.record(logger, "draft:generate", "ok", elapsed_ms())
 
     return _store(
         connection, account, session_flow.apply_draft(session, result, sessions.now()), was
@@ -518,17 +529,30 @@ def _fill_brief(
     degraded rate that climbs is visible — `messageMode` is a reported metric, and a
     degradation nobody counted is a degradation nobody noticed.
     """
-    try:
-        return engine.fill_brief(
-            product_name=body.product_name,
-            selling_point=body.selling_point,
-            note=body.note or "",
-            image=payload,
-            filename=body.product_image.filename or "upload",
+    # ⚠️ `degraded` is recorded as an **outcome, not a failure**. It is the number the
+    # report asks for by name (05 일정 08-26), and folding it into a failure rate would both
+    # overstate failures and erase the metric (backend_core.observability).
+    with observability.measured() as elapsed_ms:
+        try:
+            filled = engine.fill_brief(
+                product_name=body.product_name,
+                selling_point=body.selling_point,
+                note=body.note or "",
+                image=payload,
+                filename=body.product_image.filename or "upload",
+            )
+        except AiEngineUnavailableError as exc:
+            logger.warning("brief:fill unavailable, degrading to user input: %s", exc)
+            observability.record(logger, "brief:fill", "degraded", elapsed_ms())
+            return None
+
+        observability.record(
+            logger,
+            "brief:fill",
+            "needs_input" if filled.needs_input else "filled",
+            elapsed_ms(),
         )
-    except AiEngineUnavailableError as exc:
-        logger.warning("brief:fill unavailable, degrading to user input: %s", exc)
-        return None
+        return filled
 
 
 def _refill_brief(

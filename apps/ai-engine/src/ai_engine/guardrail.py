@@ -1,149 +1,38 @@
-"""Guardrail — force evidence, refuse without it.
+"""Guardrail - 근거 밖 주장을 검출하고, 근거가 없으면 쓰지 않습니다.
 
-⚠️ **두 벌이 들어 있고, 서로 다른 경로의 것입니다.** 아래쪽 `verify` 계열은 템플릿 질의응답
-(`/v1/generate`)의 것이고, `check_claims` 계열이 광고 경로의 것입니다. 판정 방식이 다른
-이유는 [ADR-0019](../../../../docs/adr/0019-광고_카피_가드레일은_금지_표현을_검출한다.md)에
+판정은 **금지 표현 검출**입니다. 어휘 겹침(생성된 문장의 bigram 중 몇 퍼센트가 근거에 있는가)이
+아닌 이유는 [ADR-0019](../../../../docs/adr/0019-광고_카피_가드레일은_금지_표현을_검출한다.md)에
 있습니다 - 한 줄로 줄이면 **근거가 한 문장뿐인 짧은 카피에서는 어휘 겹침이 판정 근거가 되지
-못하기 때문**입니다.
+못하기 때문**입니다. 실측에서 두 방향으로 틀렸습니다: 제작 지시문이 전량 위반으로 잡히고,
+정작 타사 비교는 통과했습니다.
 
-질의응답 경로가 삭제되면 `verify` 와 `GuardrailContext` 도 함께 나갑니다 (AGENTS.md 현재 상태).
-그때까지 **둘을 섞지 마세요** - 광고 경로에서 `verify` 를 부르면 지시문(`visualPlan`)이 전부
-위반으로 잡히고, 정작 타사 비교는 통과합니다 (2026-08-20 실측).
+가드레일은 두 벌이고 **둘 다 있어야 합니다** (생성_파이프라인 5.1절).
 
---- 질의응답 경로 (삭제 예정) ---------------------------------------------------------
+1. **프롬프트 쪽** (`draft_prompt.GUARDRAIL_BLOCK`) - 근거에 없는 것을 쓰지 말라고 지시합니다.
+   필요하지만 충분하지 않습니다. 프롬프트는 요청이지 보장이 아닙니다.
+2. **출력 쪽** (`check_claims`) - 나온 문구를 사후에 검사합니다. 환각 억제를 *가정*이 아니라
+   *측정 가능한 것*으로 만드는 쪽이 이것입니다.
 
-Two halves, and both are needed:
+⚠️ on/off 스위치는 **같은 평가 셋을 양쪽 모드로 채점하기 위해서만** 존재합니다(off = 대조군).
+테스트나 시연을 통과시키려고 끄는 것은 아무것도 고치지 않습니다 - 보고서가 딛고 선 지표를
+무효로 만듭니다.
 
-1. **Prompt-side** (`GUARDRAIL_PROMPT_V0`, `build_prompt`) — tells the model to write only
-   from retrieved source text. Necessary, insufficient: a prompt is a request, not a
-   guarantee.
-2. **Output-side** (`verify`) — checks the produced text against the retrieved passages
-   after the fact. This is what makes hallucination suppression *measurable* rather than
-   assumed.
+설계 노트: 검사는 의도적으로 순수 함수이고 의존이 없습니다. 모델로 채점하면 더 강하지만 요청마다
+외부 호출이 붙고 CI 가 비결정적이 됩니다. 그 자리는 eval 하네스의 교차 채점 단계입니다
+(채점 모델 != 생성 모델).
 
-⚠️ The on/off switch exists solely so the same eval set can be scored in both modes
-(guardrail off = control group). Turning it off to make a test or a demo pass does not fix
-anything — it invalidates the metric the report rests on.
-
-Design note: `verify` is intentionally lexical and dependency-free. A model-graded check
-would be stronger but costs an external call per request and makes CI non-deterministic;
-that belongs in the eval harness's cross-model grading step (grading model ≠ generation
-model).
+**2026-08-20 에 템플릿 질의응답용 `verify` 계열이 `/v1/generate` 라우트와 함께 삭제됐습니다.**
+같은 파일에 판정 방식이 둘 있으면 광고 경로에서 잘못된 쪽을 부르기 쉬웠고, 실제로 그것이
+ADR-0019 를 쓰게 만든 사고였습니다.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
-from ai_engine.models.legacy_qa import GuardrailReport, Passage, Source, Violation
-
-GUARDRAIL_PROMPT_V0 = """당신은 아래 <근거>만 사용해 답변하는 작성자입니다.
-
-[절대 규칙]
-1. <근거>에 있는 내용만 사용하세요. 그 밖의 지식·상식·추측을 쓰지 마세요.
-2. 근거에 없는 수치, 날짜, 기관명, 고유명사를 만들어 내지 마세요.
-3. 문장은 3개 이하로 짧게 쓰고, 전문 용어 대신 쉬운 말을 쓰세요.
-4. <근거>가 비어 있으면 답을 만들지 말고 정확히 `NO_EVIDENCE` 한 단어만 출력하세요.
-
-[질문]
-{question}
-
-<근거>
-{evidence}
-</근거>
-
-위 규칙을 지켜 답변 본문만 출력하세요. 설명이나 머리말을 붙이지 마세요."""
-
-NO_EVIDENCE_SENTINEL = "NO_EVIDENCE"
-
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])\s+|\n+")
 _NON_WORD = re.compile(r"[^0-9A-Za-z가-힣]")
-
-# Below this share of overlapping character bigrams, a sentence is treated as saying
-# something the sources do not. Tuned against the fixture corpus — re-tune when the real
-# corpus lands and record the number in the eval harness, not in someone's head.
-SUPPORT_THRESHOLD = 0.5
-
-
-@dataclass(frozen=True)
-class GuardrailContext:
-    """What the output is allowed to be built from.
-
-    `allowed_phrases` is the reviewed message frame — fixed scaffolding plus values the
-    caller supplied. Declaring it explicitly keeps the check honest: everything outside
-    the frame must trace back to a source, and widening the frame is a visible diff rather
-    than a silently looser guardrail.
-    """
-
-    sources: list[Source]
-    allowed_phrases: tuple[str, ...] = field(default_factory=tuple)
-
-    @classmethod
-    def from_passages(
-        cls, passages: list[Passage], allowed_phrases: tuple[str, ...] = ()
-    ) -> GuardrailContext:
-        sources = [Source(title=p.title, quote=p.text, url=p.url) for p in passages]
-        return cls(sources=sources, allowed_phrases=allowed_phrases)
-
-
-def build_prompt(question: str, passages: list[Passage]) -> str:
-    """Render the guardrail prompt. Empty evidence is passed through, not hidden.
-
-    Sending an empty <근거> block is deliberate: rule 4 makes the model answer with the
-    NO_EVIDENCE sentinel, so refusal is exercised on the same path as generation instead
-    of being a branch the model never sees.
-    """
-    evidence = "\n".join(f"- ({p.title}) {p.text}" for p in passages)
-    return GUARDRAIL_PROMPT_V0.format(question=question, evidence=evidence)
-
-
-def _bigrams(text: str) -> set[str]:
-    compact = _NON_WORD.sub("", text)
-    return {compact[i : i + 2] for i in range(len(compact) - 1)}
-
-
-def _supported(sentence: str, allowed: set[str]) -> bool:
-    grams = _bigrams(sentence)
-    if not grams:
-        return True  # punctuation-only fragment carries no claim
-    return len(grams & allowed) / len(grams) >= SUPPORT_THRESHOLD
-
-
-def verify(body: str, ctx: GuardrailContext, *, enabled: bool = True) -> GuardrailReport:
-    """Check generated text against the evidence it was supposed to come from.
-
-    Returns a report instead of raising: the caller decides what to do with a violation,
-    and the eval harness needs the violation list even for outputs that were sent.
-    """
-    if not enabled:
-        # `passed=False` — see GuardrailReport: a disabled guardrail is not a pass.
-        return GuardrailReport(enabled=False, passed=False, violations=[])
-
-    violations: list[Violation] = []
-    stripped = body.strip()
-
-    if not stripped or stripped == NO_EVIDENCE_SENTINEL:
-        violations.append("empty_output")
-    if not ctx.sources:
-        violations.append("no_evidence")
-
-    if stripped and stripped != NO_EVIDENCE_SENTINEL:
-        allowed: set[str] = set()
-        for source in ctx.sources:
-            allowed |= _bigrams(source.quote)
-        for phrase in ctx.allowed_phrases:
-            allowed |= _bigrams(phrase)
-
-        sentences = [s for s in _SENTENCE_SPLIT.split(stripped) if s.strip()]
-        if any(not _supported(sentence, allowed) for sentence in sentences):
-            violations.append("unsupported_claim")
-
-    return GuardrailReport(enabled=True, passed=not violations, violations=violations)
-
-
-# --- 광고 경로 (ADR-0019) --------------------------------------------------------------
 
 
 ClaimKind = Literal["number", "comparison", "superlative", "award"]
@@ -161,8 +50,7 @@ class ClaimReport:
     """광고 카피 한 벌에 대한 판정.
 
     ⚠️ `enabled=False` 는 **통과가 아닙니다** (`passed` 도 `False`). 대조군 실행과 검증을
-    통과한 출력이 같은 값으로 보이면 환각 억제율의 분자와 분모가 섞입니다 - `GuardrailReport`
-    가 같은 이유로 같은 규약을 씁니다.
+    통과한 출력이 같은 값으로 보이면 환각 억제율의 분자와 분모가 섞입니다.
     """
 
     enabled: bool
@@ -228,7 +116,7 @@ def check_claims(texts: list[str], evidence: str, *, enabled: bool = True) -> Cl
     (생성_파이프라인 5.2절).
 
     ⚠️ 거절이 아니라 **보고서를 돌려줍니다.** 재생성할지 거절할지는 호출부가 정하고, eval
-    하네스는 내보낸 출력의 위반 목록까지 필요합니다 (`verify` 와 같은 규약).
+    하네스는 내보낸 출력의 위반 목록까지 필요합니다.
     """
     if not enabled:
         # `passed=False` — 대조군은 통과가 아닙니다. `ClaimReport` 의 주의 참고.

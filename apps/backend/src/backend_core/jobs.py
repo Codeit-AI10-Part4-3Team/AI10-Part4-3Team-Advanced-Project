@@ -136,6 +136,13 @@ def next_queued(connection: sqlite3.Connection) -> tuple[str, str] | None:
 
     Returns `None` while something is already `running` — the serial-render rule lives here
     rather than in the worker, so a second worker process cannot break it by existing.
+
+    ⚠️ **That holds only because the backend runs as a single process** (`apps/backend/Dockerfile`
+    starts uvicorn without `--workers`). This check and the caller's `jobs.mark_running` are
+    two statements, not one: with two processes both can pass this check and claim the same
+    job — double billing, INV-3 broken, results overwriting each other, and no error anywhere.
+    Making the claim atomic would remove the assumption; it was left out deliberately because
+    the deployment is one process and one GPU (미결정_대장 N19, 2026-08-21 확인).
     """
     running = connection.execute("SELECT 1 FROM jobs WHERE status = 'running' LIMIT 1").fetchone()
     if running is not None:

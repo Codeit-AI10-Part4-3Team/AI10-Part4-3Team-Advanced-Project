@@ -216,6 +216,19 @@ def test_the_comic_prompt_carries_the_six_beats_in_order() -> None:
     assert "단발" in prompt, "만화형 브리프의 인물이 프롬프트에 실려야 합니다"
 
 
+def test_the_comic_prompt_states_the_dialogue_length_hint() -> None:
+    """N18 (2026-08-21 회의 확정). 상한은 **프롬프트 지침으로만** 존재합니다.
+
+    ⚠️ 이 테스트가 고정하는 것은 "지침이 프롬프트에 있다" 뿐입니다. 출력이 25자를 넘겼을 때
+    거부하거나 재생성하는 검사 코드는 **일부러 없습니다** - 회의가 그렇게 정했습니다. 나중에
+    검사를 붙이자는 제안이 오면 그 결정을 뒤집는 회의록이 먼저 필요합니다.
+    """
+    prompt = draft_prompt.build_generate(generate_request("comic"))
+
+    assert f"{draft_prompt.DIALOGUE_LENGTH_HINT}자를 넘기지 마세요" in prompt
+    assert "공백과 문장부호를 포함해" in prompt, "세는 방식이 빠지면 지침이 해석에 열립니다"
+
+
 def test_the_prompt_asks_for_the_changed_field_only() -> None:
     """⚠️ 전체를 다시 쓰게 하지 않습니다 (생성_파이프라인 3절). 전체 재생성 후 diff 를 취하는
     방식은 지정하지 않은 자리까지 조용히 바꿉니다."""

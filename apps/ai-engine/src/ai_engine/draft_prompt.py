@@ -19,9 +19,15 @@ from ai_engine.models import (
     PanelRole,
 )
 
-VERSION = "draft-v0"
+VERSION = "draft-v1"
 """프롬프트 판 (생성_파이프라인 4절). 문구를 고치면 함께 올리세요 - **판을 올리지 않은 프롬프트
 변경은 그 이전 실측을 전부 무효로 만듭니다.**"""
+
+DIALOGUE_LENGTH_HINT = 25
+"""만화 대사 길이의 프롬프트 지침 (미결정_대장 N18, 2026-08-21 회의 확정).
+
+⚠️ 이 값을 집행하는 검사 코드는 **없습니다.** 회의가 강제 검사를 만들지 않기로 정했고, 모델이
+넘겨도 그대로 통과합니다. 값을 바꾸면 `VERSION` 도 함께 올리세요."""
 
 GUARDRAIL_BLOCK = """[표현 가이드라인과 금지 사항]
 - 아래 <근거>에 있는 내용만으로 씁니다. 그 밖의 지식, 상식, 추측을 쓰지 마세요.
@@ -149,10 +155,13 @@ def _per_output_type(request: DraftGenerateRequest) -> str:
 def _comic_instructions(brief: Brief) -> str:
     """6컷 고정, 역할도 고정 (기획서 7.3, INV-1, INV-5).
 
-    ⚠️ 대사 길이 상한은 **일부러 숫자로 적지 않았습니다.** 안전이 확인된 구간은 15자 이하이고
-    실패가 관측된 지점은 30자인데 그 사이에 표본이 없습니다 (미결정_대장 N18). 여기서 숫자를
-    하나 고르면 그것이 근거 없이 정본이 되고, 집행하는 검사 코드까지 그 숫자를 따라갑니다.
-    지금은 "짧게" 라는 방향만 주고, 수치와 초과 시 처리는 N18 이 닫힌 뒤에 붙입니다.
+    ⚠️ 대사 길이 상한 25자는 **지침이지 규칙이 아닙니다** (N18, 2026-08-21 회의 확정).
+    모델이 25자를 넘겨도 검사 코드가 거부하거나 재생성시키지 않습니다 - 회의가 강제 검사
+    코드를 만들지 않는 쪽으로 정했기 때문입니다. 근거는 "운영 조건에서 15 ~ 25자가 전부
+    무오탈자였다" 이고 "25자가 한계다" 가 아닙니다. **26자 이상은 재지 않았습니다.**
+
+    세는 규칙을 프롬프트에 적지 않은 것은 집행하는 코드가 없기 때문입니다. 나중에 검사를
+    붙이게 되면 그때 `len()`(공백과 문장부호 포함)으로 맞춥니다.
     """
     beats = "\n".join(
         f"{index}번 칸: {ROLE_BEATS[role]}" for index, role in enumerate(PANEL_ROLES, start=1)
@@ -165,7 +174,10 @@ def _comic_instructions(brief: Brief) -> str:
     ]
     if brief.character is not None:
         lines.append(f"인물: 외모는 {brief.character.appearance}, 복장은 {brief.character.outfit}.")
-    lines.append("말풍선 대사는 한 문장으로 짧게 씁니다. 장면 설명을 대사에 넣지 마세요.")
+    lines.append(
+        f"말풍선 대사는 한 문장으로 짧게 씁니다. 공백과 문장부호를 포함해 "
+        f"{DIALOGUE_LENGTH_HINT}자를 넘기지 마세요. 장면 설명을 대사에 넣지 마세요."
+    )
     return "\n".join(lines)
 
 

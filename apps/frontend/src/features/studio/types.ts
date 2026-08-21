@@ -197,3 +197,25 @@ export interface SessionCreateInput {
   /** 빈 문자열은 "미선택"입니다. 그때 서버가 후보군에서 무작위로 채웁니다. */
   artStyle: string;
 }
+
+/**
+ * 계약의 `BriefPatch`. **바꾸려는 키만 담습니다** - 키를 빼는 것이 "안 바꿈"이고, 값을 비우는
+ * 것은 빈 문자열입니다. 키 생략으로는 비울 수 없습니다.
+ *
+ * ⚠️ **`productImageUrl` 이 없는 것은 빠뜨린 것이 아닙니다.** `briefMeta` 는 그 필드를
+ * `editable` 로 표시하지만 계약의 `BriefPatch` 에는 자리가 없습니다 - 재업로드 경로를 정한
+ * 적이 없기 때문입니다. 화면에서 사진 교체를 제공하기로 하면 계약이 multipart 를 함께 받도록
+ * 먼저 고쳐야 하며, 그 전에 여기 필드를 늘리면 422 로 거절됩니다.
+ *
+ * ⚠️ `panelCount` 도 없습니다. `hidden` 이라 patch 대상이 아닙니다 (INV-4).
+ */
+export interface BriefPatch {
+  productName?: string;
+  sellingPoint?: string;
+  note?: string;
+  category?: string;
+  target?: string;
+  artStyle?: string;
+  character?: Character;
+  aspectRatio?: string;
+}

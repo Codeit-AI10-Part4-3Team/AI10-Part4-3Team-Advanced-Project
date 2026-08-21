@@ -4,10 +4,14 @@
 `backend_core.observability` 가 남긴 `obs` 줄을 읽습니다. 로그는 컨테이너 표준 출력이 아니라
 `adgen-state` 볼륨 아래 파일이며, 그 이유는 그 모듈의 docstring 에 있습니다.
 
-    # VM 에서
-    docker compose -f infra/docker-compose.yml exec backend python /app/../scripts/observe.py
-    # 또는 볼륨을 직접 읽습니다
+    # VM 에서. 볼륨을 호스트에서 직접 읽습니다 (compose 프로젝트 이름이 `adgen` 으로
+    # 고정돼 있어 볼륨 이름이 `adgen_adgen-state` 입니다).
     python3 scripts/observe.py --log-dir /var/lib/docker/volumes/adgen_adgen-state/_data/logs
+
+    # 주의: 컨테이너 안에서 부를 수는 없습니다. backend 이미지의 빌드 컨텍스트가
+    # apps/backend 이고 `pyproject.toml` 과 `src` 만 COPY 하므로 이 스크립트는 이미지에
+    # 없습니다. 굳이 컨테이너에서 돌리려면 먼저 넣어야 합니다:
+    #   docker compose -f infra/docker-compose.yml cp scripts/observe.py backend:/tmp/
 
     python3 scripts/observe.py --log-dir ./data/logs --since 2026-08-21
 
@@ -37,12 +41,18 @@ LINE = re.compile(r"\bobs seam=(?P<seam>\S+) outcome=(?P<outcome>\S+) elapsed_ms
 FAILURES: dict[str, set[str]] = {
     "image:render": {"failed", "unknown"},
     "draft:generate": {"timeout", "unavailable"},
+    "draft:patch": {"timeout", "unavailable"},
     "brief:fill": set(),  # 이 이음매의 유일한 나쁜 결과가 degraded 이고, 그것은 실패가 아닙니다
 }
+
+# 주의: **여기 없는 이음매는 실패율을 0% 로 보고합니다.** 그것은 "건강하다" 가 아니라
+# "무엇을 실패로 셀지 아무도 정하지 않았다" 입니다. 둘이 출력에서 구별되지 않으면 새 이음매를
+# 배선하고 표에 넣는 것을 잊은 날 보고서가 조용히 거짓말을 합니다 - 아래에서 표시합니다.
 
 # 실패는 아니지만 따로 세어 보고하는 결과. 05 일정 08-26 이 이름으로 요구한 것들입니다.
 REPORTED: dict[str, str] = {
     "degraded": "열화",
+    "degraded_photo_gone": "열화(사진 소실)",
     "refused": "가드레일 거절",
     "needs_input": "되물음",
 }
@@ -111,7 +121,10 @@ def main() -> int:
         print(f"  표본            {total}건" + ("   <- 표본이 적습니다" if total < 20 else ""))
         print(f"  지연 p50 / p95  {percentile(samples, 50)} / {percentile(samples, 95)} ms")
         print(f"  최대            {max(samples)} ms")
-        print(f"  실패율          {failures / total:.1%}  ({failures}/{total})")
+        if seam in FAILURES:
+            print(f"  실패율          {failures / total:.1%}  ({failures}/{total})")
+        else:
+            print("  실패율          ?  <- FAILURES 에 이 이음매가 없습니다 (0% 가 아닙니다)")
         for outcome, label in REPORTED.items():
             if outcome in counted:
                 # 한글 라벨은 폭이 두 칸이라 문자 수로 맞추면 어긋납니다. 채우지 않습니다.

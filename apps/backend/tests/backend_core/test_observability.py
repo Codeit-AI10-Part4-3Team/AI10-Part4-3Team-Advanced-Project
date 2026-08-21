@@ -68,7 +68,8 @@ def test_installing_twice_leaves_one_handler(tmp_path: Path) -> None:
 
     try:
         ours = [h for h in root.handlers if getattr(h, "_adgen_tag", None) is not None]
-        assert len(ours) == 1
+        # A file handler and a stream handler, and they replace as a pair.
+        assert len(ours) == 2
         assert len(root.handlers) == after_first
     finally:
         for handler in [h for h in root.handlers if getattr(h, "_adgen_tag", None) is not None]:
@@ -106,3 +107,53 @@ def test_an_unusable_log_directory_does_not_stop_the_service(tmp_path: Path) -> 
     observability.install_file_log(blocker / "logs", retention_d=30)
 
     assert not any(getattr(h, "_adgen_tag", None) is not None for h in logging.getLogger().handlers)
+
+
+def test_application_logs_still_reach_standard_output(tmp_path: Path, capsys) -> None:
+    """⚠️ **Adding the file handler is what threatens this**, and it went unnoticed once.
+
+    Under the container `CMD`, uvicorn's logging config has no `root` entry, so before this
+    function runs the root logger has **no handlers** and warnings reach stderr only through
+    `logging.lastResort`. Python uses that fallback precisely when `callHandlers` found none —
+    so the first handler we add silently ends it, and from then on `logger.warning` from
+    `backend_core.render` or `api.worker` goes to the file and nowhere else.
+
+    That matters because `scripts/deploy-vm.sh` dumps `compose logs --tail 40` as its failure
+    diagnostic and the CI smoke prints `docker logs`. Both would keep passing while showing
+    nothing — the failure would be invisible in exactly the place built to show it
+    (found in PR #181 리뷰; a real run's stdout was empty).
+    """
+    observability.install_file_log(tmp_path / "logs", retention_d=30)
+    try:
+        logging.getLogger("backend_core.render").warning("렌더가 실패했습니다")
+        observability.record(logging.getLogger("test.obs"), "image:render", "failed", 12)
+    finally:
+        for handler in [
+            h for h in logging.getLogger().handlers if getattr(h, "_adgen_tag", None) is not None
+        ]:
+            handler.flush()
+            logging.getLogger().removeHandler(handler)
+            handler.close()
+
+    printed = capsys.readouterr().out
+    assert "렌더가 실패했습니다" in printed
+    assert "obs seam=image:render outcome=failed" in printed
+
+
+def test_the_transport_chatter_stays_out_of_the_retained_file(tmp_path: Path) -> None:
+    """`httpx` logs one INFO line per upstream call; the file is kept 30 days with no cap."""
+    observability.install_file_log(tmp_path / "logs", retention_d=30)
+    try:
+        logging.getLogger("httpx").info('HTTP Request: POST http://x "HTTP/1.1 200 OK"')
+        observability.record(logging.getLogger("test.obs"), "brief:fill", "filled", 7)
+    finally:
+        for handler in [
+            h for h in logging.getLogger().handlers if getattr(h, "_adgen_tag", None) is not None
+        ]:
+            handler.flush()
+            logging.getLogger().removeHandler(handler)
+            handler.close()
+
+    written = (tmp_path / "logs" / "app.log").read_text(encoding="utf-8")
+    assert "obs seam=brief:fill" in written
+    assert "HTTP Request" not in written

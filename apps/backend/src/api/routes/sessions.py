@@ -332,22 +332,34 @@ def patch_draft(
         # `ValueError` and the contract's answer is 422 `INVALID_REQUEST`.
         invalid_request(str(exc))
 
-    try:
-        result = engine.patch_draft(
-            DraftPatchEngineRequest(
-                output_type=session.output_type,
-                brief=session.brief,
-                draft=session.draft,
-                patch=body.patch,
+    # ⚠️ **A fourth model-calling seam, and it costs the same money as the others.** Leaving
+    # it unmeasured would make the reported failure rate exclude a whole user-facing
+    # generation call, and `observe.py` cannot tell an unmeasured seam from a healthy one -
+    # both read 0% (PR #181 리뷰).
+    with observability.measured() as elapsed_ms:
+        try:
+            result = engine.patch_draft(
+                DraftPatchEngineRequest(
+                    output_type=session.output_type,
+                    brief=session.brief,
+                    draft=session.draft,
+                    patch=body.patch,
+                )
             )
-        )
-    except GenerationTimeoutError:
-        generation_timeout()
-    except AiEngineUnavailableError as exc:
-        upstream_unavailable(str(exc))
+        except GenerationTimeoutError:
+            observability.record(logger, "draft:patch", "timeout", elapsed_ms())
+            generation_timeout()
+        except AiEngineUnavailableError as exc:
+            observability.record(logger, "draft:patch", "unavailable", elapsed_ms())
+            upstream_unavailable(str(exc))
 
-    if result.draft is None:
-        content_policy_rejected(f"교체한 내용의 근거가 부족합니다. (사유: {result.refusal_reason})")
+        if result.draft is None:
+            observability.record(logger, "draft:patch", "refused", elapsed_ms())
+            content_policy_rejected(
+                f"교체한 내용의 근거가 부족합니다. (사유: {result.refusal_reason})"
+            )
+
+        observability.record(logger, "draft:patch", "ok", elapsed_ms())
 
     return _store(
         connection, account, session_flow.replace_draft(session, result.draft, sessions.now()), was
@@ -583,23 +595,38 @@ def _refill_brief(
     the exit (PR #148 리뷰에서 신호정 재현). *When* we noticed the file was missing means
     nothing to them.
     """
-    photo = images.find(settings.image_dir, session.session_id)
-    if photo is None:
-        logger.warning(
-            "brief:fill retry skipped, photo is gone (session=%s): degrading",
-            session.session_id,
-        )
-        return session_flow.RefillOutcome(filled=None)
-    try:
-        return session_flow.RefillOutcome(
-            filled=engine.fill_brief(
+    # ⚠️ **This is the second `brief:fill` call site, and it degrades on its own terms.**
+    # Measuring only the creation-time one under-counts the degraded rate exactly when it
+    # matters most: the engine is down and users are answering their `needsInput` prompts, so
+    # every retry degrades while the report still shows only first calls (PR #181 리뷰).
+    # The two degradation causes stay separable - a vanished photo is our retention batch
+    # racing the user, not the engine being unavailable, and the fixes are different.
+    with observability.measured() as elapsed_ms:
+        photo = images.find(settings.image_dir, session.session_id)
+        if photo is None:
+            logger.warning(
+                "brief:fill retry skipped, photo is gone (session=%s): degrading",
+                session.session_id,
+            )
+            observability.record(logger, "brief:fill", "degraded_photo_gone", elapsed_ms())
+            return session_flow.RefillOutcome(filled=None)
+        try:
+            filled = engine.fill_brief(
                 product_name=merged.product_name,
                 selling_point=merged.selling_point,
                 note=merged.note,
                 image=photo.read_bytes(),
                 filename=photo.name,
             )
+        except (AiEngineUnavailableError, OSError) as exc:
+            logger.warning("brief:fill retry unavailable, degrading to user input: %s", exc)
+            observability.record(logger, "brief:fill", "degraded", elapsed_ms())
+            return session_flow.RefillOutcome(filled=None)
+
+        observability.record(
+            logger,
+            "brief:fill",
+            "needs_input" if filled.needs_input else "filled",
+            elapsed_ms(),
         )
-    except (AiEngineUnavailableError, OSError) as exc:
-        logger.warning("brief:fill retry unavailable, degrading to user input: %s", exc)
-        return session_flow.RefillOutcome(filled=None)
+        return session_flow.RefillOutcome(filled=filled)

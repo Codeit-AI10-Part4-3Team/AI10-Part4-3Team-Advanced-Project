@@ -220,6 +220,80 @@ def test_a_guardrail_refusal_is_recorded_as_refused_not_unavailable(
     assert "outcome=refused" in lines[0]
 
 
+def test_a_retry_that_degrades_is_counted_too_not_only_the_first_call(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`PATCH .../brief` is the **second** `brief:fill` call site and it degrades on its own.
+
+    ⚠️ Measuring only session creation under-counts the degraded rate exactly when it matters
+    most: the engine is down and users are answering their `needsInput` prompts, so every
+    retry degrades while the report shows only first calls (PR #181 리뷰).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.available = False
+    # 생성 시점 호출도 같은 이음매로 남으므로, 재시도분만 보려면 비우고 시작합니다.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=brief:fill")]
+    assert len(lines) == 1
+    assert "outcome=degraded" in lines[0]
+
+
+def test_a_patch_that_cannot_find_the_photo_is_a_distinguishable_degradation(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """A vanished photo is our retention batch racing the user, not the engine being down.
+
+    ⚠️ Both end in `RefillOutcome(filled=None)` and both look the same to the user, but the
+    fixes are different - one is a period, the other is a dependency. Folding them into one
+    outcome would make the log unable to tell us which one we are looking at.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    for photo in Path(deps.settings().image_dir).rglob("*"):
+        if photo.is_file():
+            photo.unlink()
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=brief:fill")]
+    assert len(lines) == 1
+    assert "outcome=degraded_photo_gone" in lines[0]
+
+
+def test_a_draft_patch_is_measured_like_every_other_model_call(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`draft:patch` calls the model and costs money like the other three.
+
+    ⚠️ Left unmeasured it would drop a whole user-facing generation call out of the reported
+    failure rate, and `scripts/observe.py` cannot tell an unmeasured seam from a healthy one
+    - both read 0% (PR #181 리뷰).
+    """
+    session = _create(client)
+    session_id = session["sessionId"]
+    drafted = client.post(f"/v1/sessions/{session_id}/draft").json()
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        response = client.patch(
+            f"/v1/sessions/{session_id}/draft",
+            json={"revision": drafted["revision"], "patch": {"copy": "새 카피입니다"}},
+        )
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=draft:patch")]
+    assert response.status_code == 200, response.text
+    assert len(lines) == 1
+    assert "outcome=ok" in lines[0]
+
+
 # ---- answering needsInput: the retry (계약 `PATCH .../brief`, 미결정_대장 B-11) ---------
 
 

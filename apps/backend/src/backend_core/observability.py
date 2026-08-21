@@ -23,6 +23,7 @@ countable next to present ones. Keep `PREFIX` first and everything else `key=val
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -102,6 +103,9 @@ def install_file_log(log_dir: str | Path, retention_d: int) -> None:
             utc=True,
         )
     except OSError:
+        # ⚠️ Returning here leaves the root without our stream handler too, which is correct:
+        # if we could not open the file, nothing about stdout has changed yet, so
+        # `lastResort` still carries warnings exactly as it did before this function existed.
         logging.getLogger(__name__).warning(
             "운영 로그 파일을 열 수 없습니다: %s. 표준 출력만 남습니다 (배포마다 사라집니다).",
             directory,
@@ -109,11 +113,33 @@ def install_file_log(log_dir: str | Path, retention_d: int) -> None:
         )
         return
 
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+
     handler._adgen_tag = _HANDLER_TAG  # type: ignore[attr-defined]
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.setFormatter(formatter)
     root.addHandler(handler)
+
+    # ⚠️ **Adding the file handler is what makes this one necessary**, and leaving it out was
+    # a real defect (PR #181 리뷰). Under the container `CMD` uvicorn's logging config defines
+    # no `root` entry, so the root logger has *no* handlers and application warnings reach
+    # stderr only through `logging.lastResort` — which Python uses precisely because
+    # `callHandlers` found none. The moment a handler exists, `lastResort` is skipped and
+    # every `logger.warning` from `backend_core.render`, `api.errors` and `api.worker` would
+    # go to the file and nowhere else. `scripts/deploy-vm.sh` dumps `compose logs --tail 40`
+    # as its failure diagnostic and the CI smoke prints `docker logs`; both would have gone
+    # blind on the exact failures they exist to show, silently.
+    stream = logging.StreamHandler(sys.stdout)
+    stream._adgen_tag = _HANDLER_TAG  # type: ignore[attr-defined]
+    stream.setFormatter(formatter)
+    root.addHandler(stream)
+
     # uvicorn configures the root logger at WARNING; our lines are INFO and would be dropped
     # before reaching any handler. Raising the *root* level rather than the handler's is the
     # part that matters — a handler cannot see what the logger never emits.
     if root.level > logging.INFO or root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
+
+    # ⚠️ Scoped, not global. `httpx` is the transport in `backend_core.ai_client` and logs one
+    # INFO line per upstream call; with the root at INFO those would land in a file kept for
+    # 30 days with no size cap. The seam records are what this file is for.
+    logging.getLogger("httpx").setLevel(logging.WARNING)

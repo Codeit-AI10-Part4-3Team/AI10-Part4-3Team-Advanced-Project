@@ -10,14 +10,6 @@ from typing import Any
 import pytest
 import yaml
 
-from ai_engine.retrieval import FixtureRetriever
-
-# A question the bundled dummy corpus can actually answer. Keep it in sync with
-# src/ai_engine/fixtures/corpus.jsonl — if the corpus changes and this does not, the
-# tests start asserting on the refusal path without anyone noticing.
-ANSWERABLE_QUESTION = "환불은 어떻게 하나요?"
-UNANSWERABLE_QUESTION = "내일 주식 시장 전망을 알려주세요"
-
 # tests/ -> apps/ai-engine/ -> apps/ -> repo root
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "openapi.yaml"
 
@@ -43,8 +35,3 @@ def contract_schemas() -> dict[str, Any]:
     spec: dict[str, Any] = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     schemas: dict[str, Any] = spec["components"]["schemas"]
     return schemas
-
-
-@pytest.fixture
-def retriever() -> FixtureRetriever:
-    return FixtureRetriever.from_jsonl()

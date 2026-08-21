@@ -140,6 +140,15 @@ class Settings(BaseSettings):
     # the whole call. It acts as a total budget only because the engine answers in one shot
     # instead of streaming — do not read the number as a hard deadline, and do not let the
     # gap to the engine's budget shrink on the assumption that it is one.
+    #
+    # ⚠️ **The engine's side of that pair is not a wall clock either, and by a larger factor.**
+    # `ADGEN_IMAGE_TIMEOUT_S` is handed to the vendor SDK, and none of ai_engine's three call
+    # sites pass `max_retries` — so the SDK's own default applies and one call can become
+    # several attempts, retries included on timeout. The ordering this comment exists to
+    # protect ("the engine gives up first, so it can say which panel stalled") holds only
+    # while an attempt and a call are the same thing. Closing that is 03's, in
+    # `apps/ai-engine/` (PR #176 리뷰, 신호정); this note is here so nobody reads the 240 < 300
+    # gap as proof that they already are.
     render_timeout_s: float = 300.0
 
     # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which

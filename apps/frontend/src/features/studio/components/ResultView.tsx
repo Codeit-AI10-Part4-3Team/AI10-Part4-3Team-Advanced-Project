@@ -1,6 +1,6 @@
 import { describeCode } from "../errors";
 import { JOB_STATUS_LABEL } from "../labels";
-import type { Job } from "../types";
+import type { ErrorCode, Job } from "../types";
 
 interface ResultViewProps {
   job: Job;
@@ -18,6 +18,25 @@ function expiryText(expiresAt: string): string {
  * ⚠️ **키의 유무로 분기합니다.** `result` 와 `error` 는 해당 상황에서만 실리고 계약에
  * `null` 이 없으므로, `status` 로 갈라 놓고 값을 비교하지 않습니다.
  */
+/** 잡이 남긴 실패. `error` 키가 없을 수도 있어(계약) 그때는 최소한만 말합니다. */
+function JobFailure({ error }: { error?: { code: ErrorCode; message: string } }) {
+  if (error === undefined) {
+    return (
+      <p className="workspace-error" role="alert">
+        이미지 생성에 실패했습니다.
+      </p>
+    );
+  }
+  const described = describeCode(error.code, error.message);
+  return (
+    <p className="workspace-error" role="alert">
+      {described.label !== undefined && <strong>{described.label}</strong>}
+      {described.label !== undefined && " "}
+      {described.message}
+    </p>
+  );
+}
+
 export function ResultView({ job, productName }: ResultViewProps) {
   return (
     <div className="result-section">
@@ -42,13 +61,10 @@ export function ResultView({ job, productName }: ResultViewProps) {
         </div>
       )}
 
-      {job.status === "failed" && (
-        <p className="workspace-error" role="alert">
-          {job.error === undefined
-            ? "이미지 생성에 실패했습니다."
-            : describeCode(job.error.code, job.error.message)}
-        </p>
-      )}
+      {/* ⚠️ 잡 실패는 **여기 남습니다.** 우측 상단 알림은 지나가는 통지이고, 이것은 세션이
+          끝난 상태라 결과 자리에 그대로 있어야 합니다. 5 종 딱지는 같은 표에서 나오므로
+          어느 실패인지는 두 곳에서 같게 읽힙니다. */}
+      {job.status === "failed" && <JobFailure error={job.error} />}
 
       {job.status === "done" && job.result !== undefined && (
         <div className="result-done">

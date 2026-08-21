@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { createSession } from "./api";
 import { BriefForm } from "./components/BriefForm";
 import { useApiError } from "./errors";
+import { ErrorNotice } from "./components/ErrorNotice";
 import type { SessionCreateInput } from "./types";
 
 const STEPS = [
@@ -14,7 +15,7 @@ const STEPS = [
 
 export function NewSessionPage() {
   const navigate = useNavigate();
-  const { message, report, clear } = useApiError();
+  const { failure, report, clear } = useApiError();
   const [pending, setPending] = useState(false);
 
   const create = async (input: SessionCreateInput) => {
@@ -41,11 +42,7 @@ export function NewSessionPage() {
         </div>
       </header>
 
-      {message !== null && (
-        <p className="workspace-error" role="alert">
-          {message}
-        </p>
-      )}
+      {failure !== null && <ErrorNotice failure={failure} onDismiss={clear} />}
 
       <div className="workspace-grid">
         <BriefForm onSubmit={(input) => void create(input)} pending={pending} />

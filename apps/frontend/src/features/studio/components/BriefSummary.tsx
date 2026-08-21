@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { listArtStyles } from "../api";
 import { OUTPUT_TYPE_LABEL } from "../labels";
+import { ArtStylePicker } from "./ArtStylePicker";
 import type { ArtStyle, Brief, BriefPatch, FieldMeta, Session } from "../types";
 
 interface BriefSummaryProps {
@@ -293,26 +294,16 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
           )}
 
           {isEditable(briefMeta.artStyle) && (
-            <label className="field">
+            <div className="field">
               <span>화풍</span>
-              <select
+              {/* 생성 폼과 같은 픽커를 씁니다. 같은 값을 고르는 자리가 둘인데 모양이 다르면
+                  어느 쪽이 진짜인지 사용자가 판단해야 합니다. */}
+              <ArtStylePicker
+                styles={artStyles}
                 value={form.artStyle}
-                disabled={artStyles.length === 0}
-                onChange={(event) => update("artStyle", event.target.value)}
-              >
-                <option value="">무작위 추천</option>
-                {artStyles.map((style) => (
-                  <option key={style.artStyleId} value={style.artStyleId}>
-                    {style.name}
-                  </option>
-                ))}
-              </select>
-              <small>
-                {artStyles.length === 0
-                  ? "화풍 후보가 아직 설정에 들어오지 않았습니다. 서버가 무작위로 채웁니다."
-                  : "고르지 않으면 서버가 후보군에서 무작위로 채웁니다."}
-              </small>
-            </label>
+                onChange={(id) => update("artStyle", id)}
+              />
+            </div>
           )}
 
           {brief.aspectRatio !== undefined && isEditable(briefMeta.aspectRatio) && (

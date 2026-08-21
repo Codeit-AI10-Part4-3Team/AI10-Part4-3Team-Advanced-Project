@@ -123,6 +123,8 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<EditForm>(() => toForm(brief));
   const [saving, setSaving] = useState(false);
+  // 저장을 눌렀는데 보낼 것이 없을 때 무엇이 비었는지 말해 주는 자리입니다.
+  const [hint, setHint] = useState<string | null>(null);
   const [artStyles, setArtStyles] = useState<ArtStyle[]>([]);
 
   // ⚠️ **후보 목록이 비어 있는 것이 지금은 정상입니다.** 목록은 확정됐지만(A-3) 설정
@@ -153,22 +155,40 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
   // 한 번 더 돌고 `react-hooks/set-state-in-effect` 에도 걸립니다.
   const isEditing = editing && editable;
 
-  const update = <K extends keyof EditForm>(key: K, value: EditForm[K]) =>
+  const update = <K extends keyof EditForm>(key: K, value: EditForm[K]) => {
+    // 무엇이든 고치면 안내를 내립니다. 남겨 두면 이미 채운 사람에게 아직 비었다고 말합니다.
+    setHint(null);
     setForm((current) => ({ ...current, [key]: value }));
+  };
 
   function open() {
     // 열 때마다 서버의 최신 값으로 다시 채웁니다. 이전에 쓰다 만 값이 남아 있으면 그것이
     // 지금의 브리프인 줄 알고 저장하게 됩니다.
     setForm(toForm(brief));
+    setHint(null);
     setEditing(true);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setHint(null);
     const patch = diff(brief, form);
 
-    // 바뀐 것이 없으면 요청 자체를 만들지 않습니다.
+    // 바뀐 것이 없으면 요청 자체를 만들지 않습니다 (계약이 `minProperties: 1`).
     if (Object.keys(patch).length === 0) {
+      // ⚠️ **그냥 닫으면 안 되는 경우가 하나 있습니다.** `brief_filling` 은 시안을 만들 수
+      // 없는 상태이고, 화면이 안내하는 유일한 탈출구가 이 폼입니다. 그런데 열화된 세션은
+      // `category` 와 `target` 이 빈 문자열로 시작하므로(session_flow 의 상태 표), 사용자가
+      // 아무것도 채우지 않고 저장을 누르면 patch 가 비어 조용히 닫힙니다. 브라우저 검증도
+      // 서버 422 도 거치지 않아 **왜 안 넘어가는지 알 방법이 없습니다.**
+      if (session.state === "brief_filling") {
+        setHint(
+          session.needsInput === undefined
+            ? "카테고리와 타겟을 채워야 시안을 만들 수 있습니다."
+            : "추가 메모를 채우면 자동 채움을 다시 시도합니다.",
+        );
+        return;
+      }
       setEditing(false);
       return;
     }
@@ -339,6 +359,12 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
                 <small>여기를 채우면 자동 채움을 다시 시도합니다.</small>
               )}
             </label>
+          )}
+
+          {hint !== null && (
+            <p className="notice notice-input" role="status">
+              {hint}
+            </p>
           )}
 
           <div className="brief-edit-actions">

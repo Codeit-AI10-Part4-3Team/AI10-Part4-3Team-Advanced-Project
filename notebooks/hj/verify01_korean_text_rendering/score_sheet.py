@@ -17,6 +17,7 @@ import argparse
 import re
 import csv
 from pathlib import Path
+from typing import NamedTuple
 
 import conditions
 
@@ -411,6 +412,173 @@ def _report_state(
         )
 
 
+def _majority(flags: list[int]) -> bool | None:
+    """과반이면 True, 아니면 False. 판정자가 2명 미만이면 `None`.
+
+    ⚠️ **한 명이 본 회차는 다수결이 성립하지 않습니다.** 그대로 세면 1명 통과가 "다수결 통과"로
+    올라가는데, B-16 이 요구한 것은 3명 중 2명 이상입니다.
+    """
+    if len(flags) < 2:
+        return None
+    return sum(flags) * 2 > len(flags)
+
+
+def _collect_votes(
+    sheets: list[Path],
+) -> tuple[dict[int, list[int]], dict[int, list[int]], dict[int, list[int]]]:
+    """3순위 시트들을 회차별로 접습니다 - (동일 인물, 화풍 일관, 장면 상태)."""
+    same: dict[int, list[int]] = {}
+    style: dict[int, list[int]] = {}
+    state: dict[int, list[int]] = {}
+    for sheet in sheets:
+        for run_id, (score, side, scene) in _parse_sheet(sheet, with_state=True).items():
+            if score is None:
+                continue
+            same.setdefault(run_id, []).append(1 if score >= 1 else 0)
+            if side:
+                style.setdefault(run_id, []).append(1 if side == "Y" else 0)
+            if scene:
+                state.setdefault(run_id, []).append(1 if scene == "Y" else 0)
+    return same, style, state
+
+
+def _axis_line(label: str, votes: dict[int, list[int]]) -> tuple[str, list[int], list[int]]:
+    """한 축의 다수결 결과를 한 줄로 요약하고, 미달 회차와 갈린 회차를 함께 돌려줍니다."""
+    verdicts = {run_id: _majority(flags) for run_id, flags in votes.items()}
+    decided = {run_id: v for run_id, v in verdicts.items() if v is not None}
+    failed = sorted(run_id for run_id, ok in decided.items() if not ok)
+    split = sorted(run_id for run_id, flags in votes.items() if 0 < sum(flags) < len(flags))
+    passed = len(decided) - len(failed)
+    line = f"    {label} - {passed}/{len(decided)}회차 (판정자 과반 기준)"
+    if len(verdicts) > len(decided):
+        undecided = sorted(run_id for run_id, v in verdicts.items() if v is None)
+        line += f", 다수결 미성립 {undecided}"
+    return line, failed, split
+
+
+def _tally_consistency(sheets: list[Path]) -> None:
+    """3순위의 합격 판정 - 회차마다 판정자 다수결 (B-16).
+
+    ⚠️ **판정자별 비율은 합격 판정이 아닙니다.** B-16 이 3순위에 건 기준은 "회차마다 판정자
+    3명 중 2명 이상이 동일 인물로 판정"이므로, 판정 단위가 판정자가 아니라 **회차**입니다.
+    2026-08-21 C2 집계까지는 이 다수결을 코드가 계산하지 않아 손으로 셌습니다.
+
+    ⚠️ **총평(전체 기준 충족 여부)을 코드가 내지 않습니다.** B-16 은 회차별 기준만 정했고
+    "몇 회차가 통과해야 과제가 통과인가"는 정한 적이 없습니다. 여기서 임계값을 만들면 코드가
+    회의록 없이 판정 기준을 세우는 것이 됩니다 (`STATE_COLUMN` 과 같은 이유).
+    """
+    same, style, state = _collect_votes(sheets)
+    if not same:
+        return
+
+    print("\n회차별 다수결 (B-16)")
+    line, failed, split = _axis_line("동일 인물 (합격 판정)", same)
+    print(line)
+    if failed:
+        print(f"    기준 미달 회차: {failed}")
+    if split:
+        print(f"    판정이 갈린 회차: {split} - 수치보다 메모를 먼저 보세요")
+
+    # 아래 두 축은 **참고입니다.** 화풍은 B-16 이 기준을 걸지 않았고, 장면 상태는 2026-08-21
+    # 회의가 "이번 범위 제외, 참고 항목으로만"으로 닫았습니다 (미결정_대장 A-4).
+    for label, votes in (("화풍 일관 (참고)", style), ("장면 상태 연속 (참고)", state)):
+        if not votes:
+            continue
+        ref_line, ref_failed, _ = _axis_line(label, votes)
+        print(ref_line)
+        if ref_failed:
+            print(f"        어긋난 회차: {ref_failed}")
+
+    # ⚠️ 인물은 통과인데 상태가 깨진 회차를 따로 찍습니다. 두 수치를 나란히 두기만 하면 읽는
+    # 사람 눈에는 "3순위 통과"만 남습니다 - 판정 시트에 상태 열을 넣은 이유가 그것입니다.
+    hidden = sorted(
+        run_id
+        for run_id, flags in state.items()
+        if _majority(flags) is False and _majority(same.get(run_id, [])) is True
+    )
+    if hidden:
+        print(
+            f"    주의: {hidden} 는 인물 판정은 통과인데 장면 상태가 다수결 `N` 입니다 "
+            "- 합격 판정에는 영향이 없고 보고서에 관측치로 병기합니다"
+        )
+
+    print(
+        "    전체 기준 충족 여부는 코드가 적지 않습니다 - B-16 은 회차별 기준만 정했고 "
+        "회차 몇 건이 통과해야 하는지는 정한 적이 없습니다."
+    )
+
+
+class Axis(NamedTuple):
+    """판정 종류마다 갈리는 세 값 - 합격 문턱, 본체 열 이름, 보조 열 이름."""
+
+    threshold: int
+    scale: str
+    side_label: str
+
+
+def _axis_of(task: str, variant: str) -> Axis:
+    # 단일 광고형은 칸이 없어 척도가 0/1 입니다. 6칸 기준을 그대로 적용하면 정확한 회차가
+    # 전부 실패로 집계됩니다.
+    if task == "consistency":
+        return Axis(1, "동일 인물 판정", "6칸 화풍 일관")
+    if variant in ("single", "single_len"):
+        side = "정답 카피" if variant == "single_len" else "제품이 주인공"
+        return Axis(1, "카피 정확", side)
+    return Axis(
+        conditions.PANELS_OK_THRESHOLD,
+        f"{conditions.PANELS_OK_THRESHOLD}칸 이상",
+        "틀린 칸 번호" if variant in LENGTH_VARIANTS else "6칸 균등 분할",
+    )
+
+
+def _report_judge(sheet: Path, prefix: str, task: str, variant: str, total: int, axis: Axis) -> None:
+    """판정자 한 사람의 시트를 요약합니다.
+
+    ⚠️ 3순위에서 여기 나오는 수치는 **판정자 개인 값이지 합격 판정이 아닙니다.** B-16 의
+    3순위 기준은 회차별 다수결이고 그것은 `_tally_consistency` 가 냅니다.
+    """
+    judge = sheet.stem[len(prefix) + 1 :]
+    scored = _parse_sheet(sheet, with_state=task == "consistency")
+    filled = {k: v for k, v in scored.items() if v[0] is not None}
+    if not filled:
+        print(f"- {judge}: 채워진 칸이 없습니다 (건너뜀)")
+        return
+
+    ok_runs = sum(1 for panels, _, _s in filled.values() if panels >= axis.threshold)
+    rate = ok_runs / len(filled)
+    side_ok = sum(1 for _, grid, _s in filled.values() if grid == "Y")
+    side_rate = side_ok / len(filled)
+    # ⚠️ **`task` 를 `variant` 보다 먼저 봅니다.** 3순위는 1순위와 같은 회차 폴더를 쓰므로
+    # `variant` 가 `panels_mid` 인 채로 들어옵니다. 순서를 뒤집으면 3순위 시트의 네 번째
+    # 열(화풍 Y/N)이 "칸 번호" 로 취급돼 참고치가 0 으로 눌립니다 (2026-08-20 발견).
+    numeric_side = task == "text" and variant in LENGTH_VARIANTS
+    if numeric_side:
+        side_ok = side_rate = 0.0  # 이 열은 Y/N 이 아니라 칸 번호입니다 (아래에서 집계)
+
+    print(f"- {judge}: 판정 {len(filled)}/{total}건")
+    if task == "consistency":
+        # ⚠️ 여기서는 **비율도 기준도 적지 않습니다.** 1순위의 80%를 붙이면 판정자 한 사람이
+        # 통과와 미달을 가르는 것처럼 보입니다.
+        print(f"    {axis.scale} {ok_runs}건 (판정자 개인 수치. 합격 판정은 아래 다수결)")
+    else:
+        print(
+            f"    성공 판정 - {axis.scale} {ok_runs}건 "
+            f"= {rate:.0%} (기준 {conditions.PASS_RATE_THRESHOLD:.0%})"
+        )
+    if not numeric_side and variant != "single_len":
+        print(f"    참고 - {axis.side_label} {side_ok}건 = {side_rate:.0%}")
+
+    if task == "consistency":
+        _report_state(filled, axis.threshold)
+    elif len(filled) < conditions.TARGET_RUNS:
+        # ⚠️ 이 두 값은 1순위 전용입니다 (conditions.py 주석). 3순위에 걸면 12회차
+        # 만장일치가 "확정 판정이 아닙니다"로 찍힙니다.
+        print(f"    주의: 회차가 {conditions.TARGET_RUNS}회에 못 미쳐 확정 판정이 아닙니다")
+    else:
+        verdict = "기준 충족" if rate >= conditions.PASS_RATE_THRESHOLD else "기준 미달"
+        print(f"    판정: {verdict}")
+
+
 def _tally(run_dir: Path, task: str = "text") -> None:
     rows = _read_manifest(run_dir)
     variant = _variant_of(run_dir, rows)
@@ -421,52 +589,13 @@ def _tally(run_dir: Path, task: str = "text") -> None:
 
     total = len(rows)
     print(f"회차 {total}건 / 판정자 {len(sheets)}명 / variant={variant}\n")
-
-    # 단일 광고형은 칸이 없어 척도가 0/1 입니다. 6칸 기준을 그대로 적용하면 정확한 회차가
-    # 전부 실패로 집계됩니다.
-    if task == "consistency":
-        threshold, scale, side_label = 1, "동일 인물 판정", "6칸 화풍 일관"
-    elif variant in ("single", "single_len"):
-        side = "정답 카피" if variant == "single_len" else "제품이 주인공"
-        threshold, scale, side_label = 1, "카피 정확", side
-    else:
-        threshold = conditions.PANELS_OK_THRESHOLD
-        scale = f"{conditions.PANELS_OK_THRESHOLD}칸 이상"
-        side_label = "틀린 칸 번호" if variant in LENGTH_VARIANTS else "6칸 균등 분할"
+    axis = _axis_of(task, variant)
 
     for sheet in sheets:
-        judge = sheet.stem[len(prefix) + 1 :]
-        scored = _parse_sheet(sheet, with_state=task == "consistency")
-        filled = {k: v for k, v in scored.items() if v[0] is not None}
-        if not filled:
-            print(f"- {judge}: 채워진 칸이 없습니다 (건너뜀)")
-            continue
+        _report_judge(sheet, prefix, task, variant, total, axis)
 
-        ok_runs = sum(1 for panels, _, _s in filled.values() if panels >= threshold)
-        rate = ok_runs / len(filled)
-        side_ok = sum(1 for _, grid, _s in filled.values() if grid == "Y")
-        side_rate = side_ok / len(filled)
-        # ⚠️ **`task` 를 `variant` 보다 먼저 봅니다.** 3순위는 1순위와 같은 회차 폴더를 쓰므로
-        # `variant` 가 `panels_mid` 인 채로 들어옵니다. 순서를 뒤집으면 3순위 시트의 네 번째
-        # 열(화풍 Y/N)이 "칸 번호" 로 취급돼 참고치가 0 으로 눌립니다 (2026-08-20 발견).
-        numeric_side = task == "text" and variant in LENGTH_VARIANTS
-        if numeric_side:
-            side_ok = side_rate = 0.0  # 이 열은 Y/N 이 아니라 칸 번호입니다 (아래에서 집계)
-
-        print(f"- {judge}: 판정 {len(filled)}/{total}건")
-        print(
-            f"    성공 판정 - {scale} {ok_runs}건 "
-            f"= {rate:.0%} (기준 {conditions.PASS_RATE_THRESHOLD:.0%})"
-        )
-        if not numeric_side and variant != "single_len":
-            print(f"    참고 - {side_label} {side_ok}건 = {side_rate:.0%}")
-        if task == "consistency":
-            _report_state(filled, threshold)
-        if len(filled) < conditions.TARGET_RUNS:
-            print(f"    주의: 회차가 {conditions.TARGET_RUNS}회에 못 미쳐 확정 판정이 아닙니다")
-        else:
-            verdict = "기준 충족" if rate >= conditions.PASS_RATE_THRESHOLD else "기준 미달"
-            print(f"    판정: {verdict}")
+    if task == "consistency":
+        _tally_consistency(sheets)
 
     # ⚠️ 길이별 집계는 **1순위 시트에만** 붙습니다. 3순위는 같은 회차 폴더를 쓰지만 시트의
     # 열이 다르므로, 그대로 돌리면 전부 0 인 N18 표가 딸려 나옵니다 - 읽는 사람에게는

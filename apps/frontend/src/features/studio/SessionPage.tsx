@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import { Navigate, useParams } from "react-router-dom";
-import { finalizeSession, generateDraft, getSession } from "./api";
+import { finalizeSession, generateDraft, getSession, patchBrief } from "./api";
 import { BriefSummary } from "./components/BriefSummary";
 import { DraftPanel } from "./components/DraftPanel";
 import { describe, useApiError } from "./errors";
 import { useRenderJob } from "./useRenderJob";
-import type { Session } from "./types";
+import type { BriefPatch, Session, SessionState } from "./types";
+
+/**
+ * 브리프를 아직 고칠 수 있는 상태.
+ *
+ * ⚠️ **시안이 생기는 순간 잠깁니다** (INV-7). 시안은 브리프에서 나온 산출물이라 근거가 나중에
+ * 바뀌면 시안이 무엇에 근거했는지 알 수 없게 됩니다. 서버가 409 `STATE_CONFLICT` 로 막지만
+ * (실측 확인), 화면이 그것에 기대면 사용자는 눌러 봐야 금지를 알게 됩니다.
+ */
+const BRIEF_EDITABLE_STATES: ReadonlySet<SessionState> = new Set<SessionState>([
+  "brief_filling",
+  "brief_ready",
+]);
 
 /**
  * 세션 하나의 전 구간: 브리프 확인 -> 시안 -> 확정 -> 렌더 -> 결과.
@@ -55,6 +67,27 @@ function SessionView({ sessionId }: { sessionId: string }) {
     stopped: pollingStopped,
     retry: retryJob,
   } = useRenderJob(session?.jobId, reload, report);
+
+  /**
+   * 브리프 부분 교체. 응답이 새 세션이므로 다시 읽지 않고 그대로 씁니다 - `revision` 이 이미
+   * 1 올라가 있어, 여기서 `reload()` 를 부르면 왕복만 하나 늘고 값은 같습니다.
+   *
+   * ⚠️ **오류를 다시 던집니다.** 삼키면 편집 폼이 저장에 성공한 줄 알고 닫히고, 사용자가 방금
+   * 친 값이 사라집니다. 문구는 `report` 가 만들고 폼을 열어 두는 것은 폼의 몫입니다.
+   */
+  const saveBrief = async (patch: BriefPatch) => {
+    clear();
+    try {
+      setSession(await patchBrief(sessionId, session?.revision ?? 0, patch));
+    } catch (error: unknown) {
+      report(error);
+      // 충돌(`REVISION_CONFLICT`)이면 화면이 든 `revision` 이 이미 뒤처진 것이라, 다시 읽어
+      // 두어야 사용자가 같은 값으로 한 번 더 눌렀을 때 통합니다. 폼이 다시 눌릴 수 있게 되기
+      // **전에** 갱신이 끝나야 하므로 기다립니다.
+      await reload();
+      throw error;
+    }
+  };
 
   const run = async (kind: "draft" | "finalize") => {
     clear();
@@ -128,7 +161,11 @@ function SessionView({ sessionId }: { sessionId: string }) {
       )}
 
       <div className="workspace-grid">
-        <BriefSummary session={session} />
+        <BriefSummary
+          session={session}
+          editable={BRIEF_EDITABLE_STATES.has(session.state)}
+          onSave={saveBrief}
+        />
         <DraftPanel
           session={session}
           job={job}

@@ -108,51 +108,66 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
 /**
  * 예시 한 장을 크게 봅니다.
  *
+ * ⚠️ **네이티브 `<dialog>` 를 `showModal()` 로 엽니다.** 포커스 가두기, Escape 닫기, 배경
+ * 비활성화, 닫을 때 원래 자리로 포커스 되돌리기를 전부 브라우저가 합니다. 직접 만들었을
+ * 때는 Tab 한 번에 배경 폼으로 빠져나갔고, 거기서 타이핑하면 **글자가 사라지고 포커스가
+ * 확대창으로 튕겼습니다** (PR 179 리뷰에서 재현). Tab 이동은 z-index 가 아니라 DOM 순서를
+ * 따르므로 덮어 놓는 것만으로는 막히지 않습니다.
+ *
  * ⚠️ **여기서 화풍을 고를 수는 없습니다.** 크게 보는 것과 정하는 것은 다른 행동이고, 확대해
  * 놓고 닫으면 골라져 있는 화면은 사용자가 자기가 무엇을 했는지 알 수 없게 만듭니다.
  */
 function ArtStyleZoom({ style, onClose }: { style: ArtStyle; onClose: () => void }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  // 열기 전에 어디에 있었는지 기억해 두었다가 닫을 때 돌려줍니다. 안 그러면 키보드 사용자가
-  // 격자 처음으로 튕겨 나갑니다.
-  const returnTo = useRef<Element | null>(null);
+  const ref = useRef<HTMLDialogElement>(null);
 
+  // 의존성이 비어 있는 것이 중요합니다. `onClose` 를 넣으면 부모가 리렌더될 때마다
+  // 정리와 재실행이 돌아 포커스가 흔들립니다 - 그 함수는 아래 이벤트 핸들러에서만 씁니다.
   useEffect(() => {
-    returnTo.current = document.activeElement;
-    closeRef.current?.focus();
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-
+    const dialog = ref.current;
+    // ⚠️ 열기 **전에** 기억합니다. `<dialog>` 가 닫을 때 포커스를 되돌려 주기는 하지만, 여기서는
+    // React 가 요소를 떼어내며 닫으므로 그 복귀가 사라집니다 - 실측에서 `body` 로 갔습니다.
+    const opener = document.activeElement as HTMLElement | null;
+    dialog?.showModal();
     return () => {
-      document.removeEventListener("keydown", onKey);
-      (returnTo.current as HTMLElement | null)?.focus?.();
+      dialog?.close();
+      opener?.focus?.();
     };
-  }, [onClose]);
+  }, []);
+
+  // ⚠️ **`close` 가 아니라 `cancel` 을 듣습니다.** `close` 는 우리가 부른 `close()` 에도
+  // 발생하는데, StrictMode 는 효과를 두 번 돌리므로 정리 단계의 `close()` 가 곧바로
+  // `onClose` 를 불러 **열자마자 닫힙니다**(실측). `cancel` 은 사용자가 Escape 로 닫을 때만
+  // 발생합니다.
 
   return (
-    // 배경을 누르면 닫힙니다. 키보드에는 아래 닫기 버튼과 Escape 가 있으므로 이 요소에는
-    // 따로 역할을 주지 않습니다.
-    <div className="art-zoom-backdrop" onClick={onClose}>
-      <div
-        className="art-zoom"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${style.name} 예시`}
-        // 안쪽을 누른 것이 배경까지 올라가면 이미지를 누를 때마다 닫힙니다.
-        onClick={(event) => event.stopPropagation()}
-      >
+    <dialog
+      ref={ref}
+      className="art-zoom"
+      aria-label={`${style.name} 예시`}
+      onCancel={onClose}
+      // ⚠️ 배경은 `::backdrop` 이라 클릭 대상이 dialog 자신입니다. 안쪽을 내용 요소가 덮고
+      // 있어 `event.target` 비교로는 걸러지지 않으므로, 좌표가 상자 밖인지로 봅니다.
+      onClick={(event) => {
+        const box = ref.current?.getBoundingClientRect();
+        if (box === undefined) return;
+        const outside =
+          event.clientX < box.left ||
+          event.clientX > box.right ||
+          event.clientY < box.top ||
+          event.clientY > box.bottom;
+        if (outside) onClose();
+      }}
+    >
+      <div className="art-zoom-body">
         <div className="art-zoom-head">
           <strong>{style.name}</strong>
-          <button ref={closeRef} type="button" className="link-button" onClick={onClose}>
+          <button type="button" className="link-button" onClick={onClose}>
             닫기
           </button>
         </div>
         <img src={style.exampleImageUrl} alt={`${style.name} 화풍 예시`} />
         <small>이 화면에서는 고르지 않습니다. 닫고 카드를 눌러 선택하세요.</small>
       </div>
-    </div>
+    </dialog>
   );
 }

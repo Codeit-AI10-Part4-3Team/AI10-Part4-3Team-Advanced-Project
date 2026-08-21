@@ -119,9 +119,11 @@ button { color: inherit; }
 .art-style-zoom:hover { background: rgb(24 28 42 / 78%); }
 .art-style-zoom:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 
-/* 예시 확대. 고르는 화면이 아니라 보는 화면입니다. */
-.art-zoom-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: rgb(18 21 33 / 62%); }
-.art-zoom { max-width: min(560px, 100%); display: grid; gap: 10px; padding: 16px; border-radius: 16px; background: var(--surface); box-shadow: 0 18px 50px rgb(18 21 33 / 28%); }
+/* 예시 확대. 고르는 화면이 아니라 보는 화면입니다.
+   네이티브 `<dialog>` 라 배경과 포커스 가두기는 브라우저가 합니다 - 여기서는 생김새만 정합니다. */
+.art-zoom { max-width: min(560px, calc(100vw - 40px)); padding: 0; border: 0; border-radius: 16px; background: var(--surface); box-shadow: 0 18px 50px rgb(18 21 33 / 28%); }
+.art-zoom::backdrop { background: rgb(18 21 33 / 62%); }
+.art-zoom-body { display: grid; gap: 10px; padding: 16px; }
 .art-zoom-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .art-zoom-head strong { font-size: 13px; }
 .art-zoom-head .link-button { margin-top: 0; }

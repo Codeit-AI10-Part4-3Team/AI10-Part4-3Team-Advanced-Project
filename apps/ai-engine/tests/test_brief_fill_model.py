@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import base64
 import io
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -49,13 +51,23 @@ def fill_request(payload: bytes = PNG, **overrides: Any) -> BriefFillRequest:
 class FakeCompletions:
     """`client.chat.completions.create` 하나만 흉내냅니다."""
 
-    def __init__(self, body: str | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        body: str | None = None,
+        error: Exception | None = None,
+        block_until: threading.Event | None = None,
+    ) -> None:
         self.body = body
         self.error = error
+        self.block_until = block_until
         self.calls: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
+        if self.block_until is not None:
+            # 예산 초과를 흉내냅니다. 테스트가 끝나면서 풀어 주므로 스레드가 남지 않습니다 -
+            # 여기서 `sleep` 을 쓰면 그 시간만큼 세션 종료가 실제로 늦어집니다.
+            self.block_until.wait(timeout=30)
         if self.error is not None:
             raise self.error
         message = SimpleNamespace(content=self.body)
@@ -396,10 +408,47 @@ def test_the_sdk_is_told_not_to_retry_behind_our_budget(
     assert seen["timeout"] == model_settings.brief_fill_model_timeout_s
 
 
-def test_the_engine_gives_up_before_the_caller_does() -> None:
+def test_the_engine_gives_up_before_the_caller_does(env_example: dict[str, str]) -> None:
     """확정된 것은 값이 아니라 **순서**입니다 (2026-08-21 회의록 04절).
 
     호출자의 `ADGEN_BRIEF_FILL_TIMEOUT_S`(15초)와 같은 이름을 쓰지 않는 이유도 여기 있습니다 -
     `infra/.env` 한 줄이 양쪽을 함께 움직이면 이 부등호가 조용히 등호가 됩니다.
+
+    ⚠️ **두 값을 다 `infra/.env.example` 에서 읽습니다.** 호출자 쪽을 상수로 적으면 그 값이
+    움직여도 시험이 초록이라, docstring 이 막겠다는 바로 그 경우를 못 잡습니다. 그리고 맨
+    `Settings()` 는 주변 환경변수를 읽으므로 판정이 셸에 좌우됩니다 - 코드 기본값은 필드
+    선언에서 직접 꺼냅니다 (이슈 #180 리뷰).
     """
-    assert Settings().brief_fill_model_timeout_s < 15.0
+    engine = float(env_example["ADGEN_BRIEF_FILL_MODEL_TIMEOUT_S"])
+    caller = float(env_example["ADGEN_BRIEF_FILL_TIMEOUT_S"])
+
+    assert engine < caller, "엔진이 호출자보다 먼저 포기해야 합니다"
+    assert Settings.model_fields["brief_fill_model_timeout_s"].default == engine, (
+        "코드 기본값이 배포 값과 다릅니다 - 설정을 안 준 배포가 다른 순서로 돕니다"
+    )
+
+
+def test_a_hanging_call_is_cut_at_the_budget(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """벽시계는 우리가 잽니다 (이슈 #180 리뷰).
+
+    `timeout=` 은 httpx 값이라 connect/read/write 를 **각각** 잽니다. SDK 재시도를 껐어도 한
+    번의 시도가 12초를 넘을 수 있고, 그러면 호출자(15초)가 먼저 끊습니다. 이 이음매는 그때
+    열화로 빠지므로 - 죽은 것이 아니라 느렸을 뿐인데 - `messageMode: degraded` 비율이
+    부풀립니다. **그 값이 보고 지표라 서비스 동작만이 아니라 측정이 틀어집니다.**
+    """
+    release = threading.Event()
+    install(monkeypatch, FakeCompletions(body=DECIDED, block_until=release))
+    settings = model_settings.model_copy(update={"brief_fill_model_timeout_s": 0.2})
+    request = fill_request()
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(brief_fill.BriefFillFailedError, match="예산 안에"):
+            brief_fill.fill_brief(request, settings)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert elapsed < 10.0, "붙잡힌 호출을 끝까지 기다렸습니다 - 예산이 집행되지 않은 것입니다"

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -103,14 +104,23 @@ class FakeCompletions:
     """
 
     def __init__(
-        self, body: str | None = None, error: Exception | None = None, then: str | None = None
+        self,
+        body: str | None = None,
+        error: Exception | None = None,
+        then: str | None = None,
+        delay_s: float = 0.0,
     ) -> None:
         self.bodies = [body] if then is None else [body, then]
         self.error = error
+        self.delay_s = delay_s
         self.calls: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
+        if self.delay_s:
+            # ⚠️ 여기서만 `sleep` 을 씁니다. 검사 대상이 "예산이 두 시도에 걸쳐 있는가" 라
+            # **시간이 쌓이는 것 자체**가 검사 내용이고, 이벤트로는 그것을 못 만듭니다.
+            time.sleep(self.delay_s)
         if self.error is not None:
             raise self.error
         body = self.bodies[min(len(self.calls) - 1, len(self.bodies) - 1)]
@@ -788,6 +798,41 @@ def test_the_sdk_is_told_not_to_retry_behind_our_budget(
     assert seen["timeout"] == model_settings.draft_model_timeout_s
 
 
-def test_the_engine_gives_up_before_the_caller_does() -> None:
-    """확정된 것은 값이 아니라 **순서**입니다 (2026-08-21 회의록 04절). 호출자는 60초입니다."""
-    assert Settings().draft_model_timeout_s < 60.0
+def test_the_engine_gives_up_before_the_caller_does(env_example: dict[str, str]) -> None:
+    """확정된 것은 값이 아니라 **순서**입니다 (2026-08-21 회의록 04절).
+
+    ⚠️ 두 값을 다 `infra/.env.example` 에서 읽는 이유는 `test_brief_fill_model.py` 의 같은
+    시험과 같습니다 - 호출자 쪽을 상수로 적으면 짝의 절반만 고정됩니다 (이슈 #180 리뷰).
+    """
+    engine = float(env_example["ADGEN_DRAFT_MODEL_TIMEOUT_S"])
+    caller = float(env_example["ADGEN_DRAFT_TIMEOUT_S"])
+
+    assert engine < caller, "엔진이 호출자보다 먼저 포기해야 합니다"
+    assert Settings.model_fields["draft_model_timeout_s"].default == engine, (
+        "코드 기본값이 배포 값과 다릅니다 - 설정을 안 준 배포가 다른 순서로 돕니다"
+    )
+
+
+def test_the_budget_covers_the_guardrail_retry_too(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ **예산이 두 시도를 함께 덮습니다** (이슈 #180 리뷰).
+
+    시도마다 새로 시작하면 요청 하나가 최악 100초인데 호출자(`ADGEN_DRAFT_TIMEOUT_S`)는
+    60초입니다. SDK 재시도를 껐어도 풀리지 않습니다 - **우리 자신의 재생성이 두 번째
+    시도**이기 때문이고, 이것은 예외 경로가 아니라 D2 대조 실험의 on 팔입니다.
+
+    각 시도는 예산 안에 들고 합계만 넘깁니다. 시도별 예산이면 통과할 배치이므로, 이 시험이
+    보는 것은 정확히 "예산이 시도에 걸쳐 있는가" 하나입니다.
+    """
+    completions = FakeCompletions(
+        body=body_with_copy(VIOLATING_COPY), then=body_with_copy(CLEAN_COPY), delay_s=0.2
+    )
+    install(monkeypatch, completions)
+    settings = model_settings.model_copy(update={"draft_model_timeout_s": 0.3})
+    request = generate_request()
+
+    with pytest.raises(draft.DraftFailedError, match="예산 안에"):
+        draft.generate_draft(request, settings)
+
+    assert len(completions.calls) == 2, "재생성까지 갔다가 합계에서 끊긴 것이어야 합니다"

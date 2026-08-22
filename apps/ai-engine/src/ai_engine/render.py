@@ -22,7 +22,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
-from ai_engine import render_prompt
+from ai_engine import budget, render_prompt
 from ai_engine.config import MODEL_MAX_RETRIES, Settings
 from ai_engine.models import ComicDraft, ImageRenderRequest, ImageSpec, Panel
 
@@ -151,20 +151,14 @@ def _client(settings: Settings) -> Any:
 
 
 def _await_within_budget(future: Future[bytes], deadline: float, message: str) -> bytes:
-    """예산이 남은 만큼만 기다립니다. 넘기면 `RenderFailedError`.
+    """`budget.wait_for` 를 이 이음매의 실패 타입으로 옮깁니다.
 
-    ⚠️ **기다리기를 그만두는 것이지 호출을 취소하는 것이 아닙니다.** 이미 나간 요청은 벤더
-    쪽에서 계속 돌고 요금도 나갑니다 - 우리가 사는 것은 **호출자가 먼저 끊지 않게 하는 것**
-    하나뿐이고, 그래야 실패의 이유가 로그에 남습니다.
-
-    ⚠️ 벽시계로 재는 자리가 여기 하나여야 하는 이유는 `timeout=` 이 벽시계가 아니기
-    때문입니다 - httpx 는 connect/read/write 를 **각각** 재고, SDK 재시도를 껐어도
-    (`MODEL_MAX_RETRIES`) 한 번의 시도가 그 값을 넘을 수 있습니다. 산술로 맞춰 둔 여유는
-    값을 고치는 순간 사라지지만, 이 함수는 남습니다 (이슈 #180).
+    벽시계를 우리가 재는 이유는 `budget` 모듈에 있습니다. 여기서 더하는 것은 **어느 칸에서
+    막혔는지**뿐이고, 그것이 이 감쌈이 사는 값의 전부입니다 (이슈 #180).
     """
     try:
-        return future.result(timeout=max(0.0, deadline - time.monotonic()))
-    except TimeoutError as exc:
+        return budget.wait_for(future, deadline)
+    except budget.BudgetExceededError as exc:
         raise RenderFailedError(message) from exc
 
 
@@ -183,28 +177,23 @@ def _render_one_shot(
     그것은 `timeout=` 이 벽시계일 때만 성립합니다. 예산이 만화형에만 붙어 있으면 "누가 먼저
     포기하는가" 가 출력 유형에 따라 갈립니다.
     """
-    deadline = time.monotonic() + settings.render_budget_s
-    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(
-            _generate,
-            client,
-            settings,
-            prompt=render_prompt.build(request),
-            size=f"{request.spec.width}x{request.spec.height}",
-            quality=quality,
-            reference=None,
+        return budget.run_within(
+            settings.render_budget_s,
+            lambda: _generate(
+                client,
+                settings,
+                prompt=render_prompt.build(request),
+                size=f"{request.spec.width}x{request.spec.height}",
+                quality=quality,
+                reference=None,
+            ),
         )
-        return _await_within_budget(
-            future,
-            deadline,
+    except budget.BudgetExceededError as exc:
+        raise RenderFailedError(
             f"{settings.render_budget_s:.0f}초 예산 안에 그림이 오지 않았습니다. "
-            "호출자가 먼저 끊기 전에 버립니다.",
-        )
-    finally:
-        # `with` 를 쓰지 않는 이유는 `_render_panels` 와 같습니다 - `__exit__` 이
-        # `shutdown(wait=True)` 라, 예산을 넘겨 빠져나갈 때도 끝까지 기다립니다.
-        pool.shutdown(wait=False, cancel_futures=True)
+            "호출자가 먼저 끊기 전에 버립니다."
+        ) from exc
 
 
 def _render_panels(

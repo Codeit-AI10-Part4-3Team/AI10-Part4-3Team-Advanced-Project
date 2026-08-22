@@ -552,16 +552,25 @@ def test_a_failing_first_panel_never_fans_out(
 # ---- 타임아웃 예산 (이슈 #141) ------------------------------------------------------
 
 
-def test_the_per_call_timeout_leaves_room_under_the_total_budget() -> None:
+def test_the_per_call_timeout_leaves_room_under_the_total_budget(
+    env_example: dict[str, str],
+) -> None:
     """⚠️ **두 값은 함께 움직여야 합니다.** 만화형은 1번 칸 뒤에 병렬 배치가 오는 두 단계라
     최악 대기가 칸당 상한의 2배입니다. 그 2배가 총 예산을 넘으면 예산이 먼저 끊어 놓고도 칸은
     계속 돌게 되고, 총 예산이 호출자의 `render_timeout_s`(300초)를 넘으면 애초에 이 설계가
     막으려던 상태 - 호출자가 먼저 끊는 상태 - 로 돌아갑니다 (이슈 #141).
-    """
-    settings = Settings()
 
-    assert settings.image_timeout_s * 2 <= settings.render_budget_s
-    assert settings.render_budget_s < 300.0, "호출자의 render_timeout_s 보다 작아야 합니다"
+    ⚠️ 호출자 쪽 값도 `infra/.env.example` 에서 읽습니다. 상수로 적으면 그 값이 움직여도
+    시험이 초록이라 짝의 절반만 고정됩니다 (이슈 #180 리뷰).
+    """
+    per_call = float(env_example["ADGEN_IMAGE_TIMEOUT_S"])
+    total = float(env_example["ADGEN_RENDER_BUDGET_S"])
+    caller = float(env_example["ADGEN_RENDER_TIMEOUT_S"])
+
+    assert per_call * 2 <= total
+    assert total < caller, "호출자의 render_timeout_s 보다 작아야 합니다"
+    assert Settings.model_fields["image_timeout_s"].default == per_call
+    assert Settings.model_fields["render_budget_s"].default == total
 
 
 def test_the_per_call_timeout_reaches_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -619,11 +628,12 @@ def test_a_slow_single_ad_is_cut_at_the_budget(monkeypatch: pytest.MonkeyPatch) 
     module.OpenAI = lambda **_: type("Client", (), {"images": images})()  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "openai", module)
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+    request = single_ad_request()
 
     started = time.monotonic()
     try:
         with pytest.raises(render.RenderFailedError, match="예산 안에 그림이"):
-            render.render_image(single_ad_request(), settings)
+            render.render_image(request, settings)
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -690,11 +700,12 @@ def test_a_hanging_first_panel_is_cut_at_the_budget(monkeypatch: pytest.MonkeyPa
     panels = FakePanels(block_first_until=release)
     install(monkeypatch, panels)
     settings = Settings(generation_mode="model", model_api_key="k", render_budget_s=0.2)
+    request = comic_request(96, 64)
 
     started = time.monotonic()
     try:
         with pytest.raises(render.RenderFailedError, match="예산 안에 1번 칸이"):
-            render.render_image(comic_request(96, 64), settings)
+            render.render_image(request, settings)
         elapsed = time.monotonic() - started
     finally:
         release.set()

@@ -60,18 +60,27 @@ USAGE_LINE = re.compile(
 
 
 class UsageCollector(logging.Handler):
-    """엔진이 남기는 `usage` 줄을 그대로 주워 담습니다.
+    """엔진이 남기는 `usage` 줄과 가드레일 이벤트를 그대로 주워 담습니다.
 
     ⚠️ 엔진에서 값을 반환받지 않고 로그를 읽는 이유는, **운영에서 집계할 방법과 같은 경로를
     쓰기 위해서**입니다. 여기만 특별한 통로를 만들면 배포 뒤에 같은 숫자를 못 냅니다.
+
+    ⚠️ **가드레일 이벤트를 함께 담는 것은 on 팔을 읽기 위해서입니다** (2026-08-22 추가).
+    재생성은 호출자에게 보이지 않게 설계돼 있어(생성_파이프라인 5.1.1절) 결과만 보면 "통과"와
+    "위반했지만 다시 써서 통과"가 같은 값입니다. **그 둘을 못 가르면 on 팔의 관측이
+    off 팔과 비교 불가능해집니다** - 위반이 몇 건 일어났는가가 D2 가 세려는 것입니다.
     """
 
     def __init__(self) -> None:
         super().__init__(level=logging.INFO)
         self.records: list[dict[str, str]] = []
+        self.events: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         message = record.getMessage()
+        if message.startswith("guardrail "):
+            self.events.append(message)
+            return
         if not message.startswith(f"{usage.PREFIX} "):
             return
         matched = USAGE_LINE.search(message)
@@ -79,6 +88,10 @@ class UsageCollector(logging.Handler):
 
     def take(self) -> list[dict[str, str]]:
         taken, self.records = self.records, []
+        return taken
+
+    def take_events(self) -> list[str]:
+        taken, self.events = self.events, []
         return taken
 
 
@@ -105,7 +118,25 @@ def run_case(
     )
 
     collector.take()  # 이전 회차의 잔여를 버립니다
-    response = draft.generate_draft(request, settings)
+    collector.take_events()
+    try:
+        response = draft.generate_draft(request, settings)
+    except Exception as exc:  # 어떤 실패든 회차를 잃지 않는 쪽이 낫습니다
+        # ⚠️ **실패도 관측입니다.** 예산 초과(`DraftFailedError`)는 on 팔에서 재생성이
+        # 붙을 때 실제로 납니다 - 두 시도가 한 예산을 나눠 쓰기 때문입니다(draft.py
+        # `_guarded_draft`). 여기서 예외를 올려 보내면 앞서 돌린 회차의 기록까지 함께
+        # 사라지고, **이미 지불한 호출을 다시 사야 합니다** (2026-08-22 실측: 9회분 유실).
+        failed = collector.take()
+        return {
+            "case": case.label,
+            "outputType": case.output_type,
+            "guardrailApplied": guardrail_applied,
+            # 실패해도 이미 끝난 시도의 사용량은 요금입니다. 버리면 합계가 실제보다 작아집니다.
+            "usage": failed,
+            "calls": len(failed),
+            "guardrailEvents": collector.take_events(),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     records = collector.take()
 
     row: dict[str, Any] = {
@@ -114,6 +145,7 @@ def run_case(
         "guardrailApplied": guardrail_applied,
         "usage": records,
         "calls": len(records),
+        "guardrailEvents": collector.take_events(),
     }
 
     if response.draft is None:
@@ -256,7 +288,30 @@ def main() -> int:
         logger.setLevel(logging.INFO)
         logger.addHandler(collector)
 
+    # ⚠️ **회차마다 파일을 다시 씁니다** (2026-08-22). 예전에는 전부 끝난 뒤 한 번 썼는데,
+    # 10번째 호출이 예산 초과로 죽으면서 앞선 9회분 기록이 통째로 사라졌습니다 - 돈은 이미
+    # 나갔고 기록만 없는 상태라 같은 호출을 다시 사야 했습니다. 쓰기는 공짜이고 호출은 아닙니다.
+    RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+    out = RUNS_ROOT / f"{datetime.now():%Y%m%d-%H%M%S}.json"
+    started_at = datetime.now().isoformat(timespec="seconds")
+
     rows: list[dict[str, Any]] = []
+
+    def save() -> None:
+        out.write_text(
+            json.dumps(
+                {
+                    "startedAt": started_at,
+                    "priceInputPerMTok": price_in,
+                    "priceOutputPerMTok": price_out,
+                    "rows": rows,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
     for case in cases:
         for guardrail_applied in arms:
             for index in range(args.rounds):
@@ -264,32 +319,19 @@ def main() -> int:
                 row["round"] = index + 1
                 row["usd"] = usd(row["usage"], price_in, price_out)
                 rows.append(row)
+                save()
                 print(f"  {row['case']:24s} guard={guardrail_applied!s:5s} -> {_verdict(row)}")
 
     if args.patch:
         for row in run_patch(settings, collector):
             row["usd"] = usd(row.get("usage", []), price_in, price_out)
             rows.append(row)
+        save()
     if args.image:
         row = run_brief_fill(args.image, settings, collector)
         row["usd"] = usd(row.get("usage", []), price_in, price_out)
         rows.append(row)
-
-    RUNS_ROOT.mkdir(parents=True, exist_ok=True)
-    out = RUNS_ROOT / f"{datetime.now():%Y%m%d-%H%M%S}.json"
-    out.write_text(
-        json.dumps(
-            {
-                "startedAt": datetime.now().isoformat(timespec="seconds"),
-                "priceInputPerMTok": price_in,
-                "priceOutputPerMTok": price_out,
-                "rows": rows,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+        save()
     # ⚠️ 기록된 호출 수를 계획과 대조합니다. 사용량을 흘리면 합계가 실제 지출보다 작아지는데,
     # 그 작은 숫자로 예산을 판단하게 됩니다 (2026-08-20 리뷰 지적, PR #151).
     counted = sum(int(row.get("calls", 0)) for row in rows)
@@ -304,11 +346,16 @@ def main() -> int:
 
 
 def _verdict(row: dict[str, Any]) -> str:
-    if "refusalReason" in row and row.get("refusalReason"):
-        return f"거절({row['refusalReason']})"
+    # ⚠️ 재생성 표시를 빼지 마세요. 엔진은 1회차 위반을 조용히 다시 쓰므로(5.1.1절) 그것
+    # 없이는 "통과"와 "위반했다가 다시 써서 통과"가 화면에서 같아 보입니다.
+    retried = " +재생성" if row.get("guardrailEvents") else ""
+    if row.get("error"):
+        return f"실패({row['error']}){retried}"
+    if row.get("refusalReason"):
+        return f"거절({row['refusalReason']}){retried}"
     if row.get("passed") is True:
-        return "clean"
-    return f"위반 {row.get('violations')}"
+        return f"clean{retried}"
+    return f"위반 {row.get('violations')}{retried}"
 
 
 def _price(name: str) -> float | None:

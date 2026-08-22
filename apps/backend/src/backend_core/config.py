@@ -141,14 +141,16 @@ class Settings(BaseSettings):
     # instead of streaming — do not read the number as a hard deadline, and do not let the
     # gap to the engine's budget shrink on the assumption that it is one.
     #
-    # ⚠️ **The engine's side of that pair is not a wall clock either, and by a larger factor.**
-    # `ADGEN_IMAGE_TIMEOUT_S` is handed to the vendor SDK, and none of ai_engine's three call
-    # sites pass `max_retries` — so the SDK's own default applies and one call can become
-    # several attempts, retries included on timeout. The ordering this comment exists to
-    # protect ("the engine gives up first, so it can say which panel stalled") holds only
-    # while an attempt and a call are the same thing. Closing that is 03's, in
-    # `apps/ai-engine/` (PR #176 리뷰, 신호정); this note is here so nobody reads the 240 < 300
-    # gap as proof that they already are.
+    # ⚠️ **The engine's side of that pair was not a wall clock either, and by a larger factor
+    # — closed 2026-08-21 (이슈 #180).** `ADGEN_IMAGE_TIMEOUT_S` is handed to the vendor SDK,
+    # and none of ai_engine's three call sites passed `max_retries`, so the SDK's own default
+    # of 2 applied and one call could become three attempts, retries included on timeout. The
+    # ordering this comment exists to protect ("the engine gives up first, so it can say which
+    # panel stalled") holds only while an attempt and a call are the same thing, so the engine
+    # now turns the SDK's retries off (`ai_engine.config.MODEL_MAX_RETRIES`) and waits for the
+    # first panel inside its own budget. Do not read the 240 < 300 gap as self-evident: it
+    # holds because that switch is off, and reviving retries needs a policy this side has to
+    # be told about (미결정_대장 N19-a, 다음 회의 안건).
     render_timeout_s: float = 300.0
 
     # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which
@@ -234,6 +236,21 @@ class Settings(BaseSettings):
     # `.sqlite` rather than `.sqlite3` so the repo's existing ignore rule covers it:
     # this file holds uploaded-photo paths and briefs, and the repo is public.
     db_path: str = "./data/adgen.sqlite"
+
+    # ---- 운영 로그 (세션_보관_정책 2절) ---------------------------------------------------
+
+    # ⚠️ **Under the same volume as the database, and that is the whole point.**
+    # `deploy-vm.sh` replaces containers on every deploy, so a container's own stdout log
+    # dies with it - the 30-day period the policy promises could not be kept by the runtime.
+    # 세션_보관_정책 2절 says "회전은 배포 쪽에서 정합니다"; the deployment had no `logging:`
+    # block at all, so the decision is made here instead (backend_core.observability).
+    log_dir: str = "./data/logs"
+
+    # 프롬프트 / 호출 로그 30일 (세션_보관_정책 2절 기간표). Daily files, this many kept.
+    # ⚠️ A period, not a size. Size-based rotation cannot state one - the same setting would
+    # hold four days in a busy week and ninety in a quiet month, and neither is what the
+    # document promises.
+    log_retention_d: int = 30
 
     # ---- auth (ADR-0008, ADR-0013) -----------------------------------------------------
 

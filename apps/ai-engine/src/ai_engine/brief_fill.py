@@ -16,8 +16,8 @@ import json
 import logging
 from typing import Any
 
-from ai_engine import brief_prompt, usage
-from ai_engine.config import GenerationMode, Settings
+from ai_engine import brief_prompt, budget, usage
+from ai_engine.config import MODEL_MAX_RETRIES, GenerationMode, Settings
 from ai_engine.models import BriefFillResponse, NeedsInput
 from ai_engine.service_schemas import BriefFillRequest
 
@@ -138,23 +138,45 @@ def _infer_with_model(request: BriefFillRequest, settings: Settings) -> BriefFil
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
 
-    client = OpenAI(api_key=settings.model_api_key, timeout=settings.brief_fill_model_timeout_s)
+    # ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 12초가 **시도당** 상한이 되고,
+    # 최악 36초가 호출자의 15초를 넘깁니다 (이슈 #180). 그때 증상은 "엔진이 죽었다" 로 보이는
+    # 열화인데 실제로는 살아 있고 느렸을 뿐이라, `messageMode: degraded` 비율이 부풀립니다.
+    client = OpenAI(
+        api_key=settings.model_api_key,
+        timeout=settings.brief_fill_model_timeout_s,
+        max_retries=MODEL_MAX_RETRIES,
+    )
+    # ⚠️ **`timeout=` 은 벽시계가 아니라 벽시계는 우리가 잽니다** (이슈 #180). httpx 는
+    # connect/read/write 를 각각 재므로, SDK 재시도를 껐어도 한 번의 시도가 12초를 넘을 수
+    # 있습니다. 그러면 호출자(15초)가 먼저 끊고 이 이음매는 열화로 빠지는데, 엔진은 죽은 것이
+    # 아니라 느렸을 뿐이라 `messageMode: degraded` 비율이 그만큼 부풀립니다 - 그 값은 보고
+    # 지표입니다. 이 설정이 "시도당 상한"이 아니라 **호출자보다 먼저 포기하는 시점**이라는
+    # 것은 `brief_fill_model_timeout_s` 의 docstring 이 이미 말하고 있었고, 이제 코드가
+    # 그것을 집행합니다.
     try:
-        response = client.chat.completions.create(
-            model=settings.text_model,
-            messages=[
-                {"role": "system", "content": brief_prompt.SYSTEM},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
-                },
-            ],
-            response_format={"type": "json_object"},
-            n=1,
+        response = budget.run_within(
+            settings.brief_fill_model_timeout_s,
+            lambda: client.chat.completions.create(
+                model=settings.text_model,
+                messages=[
+                    {"role": "system", "content": brief_prompt.SYSTEM},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user_text},
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                        ],
+                    },
+                ],
+                response_format={"type": "json_object"},
+                n=1,
+            ),
         )
+    except budget.BudgetExceededError as exc:
+        raise BriefFillFailedError(
+            f"{settings.brief_fill_model_timeout_s:.0f}초 예산 안에 오지 않았습니다. "
+            "호출자가 먼저 끊기 전에 포기합니다."
+        ) from exc
     except Exception as exc:
         # 벤더 예외 계층에 의존하지 않습니다. 인증 실패도 쿼터 초과도 타임아웃도 호출자에게는
         # 같은 답입니다: 쓸 수 없음 (`render._render_with_model` 의 같은 판단).

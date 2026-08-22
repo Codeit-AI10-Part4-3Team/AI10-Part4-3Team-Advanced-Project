@@ -151,6 +151,12 @@ credentials/
 *.npz
 *.sqlite
 *.db
+# 운영 로그. 코드 기본값이 상대 경로(./data/logs)라 apps/backend 를 cwd 로 uvicorn 을 맨몸으로
+# 돌리면 apps/backend/data/logs/ 에 생깁니다 - 루트 앵커 /data/ 규칙이 거기까지 닿지 않습니다.
+# 이 파일에는 sessionId 가 들어 있고 저장소는 public 입니다 (backend_core/config.py 의
+# db_path 주석과 같은 이유).
+*.log
+data/logs/
 
 # 커밋해야 하는 소형 데이터 예외 (반드시 위 무시 규칙보다 아래에 위치해야 동작)
 # 평가 골든셋: 코드와 함께 리뷰·재현되어야 하는 자산입니다 (지표 채점의 기준 자체).

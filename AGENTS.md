@@ -129,7 +129,12 @@
   `backend_core.pipeline`, `FALLBACK_TEXT` 포함, ADR-0005), ai-engine 은 2026-08-20
   (`/v1/generate` 와 `retrieval` · `generation` · `models.legacy_qa` · 번들 더미 코퍼스,
   그리고 가드레일의 `verify` 계열). **이제 두 앱이 서빙하는 `/v1` 경로는 전부 계약에 있고,
-  backend 쪽은 전부 인증 뒤에 있습니다.**
+  backend 의 `/v1` 은 전부 인증 뒤에 있습니다.** 단, backend 에는 `/v1` 이 아닌 정적 자산
+  경로가 하나 있고 **그것은 인증 밖입니다** — 화풍 예시 8장을 내주는 `/static/art-styles`
+  입니다 (2026-08-22, PR #194 갈래 A). `StaticFiles` 에는 라우트 의존성이 걸리지 않아 인증
+  뒤에 둘 방법이 없고, 라우트로 만들면 계약 경로가 됩니다. 사용자 데이터가 아니라 우리가
+  만든 제품 자산이라 받아들인 교환이며, 그 디렉토리가 상태 파일을 함께 열어 주지 않는지는
+  기동에서 검사합니다 (`api/main.py` 의 `_check_art_style_dir`).
   ai-engine 의 라우트를 마지막까지 남겨 둔 이유는 `guardrail.verify` 의 유일한 라우트 수준
   사용처였기 때문이고, 광고 경로 이식(ADR-0019)이 끝나 함께 나갔습니다. 이음매 목록:
   [아키텍처.md](docs/공통_가이드/아키텍처.md) 5절.

@@ -293,7 +293,27 @@ def patch_brief(
     session = _guard(
         lambda: session_flow.apply_brief_patch(session, body.patch, sessions.now(), refill)
     )
-    return _store(connection, account, session, was)
+    stored = _store(connection, account, session, was)
+
+    # ⚠️ **Written first, refused second.** B-11 (2026-08-22 회의록) ends the session when a
+    # retry still cannot decide, and the 422 body carries an error rather than the session —
+    # so if we raised before storing, the client would be told the session is closed while
+    # the stored session says `brief_filling`, and the next `GET` would contradict the answer
+    # it just got. The user's own edits from this patch are in that write too; losing them
+    # would take away the record of what they last said.
+    if stored.state == "failed":
+        # ⚠️ The `obs` line for this call already went out as `outcome=needs_input`, and that
+        # is still what happened — but at session creation the same outcome means "ask again"
+        # while here it means the session is over. `scripts/observe.py` counts them together,
+        # so the ending gets its own line to grep until someone needs it counted.
+        logger.info("brief:fill retry undecided; session %s closed (B-11)", stored.session_id)
+        raise ApiError(
+            422,
+            "INSUFFICIENT_INPUT",
+            "제품 정보가 부족해 카테고리와 타겟을 정하지 못했습니다. "
+            "세션이 닫혔습니다. 정보를 더 채워 새 세션을 시작하세요.",
+        )
+    return stored
 
 
 @router.patch("/{sessionId}/draft")

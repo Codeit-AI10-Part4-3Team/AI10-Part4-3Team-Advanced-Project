@@ -91,8 +91,10 @@ def test_the_mount_cannot_be_pointed_at_the_state_directory(env: Path) -> None:
     """
     settings = deps.settings()
     state = str(Path(settings.db_path).parent)
+    # ⚠️ `log_dir` 이 셋째입니다. 자격 증명은 없지만 `app.log` 에 `sessionId` 와 트레이스백이
+    # 30일치 있고, 인증 밖으로 내주면 그 기간에 대한 접근 범위가 사라집니다.
 
-    for pointed_at in (state, str(Path(settings.image_dir))):
+    for pointed_at in (state, str(Path(settings.image_dir)), str(Path(settings.log_dir))):
         with pytest.raises(RuntimeError, match="ADGEN_ART_STYLE_DIR"):
             _check_art_style_dir(settings.model_copy(update={"art_style_dir": pointed_at}))
 

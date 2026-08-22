@@ -24,6 +24,7 @@ from api.errors import api_error_handler, unhandled_error_handler, validation_er
 from api.routes import auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
+from backend_core.config import Settings
 from backend_core.observability import install_file_log
 from backend_core.storage import connect, init_schema
 from backend_core.tokens import require_secret
@@ -73,7 +74,7 @@ class _ArtStyleFiles(StaticFiles):
         return response
 
 
-def _check_art_style_dir(settings: Any) -> None:
+def _check_art_style_dir(settings: Settings) -> None:
     """화풍 디렉토리가 상태 파일을 함께 열어 주지 않는지 확인합니다. 어기면 기동하지 않습니다.
 
     ⚠️ **이 검사가 없으면 오타 하나가 사용자 데이터를 인증 없이 공개합니다.**
@@ -86,9 +87,15 @@ def _check_art_style_dir(settings: Any) -> None:
     노출하는 것이고, 기동 실패는 배포하는 사람이 즉시 봅니다.
     """
     art = Path(settings.art_style_dir).resolve()
+    # ⚠️ **셋 다입니다.** 처음에는 DB 와 이미지만 봤는데, `log_dir` 도 같은 볼륨에 있고
+    #    `app.log` 에는 `sessionId` 와 트레이스백이 30일치 쌓입니다. 자격 증명은 아니지만
+    #    "보관 기간과 접근 범위 없이 쌓지 않는다"(AGENTS.md)의 접근 범위가 사라집니다.
+    #    새 상태 경로를 만들 때마다 이 목록을 함께 보세요 - Dockerfile 의 `ENV` 네 줄과
+    #    같은 자리입니다.
     for name, other in (
         ("db_path", Path(settings.db_path).resolve().parent),
         ("image_dir", Path(settings.image_dir).resolve()),
+        ("log_dir", Path(settings.log_dir).resolve()),
     ):
         if art == other or art in other.parents:
             raise RuntimeError(

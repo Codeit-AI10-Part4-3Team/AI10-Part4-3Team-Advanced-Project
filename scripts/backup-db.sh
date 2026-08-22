@@ -114,6 +114,32 @@ do_backup() {
   name="adgen-${stamp}.sqlite"
   mkdir -p "$BACKUP_DIR"
 
+  # ⚠️ **저널을 먼저 회수합니다. 아래 줄이 `--user` 로 도는 것이 이 단계를 필요하게 만듭니다.**
+  #    백업 사용자는 uid 10001 소유의 상태 파일을 **읽기로만** 열 수 있습니다. 롤백 저널이
+  #    남아 있으면 SQLite 는 읽기 전에 복구부터 하려 하고, 복구는 쓰기라
+  #    `attempt to write a readonly database` 로 끊깁니다 — 권한 문제인데 손상과 구별되지
+  #    않는 메시지입니다. `verify` 가 열기 전에 읽기 권한을 먼저 보는 것과 같은 이유이고,
+  #    하필 **크래시 루프에서 사전 백업을 뜨려는 상황**이 정확히 저널이 남는 상황입니다
+  #    (PR #133 리뷰 N3, 신호정).
+  #
+  #    `--user` 를 주지 않으면 이미지의 기본 사용자(appuser)로 돌아 쓰기로 열리고, **여는
+  #    것만으로** SQLite 가 저널을 회수합니다. 저널이 없으면 컨테이너만 한 번 뜨고 끝납니다.
+  #
+  #    ⚠️ 재현 조건이 좁습니다 (2026-08-22, VM `/tmp` 에서 실측). 한 행짜리 트랜잭션 도중에
+  #    죽인 경우는 저널이 남아도 백업이 **성공**했고, 캐시를 좁혀 페이지가 실제로 DB 파일로
+  #    흘러넘친 뒤 죽여야 실패했습니다. 경계가 어디인지는 재지 않았으므로 "저널만 있으면
+  #    항상 실패한다" 로 읽지 마세요.
+  in_backend backend python -c "
+import os, sqlite3, sys
+db = sys.argv[1]
+if not os.path.exists(db + '-journal'):
+    sys.exit(0)
+print('롤백 저널이 남아 있어 회수합니다', file=sys.stderr)
+conn = sqlite3.connect(db)
+conn.execute('SELECT count(*) FROM sqlite_master')
+conn.close()
+" "$db" || warn "저널 회수에 실패했습니다. 아래 백업이 readonly database 로 끊기면 그 이유입니다."
+
   # ⚠️ `VACUUM INTO` 는 **대상 파일이 이미 있으면 실패합니다.** 타임스탬프가 이름에 들어가는
   #    것이 그 대비이며, 초 단위라 같은 초에 두 번 돌리면 실패합니다. 그것이 맞는 동작입니다 —
   #    조용히 덮어쓰면 방금 뜬 백업이 사라집니다.

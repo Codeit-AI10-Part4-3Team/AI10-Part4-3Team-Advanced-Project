@@ -311,6 +311,24 @@ def module_origins(names):
     return parsed if isinstance(parsed, dict) else {}
 
 
+# List every sys.path entry that *could* serve one of our module names, not just the winner.
+# An editable install is a plain directory entry, so two checkouts coexist happily and site.py
+# picks by sorted .pth filename -- see shadow_installs() for why that matters.
+_SHADOW = (
+    "import json,sys\n"
+    "from pathlib import Path\n"
+    "hits=[]\n"
+    "for entry in sys.path:\n"
+    "    if not entry:\n"
+    "        continue\n"
+    "    base=Path(entry)\n"
+    "    for n in sys.argv[1:]:\n"
+    "        if (base/n/'__init__.py').exists() or (base/(n+'.py')).exists():\n"
+    "            hits.append([str(base),n])\n"
+    "print(json.dumps(hits))\n"
+)
+
+
 def under(root: Path, candidate: str) -> bool:
     # Path.is_relative_to() is 3.9+; this file must stay parseable on 3.8.
     try:
@@ -318,6 +336,32 @@ def under(root: Path, candidate: str) -> bool:
     except (ValueError, OSError):
         return False
     return True
+
+
+def shadow_installs(root: Path):
+    """Foreign checkouts of this template sharing the interpreter, winner or not.
+
+    Editable installs put their src/ on sys.path as an ordinary directory entry, and site.py
+    adds them in sorted .pth filename order. Two checkouts therefore coexist for weeks with
+    whichever distribution name sorts first quietly winning -- the origin check below sees only
+    that winner and reports OK. The loser takes over the moment anything uninstalls or renames
+    the winner, and the ImportError/ValidationError it produces reads like a defect in this repo
+    (measured 2026-08-22: `adgen-*` was shadowing another checkout's `savers-*`, not the reverse).
+
+    Returns "<path> (<module>)" for each entry outside this checkout, one line per path.
+    """
+    raw = out([sys.executable, "-c", _SHADOW, *APP_MODULES])
+    try:
+        hits = json.loads(raw)
+    except ValueError:
+        return []
+    found, seen = [], set()
+    for entry, name in hits:
+        if entry in seen or under(root, entry):
+            continue
+        seen.add(entry)
+        found.append(f"{entry} ({name})")
+    return found
 
 
 def probe_editable(ctx):
@@ -336,10 +380,26 @@ def probe_editable(ctx):
     if foreign:
         detail = ", ".join(f"{m} -> {origins[m]}" for m in foreign)
         return BROKEN, "이 체크아웃 밖을 import 중: " + detail
+    shadows = shadow_installs(ctx.root)
+    if shadows:
+        return BROKEN, "다른 체크아웃이 같은 인터프리터에 함께 설치됨: " + ", ".join(shadows)
     return OK, " / ".join(APP_MODULES)
 
 
 def fix_editable(ctx):
+    # A shadow is not repaired by installing this repo again -- both entries would still be on
+    # sys.path, and reinstalling only re-rolls the sorted-name lottery. Removing another
+    # checkout's distribution from a shared interpreter is the operator's call, not the doctor's,
+    # so print the exact commands and fail the check instead of guessing which one to drop.
+    shadows = shadow_installs(ctx.root)
+    if shadows:
+        print("     같은 인터프리터에 다른 체크아웃이 설치돼 있어 자동 복구하지 않습니다:")
+        for item in shadows:
+            print(f"       - {item}")
+        print(f"     확인: {sys.executable} -m pip list")
+        print(f"     제거: {sys.executable} -m pip uninstall <배포판_이름>")
+        print("     그 체크아웃은 자기 .venv 에서 설치하세요 (레포마다 .venv 하나).")
+        return False
     backend = "{}[dev]".format(ctx.path("apps", "backend"))
     ai = "{}[dev]".format(ctx.path("apps", "ai-engine"))
     return pip_install("-e", backend, "-e", ai)

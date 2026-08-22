@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { listArtStyles } from "../api";
+import { ArtStylePicker } from "./ArtStylePicker";
 import { OUTPUT_TYPE_LABEL } from "../labels";
 import type { ArtStyle, OutputType, SessionCreateInput } from "../types";
 
@@ -134,26 +135,14 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
           <small>{fields.sellingPoint.length}/200</small>
         </label>
 
-        <label className="field">
+        <div className="field">
           <span>화풍</span>
-          <select
+          <ArtStylePicker
+            styles={artStyles}
             value={fields.artStyle}
-            disabled={artStyles.length === 0}
-            onChange={(event) => update("artStyle", event.target.value)}
-          >
-            <option value="">무작위 추천</option>
-            {artStyles.map((style) => (
-              <option key={style.artStyleId} value={style.artStyleId}>
-                {style.name}
-              </option>
-            ))}
-          </select>
-          <small>
-            {artStyles.length === 0
-              ? "화풍 후보가 아직 정해지지 않았습니다. 서버가 무작위로 채웁니다."
-              : "고르지 않으면 서버가 후보군에서 무작위로 채웁니다."}
-          </small>
-        </label>
+            onChange={(id) => update("artStyle", id)}
+          />
+        </div>
 
         <label className="field">
           <span>추가 메모</span>

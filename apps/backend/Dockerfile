@@ -35,11 +35,14 @@ VOLUME ["/data"]
 #    합니다. compose 도 같은 값을 주지만(infra/docker-compose.yml) 그것은 덧방이고,
 #    `docker run` 한 줄로 뜨는 것은 이 줄의 몫입니다. 근거: ADR-0014.
 #
-# ⚠️ **두 줄입니다.** DB 만 옮기고 이미지를 두고 가면 증상이 기동이 아니라 **첫 업로드**에서
+# ⚠️ **세 줄입니다.** DB 만 옮기고 나머지를 두고 가면 증상이 기동이 아니라 **첫 업로드**에서
 #    납니다 - `/health` 는 계속 초록이고 CI 스모크도 통과하는데, 사람이 사진을 올리는
 #    순간 같은 PermissionError 가 납니다. 새 상태 경로를 만들 때마다 이 줄을 함께 보세요.
+#    (로그 경로는 2026-08-21 에 늘었습니다 - backend_core/observability.py. 열지 못해도
+#    서비스는 뜨지만, 그때 남는 것은 배포마다 사라지는 표준 출력뿐입니다.)
 ENV ADGEN_DB_PATH=/data/adgen.sqlite \
-    ADGEN_IMAGE_DIR=/data/images
+    ADGEN_IMAGE_DIR=/data/images \
+    ADGEN_LOG_DIR=/data/logs
 
 USER appuser
 

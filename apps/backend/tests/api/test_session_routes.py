@@ -421,27 +421,55 @@ def test_a_retry_that_cannot_run_degrades_and_hands_the_user_the_other_way_out(
     assert settled["state"] == "brief_ready"
 
 
-def test_a_retry_that_is_still_undecided_stays_put_rather_than_failing(
+def test_a_retry_that_is_still_undecided_closes_the_session(
     client: TestClient, ai: FakeAiEngine
 ) -> None:
-    """⚠️ **This is the open case, pinned as it is today rather than as the contract wants.**
+    """B-11, closed by 회의록 on 2026-08-22: one retry, and an undecided one ends it.
 
-    The contract promises 422 `INSUFFICIENT_INPUT` and a `failed` session here. It does not
-    happen yet, and deliberately: *when* to give up (first failure? third?) is
-    미결정_대장 B-11, whose 확정 근거 is 회의록 — the ledger's own rule forbids picking a
-    number in code. This test exists so the day that number is decided, the change shows up
-    here as a failure instead of passing unnoticed.
+    ⚠️ **The 422 and the stored session have to agree.** The error body carries no session,
+    so a client that is told "closed" learns the state only from the next `GET` — and if the
+    write had been skipped, that `GET` would say `brief_filling` and offer a retry the server
+    would refuse. The assertion below reads the session back for exactly that reason.
     """
     ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
     created = _create(client)
 
     ai.needs_input = NeedsInput(field="note", reason="아직도 판단이 서지 않습니다.")
-    answered = _patch_brief(client, created, note="음")
+    refused = client.patch(
+        f"/v1/sessions/{created['sessionId']}/brief",
+        json={"revision": created["revision"], "patch": {"note": "음"}},
+    )
 
-    assert answered["state"] == "brief_filling"
-    assert answered["messageMode"] == "normal"
-    # The reason is refreshed, so the screen shows what is missing *now*.
-    assert answered["needsInput"]["reason"] == "아직도 판단이 서지 않습니다."
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["code"] == "INSUFFICIENT_INPUT"
+
+    after = client.get(f"/v1/sessions/{created['sessionId']}").json()
+    assert after["state"] == "failed"
+    # ⚠️ The reason described what to type next, and there is no next. Leaving it would keep
+    # the screen asking on a session that cannot accept another answer.
+    assert "needsInput" not in after
+    # The note the user typed is still there — the write happened, then the refusal.
+    assert after["brief"]["note"] == "음"
+
+
+def test_an_undecided_retry_does_not_close_a_brief_the_user_completed(
+    client: TestClient, ai: FakeAiEngine
+) -> None:
+    """⚠️ 회의록 closes the session when the retry **could not fill the brief**, and this one
+    was filled — by the person, in the same request that triggered the retry.
+
+    Without the state check this lands on `brief_ready -> failed`, which is not an edge
+    (`state.TRANSITIONS`), so the user would get a 409 on a request that did everything
+    right.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.needs_input = NeedsInput(field="note", reason="아직도 판단이 서지 않습니다.")
+    answered = _patch_brief(client, created, note="음", category="스킨케어", target="30대 직장인")
+
+    assert answered["state"] == "brief_ready"
+    assert "needsInput" not in answered
 
 
 def test_a_degraded_session_is_still_allowed_to_try_again(
@@ -477,18 +505,27 @@ def test_saving_the_same_note_again_does_not_pay_for_the_same_answer(
 
     A screen that autosaves, or a person fixing a typo and saving twice, sends `note` every
     time. Billing each one buys the identical answer repeatedly (PR #148 리뷰, 신호정).
+
+    ⚠️ **The first retry has to be a degraded one, and that is B-11's doing** (2026-08-22
+    회의록). An undecided retry now ends the session, so a session that is still open *and*
+    still retryable can only have got there through an outage — which is the same reason
+    `wants_refill` treats `degraded` as retryable at all.
     """
     ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
     created = _create(client)
 
-    ai.needs_input = NeedsInput(field="note", reason="아직도 판단이 서지 않습니다.")
+    ai.available = False
     once = _patch_brief(client, created, note="여름용 수분 크림")
     after_first = len(ai.briefs_requested)
+    assert once["messageMode"] == "degraded"
 
+    ai.available = True
     twice = _patch_brief(client, once, note="여름용 수분 크림")
 
     assert len(ai.briefs_requested) == after_first
-    assert twice["needsInput"]["reason"] == "아직도 판단이 서지 않습니다."
+    # No retry ran, so nothing re-decided the mode either.
+    assert twice["messageMode"] == "degraded"
+    assert twice["state"] == "brief_filling"
 
 
 def test_a_brief_with_nothing_left_to_infer_does_not_call_the_engine(

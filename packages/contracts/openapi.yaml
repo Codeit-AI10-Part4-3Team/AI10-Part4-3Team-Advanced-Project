@@ -388,12 +388,17 @@ paths:
         "422":
           description: |
             `INVALID_REQUEST`(형식 오류, `null` 포함, hidden 필드 지정) 또는
-            `INSUFFICIENT_INPUT`(재입력 후에도 추론 실패. 세션은 `failed`가 되고 되돌아오는
+            `INSUFFICIENT_INPUT`(재추론이 **판단하지 못함**. 세션은 `failed`가 되고 되돌아오는
             간선이 없으므로 새 세션을 만들어야 합니다).
 
             주의: 첫 요청(`POST /v1/sessions`)의 정보 부족은 **201**입니다. 422가 나오는 것은
-            재입력 후에도 실패한 이 시점뿐입니다. `INSUFFICIENT_INPUT` 처리는 아직 잠정안이며
-            확정은 기획서 18.2 #11입니다.
+            재입력 후에도 실패한 이 시점뿐입니다. 재시도는 1회이며 2026-08-22에 확정되었습니다
+            (미결정_대장 B-11).
+
+            주의: **엔진이 죽어 재추론이 돌지 못한 경우는 이 응답이 아닙니다.** 그때는 200에
+            `messageMode: degraded`이고 세션은 `brief_filling`으로 남아 다시 시도할 수 있습니다.
+            "판단하지 못함"과 "돌지 못함"을 같이 세면 벤더 장애 한 번에 사용자가 재입력 기회를
+            잃습니다.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

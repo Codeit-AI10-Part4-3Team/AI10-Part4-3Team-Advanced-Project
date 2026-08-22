@@ -294,12 +294,12 @@ def apply_brief_patch(
     `refill is None` means no retry was attempted, which is the ordinary patch. When one was
     attempted, its outcome decides two things the merge cannot:
 
-    | refill | needsInput | messageMode |
-    |---|---|---|
-    | 없음 (재추론 안 함) | 그대로 | 그대로 |
-    | 있음, `filled` 있음, 그 안에 `needsInput` 있음 | 새 `reason` 으로 교체 | `normal` |
-    | 있음, `filled` 있음, `needsInput` 없음 | 지웁니다 | `normal` |
-    | 있음, `filled` 없음 (돌지 못함) | 지웁니다 | `degraded` |
+    | refill | needsInput | messageMode | state |
+    |---|---|---|---|
+    | 없음 (재추론 안 함) | 그대로 | 그대로 | 브리프가 차면 `brief_ready` |
+    | 있음, `filled` 있음, 그 안에 `needsInput` 있음 | **지웁니다** | `normal` | **`failed`** (B-11) |
+    | 있음, `filled` 있음, `needsInput` 없음 | 지웁니다 | `normal` | `brief_ready` |
+    | 있음, `filled` 없음 (돌지 못함) | 지웁니다 | `degraded` | `brief_filling` |
 
     ⚠️ **The last row clears `needsInput`, and that is the user's way out.** A session that
     could not run inference is a degraded session, and the contract already tells that user
@@ -310,18 +310,51 @@ def apply_brief_patch(
     The key is the screen's signal, not a permission slip — read the two together or the
     last row silently becomes "this session may never ask again".
 
-    ⚠️ What this function still does **not** do is give up. A retry that comes back
-    undecided leaves the session in `brief_filling`, exactly where it was. The contract
-    promises a 422 `INSUFFICIENT_INPUT` there, but *when* to give up (first failure? third?)
-    is 미결정_대장 B-11 and its 확정 근거 is 회의록 — so the ledger's own rule forbids
-    picking a number here. The loop is narrower than it was, not closed.
+    ⚠️ **The second row is B-11, closed by 회의록 on 2026-08-22.** One retry, and if that
+    retry still cannot decide, the session ends — the contract's 422 `INSUFFICIENT_INPUT`
+    with `failed`, which it has promised since before there was an implementation.
+
+    **The count is of undecided retries only.** A retry that could not run (`filled is None`
+    — engine down, photo gone) is *not* one of them: it stays `degraded` and stays
+    retryable. That distinction is the whole decision, not a detail of it. Counting outages
+    would rebuild the bug PR #148 removed, where one outage cost a user their retry for
+    ever, and this time the session would be closed rather than merely quiet.
+
+    ⚠️ **`state == "brief_filling"` is the second condition, and it is not decoration.**
+    `needsInput` can arrive on a brief the *user* completed in this same patch, and then
+    nothing is insufficient — 회의록 defines the closing case as "브리프를 채우지 못한
+    경우", and this one was filled. `replace_brief` has already landed it in `brief_ready`
+    by then, and `brief_ready -> failed` is not an edge (state.TRANSITIONS), so reading the
+    state is also what keeps this from answering 409 to a request that succeeded.
+
+    No counter is stored. With a limit of one, the closing retry is the first one, so there
+    is nothing to carry between requests — and `Session` is the contract's own schema
+    (`components.schemas.Session`), so a field added for bookkeeping would go out on the
+    wire. If the limit ever rises above one, that is the trade to reopen.
     """
     brief, meta = merge_brief_patch(session, patch)
     if refill is not None:
         brief, meta = _fold_refill(brief, meta, refill.filled)
         session.message_mode = "normal" if refill.filled else "degraded"
         session.needs_input = refill.filled.needs_input if refill.filled else None
-    return replace_brief(session, brief, meta, at)
+    session = replace_brief(session, brief, meta, at)
+    if undecided_refill(refill) and session.state == "brief_filling":
+        # ⚠️ Cleared **after** `replace_brief` copied it in. The reason described what to
+        # type next, and there is no next — the screen shows "세션이 닫혔습니다" (06 소관).
+        session.needs_input = None
+        session.state = state.require_transition(session.state, "failed")
+    return session
+
+
+def undecided_refill(refill: RefillOutcome | None) -> bool:
+    """The retry ran and still could not decide — the case B-11 closes the session on.
+
+    ⚠️ Not the same as "the retry did not help". `filled is None` means it could not run at
+    all, and that is the degraded path with no counting and no closing (`RefillOutcome`).
+    """
+    return (
+        refill is not None and refill.filled is not None and refill.filled.needs_input is not None
+    )
 
 
 def _fold_refill(

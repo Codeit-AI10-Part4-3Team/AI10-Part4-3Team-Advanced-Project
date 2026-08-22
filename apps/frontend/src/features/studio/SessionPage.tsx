@@ -4,6 +4,7 @@ import { finalizeSession, generateDraft, getSession, patchBrief } from "./api";
 import { BriefSummary } from "./components/BriefSummary";
 import { DraftPanel } from "./components/DraftPanel";
 import { describe, useApiError } from "./errors";
+import { ErrorNotice } from "./components/ErrorNotice";
 import { useRenderJob } from "./useRenderJob";
 import type { BriefPatch, Session, SessionState } from "./types";
 
@@ -40,7 +41,7 @@ function SessionView({ sessionId }: { sessionId: string }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<"draft" | "finalize" | null>(null);
-  const { message, report, clear } = useApiError();
+  const { failure, report, clear } = useApiError();
 
   // ⚠️ 프로미스를 **반환합니다.** 호출부가 `await` 로 갱신을 기다릴 수 있어야 합니다 -
   // 기다리지 않으면 버튼이 새 상태보다 먼저 풀립니다 (아래 `run` 참고).
@@ -51,7 +52,7 @@ function SessionView({ sessionId }: { sessionId: string }) {
         setLoadError(null);
       })
       .catch((error: unknown) => {
-        setLoadError(describe(error));
+        setLoadError(describe(error).message);
       });
   }, [sessionId]);
 
@@ -141,23 +142,18 @@ function SessionView({ sessionId }: { sessionId: string }) {
         </div>
       </header>
 
-      {/* 배너는 하나입니다. 문구는 `report` 가 만들고(401 은 여기 오지 않고 로그아웃됩니다),
-          폴링이 멈췄을 때만 되살릴 길을 덧붙입니다. 둘로 나누면 같은 실패에 빨간 상자가 두 개
-          뜹니다. `pollingStopped` 를 조건에 함께 둔 것은 `clear()` 로 문구가 지워져도 복구
-          버튼은 남아야 하기 때문입니다. */}
-      {(message !== null || pollingStopped) && (
-        <p className="workspace-error" role="alert">
-          {message}
-          {pollingStopped && (
-            <>
-              {message !== null && " "}
-              상태 조회가 멈췄습니다.{" "}
-              <button type="button" className="link-button" onClick={retryJob}>
-                다시 시도
-              </button>
-            </>
-          )}
-        </p>
+      {/* 하나만 띄웁니다. 둘로 나누면 같은 실패에 상자가 두 개 뜹니다. 내용은 `report` 가
+          만들고 401 은 여기 오지 않습니다 - 그쪽은 로그아웃으로 갑니다(`useApiError`).
+          `pollingStopped` 를 조건에 함께 둔 것은 `clear()` 로 내용이 지워져도 복구 버튼은
+          남아야 하기 때문입니다. */}
+      {(failure !== null || pollingStopped) && (
+        <ErrorNotice
+          failure={
+            failure ?? { label: "호출 실패", message: "렌더 상태 조회가 멈췄습니다." }
+          }
+          onDismiss={clear}
+          retry={pollingStopped ? { label: "다시 시도", onClick: retryJob } : undefined}
+        />
       )}
 
       <div className="workspace-grid">

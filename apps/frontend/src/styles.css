@@ -60,6 +60,23 @@ button { color: inherit; }
 .workspace-header { max-width: 1160px; margin: 0 auto 23px; display: flex; align-items: flex-end; justify-content: space-between; }
 .workspace-header h1 { margin: 5px 0 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.045em; }
 .eyebrow { margin: 0; color: var(--blue); font-size: 10px; font-weight: 850; letter-spacing: .12em; }
+/* 실패 알림. 기획서 12.5 가 정한 **화면 우측 상단 고정 영역**입니다.
+   같은 절이 팝업을 반려했으므로 겹쳐 놓되 뒤를 계속 쓸 수 있어야 합니다 - 배경을 덮지 않고
+   포커스도 가두지 않습니다. */
+.error-notice { position: fixed; top: 18px; right: 18px; z-index: 40; width: min(330px, calc(100vw - 36px)); display: grid; gap: 6px; padding: 12px 13px; border: 1px solid #f3c2cc; border-radius: 12px; color: #8d2033; background: #fdecef; box-shadow: 0 10px 30px rgb(141 32 51 / 14%); font-size: 12px; line-height: 1.6; }
+.error-notice-head { display: flex; align-items: center; gap: 7px; }
+/* 5 종을 가르는 딱지. 문구를 다 읽지 않아도 어느 실패인지 보이게 합니다. */
+.error-notice-tag { padding: 2px 7px; border-radius: 999px; color: #fff; background: #b8324a; font-size: 10px; font-weight: 800; white-space: nowrap; }
+/* 개발 단계에서 "무엇 때문에" 를 즉시 알기 위한 표기입니다 (기획서 12.5). */
+.error-notice-head code { color: #a8566a; font-size: 9px; letter-spacing: .02em; }
+.error-notice-close { margin-left: auto; padding: 0 4px; border: 0; color: inherit; background: transparent; font-size: 13px; line-height: 1; cursor: pointer; }
+.error-notice p { margin: 0; }
+.error-notice .link-button { margin-top: 2px; justify-self: start; color: inherit; font-size: 11px; }
+/* 폰에서는 폭을 다 씁니다. 좁은 화면에서 330px 고정이면 본문을 가립니다. */
+@media (max-width: 620px) {
+  .error-notice { top: 10px; right: 10px; left: 10px; width: auto; }
+}
+
 .workspace-error { max-width: 1160px; margin: 0 auto 15px; padding: 11px 13px; border-radius: 10px; color: #8d2033; background: #fdecef; font-size: 12px; line-height: 1.6; }
 .workspace-loading { max-width: 1160px; margin: 0 auto; color: var(--muted); font-size: 13px; }
 .workspace-grid { max-width: 1160px; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, .8fr) minmax(430px, 1.2fr); gap: 17px; align-items: start; }

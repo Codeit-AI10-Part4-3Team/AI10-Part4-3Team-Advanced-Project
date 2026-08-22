@@ -21,6 +21,17 @@ from build_sheet import BATCH
 
 CHOICES = ("가", "나", "둘 다", "둘 다 아님")
 
+# ⚠️ 사람이 손으로 채운 칸이라 표기가 흔들립니다. 실제 회수본에 `둘다`(붙여 씀)와
+# `둘 다`(띄어 씀)가 섞여 있었고, 그대로 세면 같은 판정이 서로 다른 값 두 개로 갈려
+# 다수결이 성립하지 않습니다. 공백을 지운 형태로 맞춘 뒤 정규형으로 되돌립니다.
+_CANON = {choice.replace(" ", ""): choice for choice in CHOICES}
+
+
+def _normalize(cell: str) -> str:
+    """`둘다` -> `둘 다`. 아는 표기가 아니면 원문을 그대로 둡니다 - 조용히 버리면
+    판정자가 무엇을 적었는지 알 수 없게 됩니다."""
+    return _CANON.get(cell.replace(" ", ""), cell)
+
 
 def _read_key() -> dict[tuple[int, str], str]:
     """(화풍 번호, 가/나) -> 조건. 판정이 끝난 뒤에 엽니다."""
@@ -40,7 +51,7 @@ def _parse(path: Path) -> dict[int, tuple[str, str, str]]:
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) < 6 or not cells[0].isdigit():
             continue
-        result[int(cells[0])] = (cells[3], cells[4].upper(), cells[5])
+        result[int(cells[0])] = (_normalize(cells[3]), cells[4].upper(), cells[5])
     return result
 
 
@@ -64,6 +75,9 @@ def main() -> int:
         if not votes:
             print(f"| {style.index} | {style.name} | 판정 없음 | -- | -- | -- |")
             continue
+        unknown = sorted({v for v in votes if v not in CHOICES})
+        if unknown:
+            print(f"|  |  | 주의: {style.index}번에 모르는 표기 {unknown} |  |  |  |")
         counted = Counter(votes)
         top, count = counted.most_common(1)[0]
         # 과반이어야 판정입니다. 3명이 전부 다르게 답하면 다수결이 성립하지 않습니다.

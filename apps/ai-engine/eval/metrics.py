@@ -46,9 +46,13 @@ def hallucination_rate(reports: list[bool]) -> float:
 def suppression_rate(guardrail_off: list[bool], guardrail_on: list[bool]) -> float:
     """Relative reduction in hallucination when the guardrail is on.
 
-    This is the headline number of a guardrail claim, so it is defined here once rather
-    than recomputed in a notebook: `(off - on) / off`. Returns 0.0 when the control run
-    hallucinated nothing — there was nothing to suppress, and reporting 100% would be a lie.
+    ⚠️ **Not the reported number any more** (2026-08-21 meeting). The control run with the
+    guardrail off produced zero violations, so there is no denominator to divide by — the
+    report states absolute counts plus the sample size instead. See 생성_파이프라인 5.3.
+
+    Kept because it stays correct the day violations do show up: `(off - on) / off`.
+    Returns 0.0 when the control run hallucinated nothing — there was nothing to suppress,
+    and reporting 100% would be a lie.
     """
     off = hallucination_rate(guardrail_off)
     if off == 0.0:

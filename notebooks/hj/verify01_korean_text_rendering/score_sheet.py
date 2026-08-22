@@ -6,6 +6,10 @@
     python score_sheet.py build --run-dir runs/20260813-2010-main --judges 정승호 임동규 송기하
     python score_sheet.py tally --run-dir runs/20260813-2010-main
 
+`--task` 로 판정 종류를 고릅니다 - `text`(1순위 대사 표기), `consistency`(3순위 인물과 화풍
+일관성), `style`(5순위 화풍 반영). 셋은 시트의 열이 서로 다르고 파일 이름도 갈라 두었습니다.
+같은 회차 폴더를 다시 쓰는 설계라 이름이 같으면 이미 채워진 판정을 덮어씁니다.
+
 `build`가 만드는 시트에는 프롬프트도 조건도 들어가지 않습니다. 판정자가 "무엇이 나와야 하는지"를
 먼저 읽으면 없는 글자를 있다고 읽습니다 - 정답 대사는 시트에 들어가지만 어느 쪽이 본안이고
 예비안인지는 파일 이름 밖으로 드러내지 않습니다.
@@ -42,7 +46,53 @@ STATE_COLUMN = "장면 상태 연속 (Y/N)"
 
 # ⚠️ 3순위 시트를 같은 이름으로 쓰면 **이미 채워진 1순위 판정을 덮어씁니다.** 같은 회차
 # 폴더를 다시 쓰는 설계라(3순위는 1순위 이미지를 그대로 봅니다) 이름을 갈라 두어야 합니다.
-TASK_PREFIX = {"text": SHEET_PREFIX, "consistency": "consistency"}
+TASK_PREFIX = {"text": SHEET_PREFIX, "consistency": "consistency", "style": "style"}
+
+STYLE_COLUMN = "지정 화풍"
+"""5순위 시트의 네 번째 열. 판정자가 채우는 칸이 아니라 **미리 채워진 기준**입니다.
+
+manifest 의 `art_style_id` 를 행마다 그대로 옮깁니다. 머리말에 한 줄로 적지 않는 이유는
+`single_len` 의 정답 카피와 같습니다 -- 회차마다 화풍이 다르므로, 한 줄로 적으면 판정자가 전
+회차를 그 화풍 기준으로 채점합니다.
+"""
+
+STYLE_CRITERION = (
+    "각 회차의 그림이 **그 행에 적힌 화풍으로 보이는지** 봅니다. 그림체, 선, 채색, 질감이 "
+    "기준입니다.\n\n"
+    "⚠️ **회차마다 지정 화풍이 다릅니다.** 표의 `지정 화풍` 열을 보고 채점하세요. 머리말에 "
+    "적힌 화풍 하나로 전 회차를 채점하면 이 실험은 성립하지 않습니다.\n\n"
+    "- 그 화풍이라고 볼 수 있으면 `1`, 아니면 `0` 입니다.\n"
+    "- **잘 그렸는지를 묻는 것이 아닙니다.** 그림이 마음에 들지 않아도 지정한 화풍으로 "
+    "보이면 `1` 입니다.\n"
+    "- **대사와 카피의 오탈자는 이 판정과 무관합니다.** 그것은 1순위가 따로 봅니다.\n"
+)
+"""5순위(화풍 반영)가 묻는 것. 기획서 15절의 완료 판정 기준은 "화풍별 결과가 구분 가능할 것".
+
+⚠️ **화풍 이름을 가리지 않습니다.** 물음이 "지정한 화풍이 결과에 반영됐는가"라 가리면 물어볼
+것이 없어집니다. 3순위에서 조건을 가린 것과 다릅니다 -- 그쪽은 "무엇이 나와야 하는지"를 알면
+없는 것을 있다고 읽지만, 여기서는 지정값이 곧 물음입니다.
+"""
+
+STYLE_DISTINCT_QUESTION = (
+    "## 구분되지 않는 화풍이 있습니까\n"
+    "\n"
+    "위 표는 회차를 **하나씩** 봅니다. 그것만으로는 잡히지 않는 것이 하나 있습니다 -- 두 화풍이 "
+    "각각 자기 이름에 맞아 보이는데 **서로는 닮은** 경우입니다. 그러면 표는 전부 `1` 인데 "
+    "사용자에게는 선택지가 두 개가 아니라 하나입니다.\n"
+    "\n"
+    "실제로 나온 지적입니다. 화풍 예시 판정(2026-08-22)에서 두 분이 독립적으로 1번과 2번이 "
+    "비슷하다고 적었습니다.\n"
+    "\n"
+    "서로 구분되지 않는 쌍이 있으면 적어 주세요 (예: `3번과 7번`). 없으면 `없음`.\n"
+    "\n"
+    "\n"
+)
+"""시트 말미의 자유 응답. **자동 집계하지 않습니다.**
+
+⚠️ 회차별 Y/N 로는 "두 화풍이 서로 닮았다"가 구조적으로 안 잡힙니다 -- 각 회차가 독립으로
+채점되기 때문입니다. 그런데 기획서 15절이 5순위에 건 기준은 "화풍별 결과가 **구분 가능**할
+것"이라 이 축이 빠지면 기준의 절반만 재게 됩니다. 답이 자유 문장이라 눈으로 읽습니다.
+"""
 
 LENGTH_VARIANTS = frozenset({"mid", "panels_mid"})
 """칸마다 대사 길이가 다른 회차. 길이별 집계(N18)가 붙는 회차이기도 합니다.
@@ -72,11 +122,47 @@ def _variant_of(run_dir: Path, rows: list[dict[str, str]]) -> str:
     return rows[0].get("variant") or run_dir.name.rsplit("-", 1)[-1]
 
 
+def _prefilled_side(task: str, variant: str, row: dict[str, str]) -> str:
+    """네 번째 칸을 미리 채우는 판정만 값을 돌려줍니다. 나머지는 판정자 몫이라 빈 칸입니다.
+
+    ⚠️ **회차마다 기준이 다른 판정만 여기 해당합니다** - 5순위는 화풍이, `single_len` 은 정답
+    카피가 회차마다 다릅니다. 그 값을 머리말에 한 줄로 적으면 판정자가 전 회차를 그 하나를
+    기준으로 채점합니다.
+    """
+    if task == "style":
+        return f"`{row.get('art_style_id', '')}`"
+    if variant == "single_len" and row.get("copy"):
+        return f"`{row['copy']}`"
+    return ""
+
+
 def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
     rows = _read_manifest(run_dir)
     variant = _variant_of(run_dir, rows)
 
-    if task == "consistency":
+    if task == "style":
+        # 검증 5순위. 회차마다 **다른 화풍**으로 돌린 결과를 봅니다 (기획서 15절 5번).
+        #
+        # ⚠️ `art_style_id` 가 빈 회차가 하나라도 있으면 여기서 멈춥니다. 그 회차는 시트의
+        # `지정 화풍` 칸이 비고, 판정자는 무엇과 대조할지 모르는 채로 채점하게 됩니다 -
+        # 조용히 빈 칸을 내보내는 것보다 여기서 실패하는 편이 낫습니다.
+        #
+        # ⚠️ **열 존재 여부가 아니라 행마다 봅니다.** 열은 있는데 일부 회차만 비는 경우
+        # (손으로 일부만 채웠거나 하네스가 특정 회차를 못 채운 경우)가 실제로 위험한 쪽인데,
+        # 열만 확인하면 그것이 통과합니다.
+        missing = [row.get("run_id", "?") for row in rows if not row.get("art_style_id")]
+        if missing:
+            raise SystemExit(
+                f"art_style_id 가 비어 있는 회차가 있습니다: {missing}. 5순위는 회차마다 "
+                "화풍이 달라야 성립하므로, 화풍을 실어 돌리는 하네스로 회차를 먼저 만드세요."
+            )
+        criterion = STYLE_CRITERION
+        count_column = "지정 화풍 반영 (1) / 아님 (0)"
+        count_hint = "그 화풍으로 보이면 `1`, 아니면 `0`"
+        # ⚠️ `single_len` 의 정답 카피와 같은 자리(네 번째)입니다. 집계가 세 번째 열을 점수로
+        # 읽으므로 앞에 끼우면 판정이 통째로 빠집니다.
+        columns = [*HEAD_COLUMNS, count_column, STYLE_COLUMN, MEMO_COLUMN]
+    elif task == "consistency":
         # 검증 3순위. 1순위에서 만든 이미지를 그대로 다시 봅니다 - 같은 조건에서 나온 그림이라
         # 새로 생성할 이유가 없고, 생성하면 조건이 달라져 1순위 결과와 이어 붙일 수 없습니다.
         #
@@ -185,6 +271,16 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
             "- **`N` 을 적으셨으면 메모에 어느 칸인지 적어 주세요** (예: `6번 칸에서 커피가 "
             "다시 쏟아짐`). 몇 번째 칸에서 어긋나는지가 원인 판단의 근거입니다."
         )
+    elif task == "style":
+        # `지정 화풍` 도 이미 채워져 있는 기준입니다 (`정답 카피` 와 같은 이유).
+        tail = (
+            f"- **`{STYLE_COLUMN}` 열은 이미 채워져 있습니다.** 회차마다 화풍이 다르니 그 행의 "
+            "값과 대조하세요. 고치지 마세요.\n"
+            "- **시트 맨 아래의 `구분되지 않는 화풍이 있습니까` 도 채워 주세요.** 표만으로는 "
+            "두 화풍이 서로 닮았는지가 잡히지 않습니다.\n"
+            "- **`0` 을 적으셨으면 메모에 무엇이 달랐는지 적어 주세요** (예: `사진처럼 나옴`). "
+            "화풍 문구를 고칠지 판단하는 근거입니다."
+        )
     elif variant == "single_len":
         # `정답 카피` 는 판정자가 채우는 칸이 아니라 이미 채워져 있는 기준입니다. 기본 문장을
         # 그대로 두면 "비워도 되는 칸"으로 읽힙니다.
@@ -238,16 +334,18 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
             divider,
         ]
         for row in rows:
-            # 회차마다 정답이 다른 변형만 네 번째 칸을 미리 채웁니다. 나머지는 판정자 몫입니다.
-            answer = f"`{row['copy']}`" if row.get("copy") and variant == "single_len" else ""
+            answer = _prefilled_side(task, variant, row)
             # ⚠️ 칸 수를 `columns` 에서 세어 맞춥니다. 전에는 다섯 칸이 박혀 있었는데, 3순위
             # 시트가 여섯 열이 되면서 **표가 한 칸씩 밀렸습니다** - 마크다운은 모자란 칸을
             # 조용히 비워 두므로 렌더링만 보면 멀쩡해 보이고, 집계에서야 어긋납니다.
             cells = [str(row["run_id"]), f"`{row['image_file']}`", "", answer]
             cells += [""] * (len(columns) - len(cells))
             lines.append("| " + " | ".join(cells) + " |")
+        lines += [""]
+        if task == "style":
+            # 표 다음, 총평 앞입니다. 표를 다 채운 직후에 물어야 회차들이 아직 눈에 남아 있습니다.
+            lines.append(STYLE_DISTINCT_QUESTION)
         lines += [
-            "",
             "## 총평 (한 줄)",
             "",
             "",
@@ -508,6 +606,61 @@ def _tally_consistency(sheets: list[Path]) -> None:
     )
 
 
+def _tally_style(rows: list[dict[str, str]], sheets: list[Path]) -> None:
+    """5순위의 합격 판정 - 화풍마다 판정자 다수결 (기획서 15절 5번).
+
+    ⚠️ **판정 단위가 회차이자 곧 화풍입니다.** 회차마다 다른 화풍으로 돌린 결과라, 어느 회차가
+    미달인지가 곧 어느 화풍이 반영되지 않았는지입니다. 그래서 회차 번호만 찍지 않고 화풍
+    이름을 붙입니다 - 번호만으로는 무엇을 고쳐야 하는지 알 수 없습니다.
+
+    ⚠️ **판정자 수로 표본을 곱하지 않습니다.** 세 사람이 같은 이미지를 봅니다 (3순위와 같은
+    이유).
+
+    ⚠️ **총평(전체 기준 충족 여부)을 코드가 내지 않습니다.** 기획서 15절이 5순위에 건 것은
+    "화풍별 결과가 구분 가능할 것. 판정자 3명 중 2명 이상"이고, **8종 중 몇 종이 통과해야
+    과제가 통과인지는 정한 적이 없습니다.** 여기서 임계값을 만들면 코드가 회의록 없이 판정
+    기준을 세우는 것이 됩니다 (`STATE_COLUMN` 과 같은 이유).
+    """
+    style_of = {int(r["run_id"]): r.get("art_style_id", "") for r in rows if r.get("run_id")}
+
+    votes: dict[int, list[int]] = {}
+    for sheet in sheets:
+        for run_id, (score, _side, _state) in _parse_sheet(sheet).items():
+            if score is None:
+                continue
+            votes.setdefault(run_id, []).append(1 if score >= 1 else 0)
+    if not votes:
+        return
+
+    print("\n화풍별 다수결 (기획서 15절 5번)")
+    print("| 회차 | 지정 화풍 | 반영 판정 | 찬성/판정 |")
+    print("|---|---|---|---|")
+    undecided: list[int] = []
+    for run_id in sorted(votes):
+        flags = votes[run_id]
+        verdict = _majority(flags)
+        if verdict is None:
+            undecided.append(run_id)
+            label = "다수결 미성립"
+        else:
+            label = "반영" if verdict else "**미달**"
+        print(f"| {run_id} | {style_of.get(run_id, '')} | {label} | {sum(flags)}/{len(flags)} |")
+
+    if undecided:
+        print(f"    다수결 미성립 회차: {undecided} - 판정자가 2명 미만입니다")
+    split = sorted(r for r, flags in votes.items() if 0 < sum(flags) < len(flags))
+    if split:
+        print(f"    판정이 갈린 회차: {split} - 수치보다 메모를 먼저 보세요")
+
+    print(
+        "\n    **`구분되지 않는 화풍이 있습니까` 는 집계하지 않습니다.** 회차별 Y/N 로는 두 "
+        "화풍이 서로 닮았는지가 구조적으로 안 잡히는데, 기준의 절반이 그것입니다. 시트 말미의 "
+        "자유 응답을 직접 읽으세요.\n"
+        "    전체 기준 충족 여부도 코드가 적지 않습니다 - 기획서 15절은 회차별 기준만 정했고 "
+        "8종 중 몇 종이 통과해야 하는지는 정한 적이 없습니다."
+    )
+
+
 class Axis(NamedTuple):
     """판정 종류마다 갈리는 세 값 - 합격 문턱, 본체 열 이름, 보조 열 이름."""
 
@@ -519,6 +672,8 @@ class Axis(NamedTuple):
 def _axis_of(task: str, variant: str) -> Axis:
     # 단일 광고형은 칸이 없어 척도가 0/1 입니다. 6칸 기준을 그대로 적용하면 정확한 회차가
     # 전부 실패로 집계됩니다.
+    if task == "style":
+        return Axis(1, "지정 화풍 반영", STYLE_COLUMN)
     if task == "consistency":
         return Axis(1, "동일 인물 판정", "6칸 화풍 일관")
     if variant in ("single", "single_len"):
@@ -556,7 +711,7 @@ def _report_judge(sheet: Path, prefix: str, task: str, variant: str, total: int,
         side_ok = side_rate = 0.0  # 이 열은 Y/N 이 아니라 칸 번호입니다 (아래에서 집계)
 
     print(f"- {judge}: 판정 {len(filled)}/{total}건")
-    if task == "consistency":
+    if task in ("consistency", "style"):
         # ⚠️ 여기서는 **비율도 기준도 적지 않습니다.** 1순위의 80%를 붙이면 판정자 한 사람이
         # 통과와 미달을 가르는 것처럼 보입니다.
         print(f"    {axis.scale} {ok_runs}건 (판정자 개인 수치. 합격 판정은 아래 다수결)")
@@ -565,11 +720,19 @@ def _report_judge(sheet: Path, prefix: str, task: str, variant: str, total: int,
             f"    성공 판정 - {axis.scale} {ok_runs}건 "
             f"= {rate:.0%} (기준 {conditions.PASS_RATE_THRESHOLD:.0%})"
         )
-    if not numeric_side and variant != "single_len":
+    # ⚠️ 5순위의 네 번째 열은 Y/N 이 아니라 **미리 채워진 화풍 이름**입니다 (`single_len` 의
+    # 정답 카피와 같습니다). 그대로 세면 참고치가 언제나 0건 = 0% 로 찍혀, 읽는 사람에게는
+    # "화풍이 하나도 안 맞았다"로 보입니다.
+    if not numeric_side and variant != "single_len" and task != "style":
         print(f"    참고 - {axis.side_label} {side_ok}건 = {side_rate:.0%}")
 
     if task == "consistency":
         _report_state(filled, axis.threshold)
+    elif task == "style":
+        # ⚠️ 1순위의 회차 수 기준(`TARGET_RUNS` = 20)을 걸지 않습니다. 5순위의 회차 수는
+        # 화풍 종 수(8)에서 나오므로, 그 기준을 붙이면 8종 전부 통과해도 "확정 판정이
+        # 아닙니다"가 찍힙니다. 합격 판정은 아래 다수결이 냅니다.
+        pass
     elif len(filled) < conditions.TARGET_RUNS:
         # ⚠️ 이 두 값은 1순위 전용입니다 (conditions.py 주석). 3순위에 걸면 12회차
         # 만장일치가 "확정 판정이 아닙니다"로 찍힙니다.
@@ -596,6 +759,8 @@ def _tally(run_dir: Path, task: str = "text") -> None:
 
     if task == "consistency":
         _tally_consistency(sheets)
+    elif task == "style":
+        _tally_style(rows, sheets)
 
     # ⚠️ 길이별 집계는 **1순위 시트에만** 붙습니다. 3순위는 같은 회차 폴더를 쓰지만 시트의
     # 열이 다르므로, 그대로 돌리면 전부 0 인 N18 표가 딸려 나옵니다 - 읽는 사람에게는
@@ -606,8 +771,15 @@ def _tally(run_dir: Path, task: str = "text") -> None:
         if variant == "single_len":
             _tally_single_lengths(rows, sheets)
 
+    # 옮겨 적을 자리가 판정마다 다릅니다. A-1 을 그대로 찍으면 5순위 수치가 1순위 항목으로
+    # 올라갑니다 - 대장은 항목마다 근거가 다른 문서라 그 한 줄이 근거를 어긋나게 만듭니다.
+    destination = {
+        "text": "미결정_대장(A-1)",
+        "consistency": "미결정_대장(A-4)",
+        "style": "미결정_대장(A-3)과 검증 5순위 보고서",
+    }[task]
     print(
-        "\n수치는 회의록과 미결정_대장(A-1)에 옮기세요. 시트와 이미지는 커밋되지 않으므로 "
+        f"\n수치는 회의록과 {destination}에 옮기세요. 시트와 이미지는 커밋되지 않으므로 "
         "여기에만 두면 없었던 실험이 됩니다 (구현_범위 4.3절)."
     )
 
@@ -621,15 +793,16 @@ def main() -> int:
     build.add_argument("--judges", nargs="+", required=True, help="실험을 돌린 사람은 제외")
     build.add_argument(
         "--task",
-        choices=["text", "consistency"],
+        choices=["text", "consistency", "style"],
         default="text",
-        help="text=대사 표기(1순위), consistency=캐릭터와 화풍 일관성(3순위). "
-        "3순위는 1순위 이미지를 그대로 다시 보므로 추가 생성이 없습니다",
+        help="text=대사 표기(1순위), consistency=캐릭터와 화풍 일관성(3순위), "
+        "style=화풍 반영(5순위). 3순위는 1순위 이미지를 그대로 다시 보므로 추가 생성이 "
+        "없습니다. 5순위는 회차마다 화풍이 달라야 하므로 전용 회차가 필요합니다",
     )
 
     tally = sub.add_parser("tally", help="채워진 시트 집계")
     tally.add_argument("--run-dir", type=Path, required=True)
-    tally.add_argument("--task", choices=["text", "consistency"], default="text")
+    tally.add_argument("--task", choices=["text", "consistency", "style"], default="text")
 
     args = parser.parse_args()
     if args.command == "build":

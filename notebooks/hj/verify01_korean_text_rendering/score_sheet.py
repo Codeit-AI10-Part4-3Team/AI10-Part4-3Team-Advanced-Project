@@ -143,13 +143,18 @@ def _build(run_dir: Path, judges: list[str], task: str = "text") -> None:
     if task == "style":
         # 검증 5순위. 회차마다 **다른 화풍**으로 돌린 결과를 봅니다 (기획서 15절 5번).
         #
-        # ⚠️ manifest 에 `art_style_id` 가 없으면 여기서 멈춥니다. 그 열이 없으면 시트의
-        # `지정 화풍` 칸이 전부 비고, 판정자는 무엇과 대조할지 모르는 채로 채점하게 됩니다 -
-        # 조용히 빈 시트를 내보내는 것보다 여기서 실패하는 편이 낫습니다.
-        if not any(row.get("art_style_id") for row in rows):
+        # ⚠️ `art_style_id` 가 빈 회차가 하나라도 있으면 여기서 멈춥니다. 그 회차는 시트의
+        # `지정 화풍` 칸이 비고, 판정자는 무엇과 대조할지 모르는 채로 채점하게 됩니다 -
+        # 조용히 빈 칸을 내보내는 것보다 여기서 실패하는 편이 낫습니다.
+        #
+        # ⚠️ **열 존재 여부가 아니라 행마다 봅니다.** 열은 있는데 일부 회차만 비는 경우
+        # (손으로 일부만 채웠거나 하네스가 특정 회차를 못 채운 경우)가 실제로 위험한 쪽인데,
+        # 열만 확인하면 그것이 통과합니다.
+        missing = [row.get("run_id", "?") for row in rows if not row.get("art_style_id")]
+        if missing:
             raise SystemExit(
-                "manifest 에 art_style_id 열이 없습니다. 5순위는 회차마다 화풍이 달라야 "
-                "성립하므로, 화풍을 실어 돌리는 하네스로 회차를 먼저 만드세요."
+                f"art_style_id 가 비어 있는 회차가 있습니다: {missing}. 5순위는 회차마다 "
+                "화풍이 달라야 성립하므로, 화풍을 실어 돌리는 하네스로 회차를 먼저 만드세요."
             )
         criterion = STYLE_CRITERION
         count_column = "지정 화풍 반영 (1) / 아님 (0)"

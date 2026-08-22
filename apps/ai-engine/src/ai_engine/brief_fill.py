@@ -17,7 +17,7 @@ import logging
 from typing import Any
 
 from ai_engine import brief_prompt, usage
-from ai_engine.config import GenerationMode, Settings
+from ai_engine.config import MODEL_MAX_RETRIES, GenerationMode, Settings
 from ai_engine.models import BriefFillResponse, NeedsInput
 from ai_engine.service_schemas import BriefFillRequest
 
@@ -138,7 +138,14 @@ def _infer_with_model(request: BriefFillRequest, settings: Settings) -> BriefFil
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
 
-    client = OpenAI(api_key=settings.model_api_key, timeout=settings.brief_fill_model_timeout_s)
+    # ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 12초가 **시도당** 상한이 되고,
+    # 최악 36초가 호출자의 15초를 넘깁니다 (이슈 #180). 그때 증상은 "엔진이 죽었다" 로 보이는
+    # 열화인데 실제로는 살아 있고 느렸을 뿐이라, `messageMode: degraded` 비율이 부풀립니다.
+    client = OpenAI(
+        api_key=settings.model_api_key,
+        timeout=settings.brief_fill_model_timeout_s,
+        max_retries=MODEL_MAX_RETRIES,
+    )
     try:
         response = client.chat.completions.create(
             model=settings.text_model,

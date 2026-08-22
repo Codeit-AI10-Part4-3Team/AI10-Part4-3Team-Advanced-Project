@@ -141,14 +141,16 @@ class Settings(BaseSettings):
     # instead of streaming — do not read the number as a hard deadline, and do not let the
     # gap to the engine's budget shrink on the assumption that it is one.
     #
-    # ⚠️ **The engine's side of that pair is not a wall clock either, and by a larger factor.**
-    # `ADGEN_IMAGE_TIMEOUT_S` is handed to the vendor SDK, and none of ai_engine's three call
-    # sites pass `max_retries` — so the SDK's own default applies and one call can become
-    # several attempts, retries included on timeout. The ordering this comment exists to
-    # protect ("the engine gives up first, so it can say which panel stalled") holds only
-    # while an attempt and a call are the same thing. Closing that is 03's, in
-    # `apps/ai-engine/` (PR #176 리뷰, 신호정); this note is here so nobody reads the 240 < 300
-    # gap as proof that they already are.
+    # ⚠️ **The engine's side of that pair was not a wall clock either, and by a larger factor
+    # — closed 2026-08-21 (이슈 #180).** `ADGEN_IMAGE_TIMEOUT_S` is handed to the vendor SDK,
+    # and none of ai_engine's three call sites passed `max_retries`, so the SDK's own default
+    # of 2 applied and one call could become three attempts, retries included on timeout. The
+    # ordering this comment exists to protect ("the engine gives up first, so it can say which
+    # panel stalled") holds only while an attempt and a call are the same thing, so the engine
+    # now turns the SDK's retries off (`ai_engine.config.MODEL_MAX_RETRIES`) and waits for the
+    # first panel inside its own budget. Do not read the 240 < 300 gap as self-evident: it
+    # holds because that switch is off, and reviving retries needs a policy this side has to
+    # be told about (미결정_대장 N19-a, 다음 회의 안건).
     render_timeout_s: float = 300.0
 
     # How often the worker looks for queued work. Separate from `job_poll_interval_s`, which

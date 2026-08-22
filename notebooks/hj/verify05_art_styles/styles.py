@@ -1,0 +1,75 @@
+"""화풍 후보 8종과 예시 생성에 쓰는 고정 조건.
+
+목록의 **정본은 여기가 아닙니다** - `docs/역할_일정/03-AI_생성_서빙.md` 의 "화풍 후보 8종"
+표이고(미결정_대장 A-3, 2026-08-19 확정), 이 파일은 그것을 스크립트가 읽을 수 있는 형태로
+옮겨 온 사본입니다. 두 곳이 어긋나면 원본이 맞습니다.
+
+⚠️ **`prompt_value` 가 그대로 `brief.artStyle` 에 실리고 프롬프트로 들어갑니다.**
+`render_prompt._common_head` 의 `f"화풍은 {brief.art_style}."` 이 그 자리입니다. 즉 여기 적힌
+문자열이 곧 계약의 `ArtStyle.artStyleId` 이고, **05 가 `ADGEN_ART_STYLES` 에 넣을 값도 같아야
+합니다.** 다르면 예시와 실제 결과가 다른 문장에서 나와 선택 화면이 거짓말이 됩니다.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# 예시 8장이 화풍만으로 갈리도록 제품과 장면을 하나로 고정합니다. 검증 1순위부터 써 온
+# 시나리오를 그대로 씁니다 - 근거(소구점)가 이미 검토된 문장이라 가드레일 지시와 어긋나지
+# 않습니다.
+PRODUCT_NAME = "순한 대나무 물티슈"
+SELLING_POINT = "무향 무알코올, 두꺼운 원단"
+SCENE = "식탁에서 아이가 흘린 자국을 물티슈로 닦아 내는 장면"
+DIALOGUE = "한 장이면 충분해요"
+CHARACTER_APPEARANCE = "30대 초반 여성, 단발"
+CHARACTER_OUTFIT = "베이지색 니트"
+
+PANEL_PX = 1152
+"""칸 하나의 크기. 만화형 캔버스 3456 x 2304 를 3x2 로 나눈 값입니다 (기획서 10.2).
+
+예시를 **만화 한 칸**으로 만드는 이유는 두 가지입니다. 정사각형이라 4 x 2 격자의 카드에
+그대로 들어가고, 화풍이 가장 크게 드러나는 경로가 만화형이기 때문입니다.
+"""
+
+
+@dataclass(frozen=True)
+class ArtStyle:
+    """`03-AI_생성_서빙.md` 표의 한 행."""
+
+    index: int
+    name: str
+    traits: str
+    fits: str
+
+    @property
+    def prompt_value(self) -> str:
+        """`brief.artStyle` 에 실리는 값. 기본은 **이름만**입니다.
+
+        ⚠️ 특징(`traits`)을 붙일지는 아직 정하지 않았습니다. 붙이면 모델이 참고할 것이
+        늘어 화풍이 더 갈리겠지만, `artStyleId` 가 긴 문장이 되고 05 가 설정에 넣을 값도
+        그만큼 길어집니다. **먼저 이름만으로 돌려 보고 구분이 되는지 봅니다** - 안 되면
+        그때가 특징을 붙일 근거입니다 (`--with-traits`).
+        """
+        return self.name
+
+    def prompt_value_with_traits(self) -> str:
+        return f"{self.name} ({self.traits})"
+
+    @property
+    def slug(self) -> str:
+        """파일 이름. 한글 파일명을 피하는 자리입니다 - 공유 드라이브와 웹 경로를 거칩니다."""
+        return f"style-{self.index:02d}"
+
+
+ART_STYLES: tuple[ArtStyle, ...] = (
+    ArtStyle(1, "심플 플랫 웹툰", "굵은 선, 단순한 색, 풍부한 표정", "앱, 플랫폼, 생활 서비스"),
+    ArtStyle(2, "한국형 일상 웹툰", "친근한 인물과 현실적인 공감 상황", "식품, 배달, 금융, 교육"),
+    ArtStyle(3, "SD 캐릭터, 치비", "큰 머리와 과장된 리액션, 귀여운 인상", "캐릭터 상품, 게임, 젊은 타깃"),
+    ArtStyle(4, "레트로 팝아트", "강한 원색, 망점, 광고 포스터 같은 연출", "패션, 음료, 이벤트"),
+    ArtStyle(5, "감성 수채화", "부드러운 색과 손으로 그린 듯한 질감", "여행, 카페, 뷰티, 친환경 제품"),
+    ArtStyle(6, "세련된 에디토리얼", "절제된 선과 색, 잡지 일러스트 분위기", "프리미엄 브랜드, 금융, B2B"),
+    ArtStyle(7, "3D 클레이 캐릭터", "말랑하고 입체적인 캐릭터, 높은 주목도", "IT 서비스, 키즈, 프로모션"),
+    ArtStyle(8, "시네마틱 애니메이션", "극적인 구도와 조명, 이야기 몰입도가 높음", "자동차, 게임, 브랜드 캠페인"),
+)
+
+assert len(ART_STYLES) == 8, "8종인 근거는 기획서 12.2 의 4 x 2 격자입니다"

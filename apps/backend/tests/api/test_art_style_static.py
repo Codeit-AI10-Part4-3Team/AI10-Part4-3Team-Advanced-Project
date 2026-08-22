@@ -69,9 +69,13 @@ def test_a_missing_directory_is_a_404_rather_than_a_dead_deployment(client: Test
     """⚠️ The files are not committed (구현_범위 4.3절), so a fresh deployment has none.
 
     `StaticFiles` refuses to start when its directory is absent, which would take the whole
-    stack down for an asset nobody has delivered yet. The screen already handles the empty
-    case — it draws the same "예시 준비 중" placeholder it uses for an empty
-    `exampleImageUrl` (#179).
+    stack down for an asset nobody has delivered yet.
+
+    ⚠️ **A 404 is not the same as the screen's "예시 준비 중" placeholder.** `ArtStylePicker`
+    branches on `exampleImageUrl === ""` alone and its `<img>` has no `onError`, so a filled
+    URL with no file behind it draws a broken image instead. That is why the delivery order
+    is fixed — files first, URLs second (infra/README.md). What #179 handles is the empty
+    string, not the 404 (PR #208 리뷰, 신호정).
     """
     answer = client.get("/static/art-styles/style-01-traits.webp")
 
@@ -120,7 +124,18 @@ def test_a_bad_directory_stops_the_app_from_starting(
 def test_a_sibling_directory_under_the_same_volume_is_fine(env: Path) -> None:
     """The deployment puts all four paths under one volume (ADR-0014), so the check has to
     refuse *containment* rather than the shared parent — otherwise it would refuse the only
-    layout we actually ship."""
-    settings = deps.settings()
+    layout we actually ship.
 
-    _check_art_style_dir(settings)  # tmp_path/art-styles alongside tmp_path/images
+    ⚠️ All three axes have to be *actually* siblings here, which is what the `ADGEN_LOG_DIR`
+    line in the fixture buys. Without it `log_dir` keeps its relative default and this test
+    passes while never having placed that axis beside the others — the direction it guards
+    (a correct layout wrongly refused) would go unmeasured (PR #208 리뷰, 정승호).
+    """
+    settings = deps.settings()
+    # 세 축이 정말 `tmp_path` 밑에 나란히 있는지부터 봅니다. 픽스처가 하나라도 빠뜨리면
+    # 그 축은 기본 상대 경로로 남고, 이 시험은 그것을 재지 않은 채 통과합니다.
+    assert Path(settings.db_path).parent == env
+    assert Path(settings.image_dir).parent == env
+    assert Path(settings.log_dir).parent == env
+
+    _check_art_style_dir(settings)

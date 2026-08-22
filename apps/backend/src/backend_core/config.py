@@ -184,8 +184,13 @@ class Settings(BaseSettings):
 
     ⚠️ 앱이 쓰지 않습니다. 파일은 공유 드라이브에서 받아 사람이 볼륨에 넣습니다
     (구현_범위 4.3절이 생성 이미지 커밋을 금지합니다). 그래서 `db_path` `image_dir`
-    `log_dir` 과 달리 **디렉토리가 없어도 기동합니다** - 없으면 그 URL 이 404 이고,
-    화면은 `exampleImageUrl` 이 비었을 때와 같은 자리를 잡습니다 (#179).
+    `log_dir` 과 달리 **디렉토리가 없어도 기동합니다** - 없으면 그 URL 이 404 입니다.
+
+    ⚠️ **404 는 화면에서 "예시 준비 중" 이 아닙니다.** `ArtStylePicker` 의 분기는
+    `exampleImageUrl === ""` 하나이고 `<img>` 에 `onError` 가 없습니다 - URL 이 채워진 채
+    파일이 없으면 브라우저의 깨진 이미지가 뜹니다. 그래서 넣는 순서가 정해져 있습니다:
+    **파일이 먼저, URL 이 나중** (infra/README.md). #179 가 잡아 주는 것은 빈 문자열이지
+    404 가 아닙니다 (PR #208 리뷰, 신호정).
 
     값의 정본은 배포입니다 (`infra/docker-compose.yml`). 기본값은 `uvicorn` 을
     apps/backend 에서 맨몸으로 돌리는 경우를 위한 것입니다.

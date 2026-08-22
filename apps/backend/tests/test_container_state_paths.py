@@ -29,7 +29,7 @@ from backend_core.config import Settings
 DOCKERFILE = Path(__file__).resolve().parents[1] / "Dockerfile"
 COMPOSE = Path(__file__).resolve().parents[3] / "infra" / "docker-compose.yml"
 
-WRITABLE_SETTINGS = ["db_path", "image_dir"]
+WRITABLE_SETTINGS = ["db_path", "image_dir", "log_dir"]
 """Settings naming somewhere the app writes. Add to this when a new one appears — that is
 the whole point of the list."""
 

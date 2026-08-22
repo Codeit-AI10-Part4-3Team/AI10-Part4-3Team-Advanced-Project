@@ -19,6 +19,7 @@ from api.errors import api_error_handler, unhandled_error_handler, validation_er
 from api.routes import auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
+from backend_core.observability import install_file_log
 from backend_core.storage import connect, init_schema
 from backend_core.tokens import require_secret
 
@@ -36,6 +37,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     password-change endpoint (ADR-0008).
     """
     settings = deps.settings()
+
+    # ⚠️ Before anything else, so a failure during startup is in the record too. The
+    # container's own stdout does not survive the next `compose up --build` (ADR-0011 makes
+    # deployment a rebuild), and a crash loop is exactly when someone needs yesterday's lines
+    # (backend_core.observability).
+    install_file_log(settings.log_dir, settings.log_retention_d)
 
     with connect(settings.db_path) as connection:
         init_schema(connection)

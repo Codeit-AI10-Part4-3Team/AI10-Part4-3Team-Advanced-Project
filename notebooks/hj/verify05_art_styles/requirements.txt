@@ -1,0 +1,4 @@
+# 실험 전용 의존입니다. 앱의 dev extra에 넣지 마세요 - CI가 매번 끌고 옵니다
+# (apps/ai-engine/AGENTS.md).
+openai>=1.40
+pillow>=10.0

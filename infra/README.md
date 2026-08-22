@@ -392,6 +392,39 @@ ssh "$ADCRAFT_VM" 'cd /srv/adcraft/app && bash scripts/deploy-vm.sh'
   보존 기간 정리 배치가 한 곳만 보게 하기 위해서입니다
   ([세션_보관_정책.md](../docs/기술문서/세션_보관_정책.md) 2절).
 
+### 화풍 예시 8장을 볼륨에 넣기 (`/data/art-styles`)
+
+이 여덟 장만 **사람이 직접 넣습니다.** 생성 이미지는 커밋하지 않으므로(구현_범위 4.3절)
+공유 드라이브에서 받아 볼륨에 옮기는 절차가 필요합니다. 파일 이름과 값은
+`notebooks/hj/verify05_art_styles/prepare_handoff.py`가 정하고, 그대로 씁니다.
+
+```bash
+cd /srv/adcraft/app
+C="docker compose -f infra/docker-compose.yml -p adgen"
+
+$C exec -T backend mkdir -p /data/art-styles       # 컨테이너 사용자 소유로 만듭니다
+$C cp ./전달/style-01-traits.webp backend:/data/art-styles/
+# ... 나머지 일곱 장
+$C exec -T backend ls -l /data/art-styles
+```
+
+- ⚠️ **`ADGEN_ART_STYLE_DIR`을 `/data`로 줄이지 마세요.** 이 경로는 `/static/art-styles`로
+  **인증 없이** 열립니다. 한 단계 위를 가리키면 `adgen.sqlite`(계정 해시와 세션)와 업로드
+  사진이 그대로 공개됩니다. backend가 기동에서 검사하고 어기면 뜨지 않습니다
+  (`api/main.py`의 `_check_art_style_dir`).
+- **디렉토리가 없어도 스택은 뜹니다.** 그때는 그 URL만 404이고, 화면은 `exampleImageUrl`이
+  비었을 때와 같은 자리를 잡습니다. 파일이 오기 전에 `ADGEN_ART_STYLES`를 먼저 넣어도
+  되는 이유가 이것입니다.
+- **파일을 넣은 뒤 재배포는 필요 없습니다.** 마운트가 요청 시점에 디렉토리를 읽습니다.
+  다만 `ADGEN_ART_STYLES`의 `exampleImageUrl`을 채우는 것은 `.env` 변경이므로 그쪽은
+  `bash scripts/deploy-vm.sh --no-build`가 필요합니다.
+- **같은 이름으로 다시 넣어도 됩니다.** 캐시는 `public, max-age=3600`이라 한 시간 안에
+  갈립니다 (`api/main.py`의 `ART_STYLE_CACHE_CONTROL`).
+
+주의: **위 절차는 아직 실행해 본 적이 없습니다** (`미검증`). 예시 8장이 전달되는 08-24에
+처음 돌아가며, 그때 결과를 이 절에 적습니다. 특히 `compose cp`가 만드는 파일이 root 소유가
+되는데 컨테이너는 읽기만 하므로 0644면 충분하다는 것이 확인 대상입니다.
+
 ### 상태 파일 백업 (`scripts/backup-db.sh`)
 
 ```bash

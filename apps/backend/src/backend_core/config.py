@@ -173,6 +173,24 @@ class Settings(BaseSettings):
     # (ADR-0014); a second location would be a second thing to back up and forget.
     image_dir: str = "./data/images"
 
+    art_style_dir: str = "./data/art-styles"
+    """화풍 예시 이미지 8장이 있는 곳. **읽기만 합니다.**
+
+    ⚠️ **이 경로 하나가 통째로 인증 밖에 열립니다** (`/static/art-styles`, `api.main`).
+    정적 마운트에는 라우트 의존성이 걸리지 않으므로 로그인 없이 읽힙니다. 그래서
+    `image_dir` 과 **반드시 다른 디렉토리**여야 합니다 - 한 단계 위(`/data`)를 가리키면
+    같은 볼륨의 `adgen.sqlite` 와 사용자 업로드 사진이 함께 열립니다. `api.main` 이 기동에서
+    그 관계를 검사하고 어기면 뜨지 않습니다.
+
+    ⚠️ 앱이 쓰지 않습니다. 파일은 공유 드라이브에서 받아 사람이 볼륨에 넣습니다
+    (구현_범위 4.3절이 생성 이미지 커밋을 금지합니다). 그래서 `db_path` `image_dir`
+    `log_dir` 과 달리 **디렉토리가 없어도 기동합니다** - 없으면 그 URL 이 404 이고,
+    화면은 `exampleImageUrl` 이 비었을 때와 같은 자리를 잡습니다 (#179).
+
+    값의 정본은 배포입니다 (`infra/docker-compose.yml`). 기본값은 `uvicorn` 을
+    apps/backend 에서 맨몸으로 돌리는 경우를 위한 것입니다.
+    """
+
     # ---- retention (세션_보관_정책 2절) --------------------------------------------------
 
     # ⚠️ These are the periods from the policy table, as settings because the policy says so

@@ -18,8 +18,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ai_engine import draft_prompt, guardrail, render_prompt, usage
-from ai_engine.config import Settings
+from ai_engine import budget, draft_prompt, guardrail, render_prompt, usage
+from ai_engine.config import MODEL_MAX_RETRIES, Settings
 from ai_engine.models import (
     PANEL_ROLES,
     Brief,
@@ -246,6 +246,44 @@ def _guarded_draft(
     ⚠️ 검사 대상은 `render_prompt.dialogue_of` 가 주는 문자열 - **이미지 안에 그려질 글자**
     뿐입니다. `adPlan` 과 `visualPlan` 은 소비자에게 하는 주장이 아니라 제작 지시문이라
     넣으면 전량 위반으로 잡힙니다 (2026-08-20 실측, ADR-0019).
+
+    ⚠️ **예산은 여기서 한 번만 잽니다.** 두 시도가 한 예산을 나눠 쓰는 이유는
+    `_guarded_attempts` 에 있습니다.
+    """
+    try:
+        return budget.run_within(
+            settings.draft_model_timeout_s,
+            lambda: _guarded_attempts(
+                prompt, settings, build, evidence, enabled=enabled, seam=seam
+            ),
+        )
+    except budget.BudgetExceededError as exc:
+        raise DraftFailedError(
+            f"{settings.draft_model_timeout_s:.0f}초 예산 안에 오지 않았습니다. "
+            "호출자가 먼저 끊기 전에 포기합니다."
+        ) from exc
+
+
+def _guarded_attempts(
+    prompt: str,
+    settings: Settings,
+    build: Callable[[dict[str, Any]], Draft],
+    evidence: str,
+    *,
+    enabled: bool,
+    seam: str,
+) -> Draft | RefusalReason:
+    """`_guarded_draft` 의 본체. 예산 밖에 두는 것은 감쌈 하나뿐입니다.
+
+    ⚠️ **예산이 두 시도를 함께 덮습니다** (이슈 #180 리뷰). 시도마다 새로 시작하면 요청 하나가
+    최악 100초인데 호출자(`ADGEN_DRAFT_TIMEOUT_S`)는 60초입니다 - SDK 재시도를 껐어도 풀리지
+    않습니다. **우리 자신의 재생성이 두 번째 시도이기 때문**이고, 이것은 예외 경로가 아니라
+    D2 대조 실험의 on 팔입니다.
+
+    ⚠️ 그래서 1회차가 느리면 재생성이 쓸 시간이 그만큼 줄고, 남지 않으면 재생성이 예산에서
+    끊깁니다. 시도당 상한을 낮추는 방법도 있었지만 그 값을 정할 실측이 없습니다 - 텍스트 모델은
+    어느 모델인지를 잰 회차 자체가 없습니다 (`config.text_model`). 호출자가 60초만 기다린다는
+    사실은 이미 정해져 있으므로, 나눠 쓰는 쪽이 없는 숫자를 만드는 것보다 낫습니다.
     """
     outcome = _attempt(prompt, settings, build, seam)
     if isinstance(outcome, str) or not enabled:
@@ -328,7 +366,14 @@ def _ask_model(prompt: str, settings: Settings, seam: str) -> dict[str, Any]:
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
 
-    client = OpenAI(api_key=settings.model_api_key, timeout=settings.draft_model_timeout_s)
+    # ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 50초가 **시도당** 상한이 되고,
+    # 최악 150초가 호출자의 60초를 넘깁니다 (이슈 #180). 이쪽은 열화가 없어 실패가 실패로
+    # 보이지만, 실패의 이유를 아는 쪽이 아무도 없게 됩니다.
+    client = OpenAI(
+        api_key=settings.model_api_key,
+        timeout=settings.draft_model_timeout_s,
+        max_retries=MODEL_MAX_RETRIES,
+    )
     try:
         response = client.chat.completions.create(
             model=settings.text_model,

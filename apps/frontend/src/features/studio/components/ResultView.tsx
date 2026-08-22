@@ -1,6 +1,6 @@
 import { describeCode } from "../errors";
 import { JOB_STATUS_LABEL } from "../labels";
-import type { ErrorCode, Job } from "../types";
+import type { ApiErrorBody, Job } from "../types";
 
 interface ResultViewProps {
   job: Job;
@@ -19,7 +19,7 @@ function expiryText(expiresAt: string): string {
  * `null` 이 없으므로, `status` 로 갈라 놓고 값을 비교하지 않습니다.
  */
 /** 잡이 남긴 실패. `error` 키가 없을 수도 있어(계약) 그때는 최소한만 말합니다. */
-function JobFailure({ error }: { error?: { code: ErrorCode; message: string } }) {
+function JobFailure({ error }: { error?: ApiErrorBody }) {
   if (error === undefined) {
     return (
       <p className="workspace-error" role="alert">

@@ -142,12 +142,10 @@ function SessionView({ sessionId }: { sessionId: string }) {
         </div>
       </header>
 
-      {/* 배너는 하나입니다. 문구는 `report` 가 만들고(401 은 여기 오지 않고 로그아웃됩니다),
-          폴링이 멈췄을 때만 되살릴 길을 덧붙입니다. 둘로 나누면 같은 실패에 빨간 상자가 두 개
-          뜹니다. `pollingStopped` 를 조건에 함께 둔 것은 `clear()` 로 문구가 지워져도 복구
-          버튼은 남아야 하기 때문입니다. */}
-      {/* 하나만 띄웁니다. 둘로 나누면 같은 실패에 상자가 두 개 뜹니다. `pollingStopped` 를
-          조건에 함께 둔 것은 `clear()` 로 문구가 지워져도 복구 버튼은 남아야 하기 때문입니다. */}
+      {/* 하나만 띄웁니다. 둘로 나누면 같은 실패에 상자가 두 개 뜹니다. 내용은 `report` 가
+          만들고 401 은 여기 오지 않습니다 - 그쪽은 로그아웃으로 갑니다(`useApiError`).
+          `pollingStopped` 를 조건에 함께 둔 것은 `clear()` 로 내용이 지워져도 복구 버튼은
+          남아야 하기 때문입니다. */}
       {(failure !== null || pollingStopped) && (
         <ErrorNotice
           failure={

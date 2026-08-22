@@ -94,3 +94,21 @@ ART_STYLES: tuple[ArtStyle, ...] = (
 )
 
 assert len(ART_STYLES) == 8, "8종인 근거는 기획서 12.2 의 4 x 2 격자입니다"
+
+
+CONFIRMED_TRAITS: frozenset[int] = frozenset({1})
+"""`artStyleId` 에 특징까지 싣는 화풍의 번호. **2026-08-22 확정값입니다.**
+
+판정자 3명 집계가 특징 포함 1 / 이름만 3 / 둘 다 4 라 일괄로 붙일 근거가 없었고, 1번만
+만장일치로 특징 포함이었습니다 (PR #194, 05 가 코멘트로 확인).
+
+⚠️ **일괄 플래그로 대신하지 마세요.** 확정값은 화풍마다 다르므로 "전부 이름만" 도 "전부
+특징 포함" 도 확정값이 아닙니다. 두 스크립트(`prepare_handoff.py` 가 05 에게 넘길 값,
+`run_style_sets.py` 가 판정용으로 생성할 값)가 **이 한 곳을 봅니다** - 갈라 두면 한쪽만
+고쳐지는 날 넘긴 값과 판정한 값이 어긋나고, 그것을 알아챌 방법이 없습니다.
+"""
+
+
+def confirmed_value(style: ArtStyle) -> str:
+    """확정된 `artStyleId`. 05 가 `ADGEN_ART_STYLES` 에 넣는 값과 같아야 합니다."""
+    return style.prompt_value_with_traits() if style.index in CONFIRMED_TRAITS else style.prompt_value

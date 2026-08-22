@@ -118,6 +118,14 @@ def install_file_log(log_dir: str | Path, retention_d: int) -> None:
     if root.level > logging.INFO or root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
 
+    # ⚠️ Scoped, not global -- and it sits with the level decisions rather than after the
+    # file is opened, because it is a statement about a **logger**, not about a destination.
+    # `httpx` is the transport in `backend_core.ai_client` and logs one INFO line per upstream
+    # call; with the root at INFO those would land in a file kept for 30 days with no size cap.
+    # Below the file-open `return` it was skipped whenever the volume was blocked, so that path
+    # alone put the transport chatter on stdout -- two shapes for one decision (PR #181 리뷰).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     directory = Path(log_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -144,8 +152,3 @@ def install_file_log(log_dir: str | Path, retention_d: int) -> None:
     handler._adgen_tag = _HANDLER_TAG  # type: ignore[attr-defined]
     handler.setFormatter(formatter)
     root.addHandler(handler)
-
-    # ⚠️ Scoped, not global. `httpx` is the transport in `backend_core.ai_client` and logs one
-    # INFO line per upstream call; with the root at INFO those would land in a file kept for
-    # 30 days with no size cap. The seam records are what this file is for.
-    logging.getLogger("httpx").setLevel(logging.WARNING)

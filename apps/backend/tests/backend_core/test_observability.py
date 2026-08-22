@@ -104,6 +104,7 @@ def test_an_unusable_log_directory_does_not_stop_the_service(tmp_path: Path) -> 
     blocker = tmp_path / "not-a-directory"
     blocker.write_text("", encoding="utf-8")
 
+    logging.getLogger("httpx").setLevel(logging.NOTSET)
     observability.install_file_log(blocker / "logs", retention_d=30)
 
     ours = [h for h in logging.getLogger().handlers if getattr(h, "_adgen_tag", None)]
@@ -115,6 +116,10 @@ def test_an_unusable_log_directory_does_not_stop_the_service(tmp_path: Path) -> 
         assert len(ours) == 1
         assert isinstance(ours[0], logging.StreamHandler)
         assert not isinstance(ours[0], logging.FileHandler)
+        # The transport suppression is a decision about a logger, not about the file, so it
+        # holds on this path too. It used to sit below the `return` and be skipped here, which
+        # put `httpx` INFO on stdout only when the volume was blocked (PR #181 리뷰, 신호정).
+        assert logging.getLogger("httpx").level == logging.WARNING
     finally:
         for handler in ours:
             logging.getLogger().removeHandler(handler)

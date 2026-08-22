@@ -130,14 +130,33 @@ def _save_png(payload: bytes, path: Path) -> None:
         image.convert("RGB").save(path, format="PNG")
 
 
-def _dry_run(targets: list[styles.ArtStyle], quality: str) -> int:
+def _art_style_value(style: styles.ArtStyle, mode: str) -> str:
+    if mode == "confirmed":
+        return styles.confirmed_value(style)
+    if mode == "traits":
+        return style.prompt_value_with_traits()
+    return style.prompt_value
+
+
+def _dry_run(targets: list[styles.ArtStyle], quality: str, mode: str) -> int:
     from ai_engine import render_prompt
 
-    # 화풍만 다르고 나머지가 같으므로 프롬프트는 첫 종 하나만 보이면 충분합니다.
+    # ⚠️ **보낼 값을 전부 찍습니다.** 처음에는 첫 종의 프롬프트만 보였는데, 확정값이 화풍마다
+    #    달라서(1번만 특징 포함) 그 방식은 어긋난 값을 **가릴 수 있습니다** - 하필 첫 종이
+    #    맞으면 나머지 일곱이 틀려도 dry-run 이 초록으로 보입니다. 요금이 나가기 전에 눈으로
+    #    대조하는 것이 이 명령의 존재 이유입니다.
+    print(f"artStyleId ({mode}):")
+    for style in targets:
+        value = _art_style_value(style, mode)
+        mark = "  <- 특징 포함" if value != style.prompt_value else ""
+        print(f"  {style.index}. {value!r}{mark}")
+
+    # 프롬프트 본문은 화풍만 다르고 나머지가 같으므로 첫 종 하나면 충분합니다.
     sample = targets[0]
-    request = _request(sample.prompt_value, quality)
+    sample_value = _art_style_value(sample, mode)
+    request = _request(sample_value, quality)
     assert isinstance(request.draft, ComicDraft)
-    print(f"\n=== {sample.index}. {sample.name}  (artStyleId={sample.prompt_value!r})")
+    print(f"\n=== {sample.index}. {sample.name}  (artStyleId={sample_value!r})")
     print(render_prompt.build_panel(request, request.draft.panels[0], with_reference=False))
 
     calls = len(targets) * len(PANEL_ROLES)
@@ -157,10 +176,12 @@ def main() -> int:
     parser.add_argument("--yes", action="store_true", help="요금이 나가는 호출을 승인합니다")
     parser.add_argument("--only", type=int, nargs="*", help="화풍 번호만 골라서 (1 ~ 8)")
     parser.add_argument(
-        "--with-traits",
-        action="store_true",
-        help="artStyleId 에 특징을 함께 실습니다. **05 가 ADGEN_ART_STYLES 에 넣을 값과 "
-        "같아야 합니다** - 다르면 사용자가 고른 화풍과 판정한 화풍이 갈립니다",
+        "--art-style-values",
+        choices=["confirmed", "traits", "name-only"],
+        default="confirmed",
+        help="artStyleId 로 무엇을 실을지. 기본 confirmed 는 2026-08-22 확정값(화풍마다 다름, "
+        "1번만 특징 포함)입니다. **05 가 ADGEN_ART_STYLES 에 넣는 값과 같아야 합니다** - "
+        "다르면 사용자가 고른 화풍과 판정한 화풍이 갈립니다. 나머지 둘은 탐색용입니다",
     )
     parser.add_argument(
         "--quality",
@@ -182,7 +203,7 @@ def main() -> int:
         sys.exit("고른 번호에 해당하는 화풍이 없습니다.")
 
     if args.dry_run:
-        return _dry_run(targets, args.quality)
+        return _dry_run(targets, args.quality, args.art_style_values)
 
     calls = len(targets) * len(PANEL_ROLES)
     if not (args.yes or args.stub):
@@ -197,7 +218,7 @@ def main() -> int:
 
     rows: list[dict[str, Any]] = []
     for style in targets:
-        value = style.prompt_value_with_traits() if args.with_traits else style.prompt_value
+        value = _art_style_value(style, args.art_style_values)
         started = time.monotonic()
         try:
             payload = render_image(_request(value, args.quality), settings)
@@ -242,7 +263,11 @@ def main() -> int:
                 "generation_mode": settings.generation_mode,
                 "quality_requested": args.quality,
                 "quality_override": settings.image_quality_override or None,
-                "with_traits": args.with_traits,
+                "art_style_values": args.art_style_values,
+                "art_style_id_by_index": {
+                    str(style.index): _art_style_value(style, args.art_style_values)
+                    for style in targets
+                },
                 "image_model": settings.image_model,
                 "panel_script": list(styles.PANEL_SCRIPT),
             },

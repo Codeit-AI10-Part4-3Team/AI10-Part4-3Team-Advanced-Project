@@ -126,10 +126,11 @@ def test_a_sibling_directory_under_the_same_volume_is_fine(env: Path) -> None:
     refuse *containment* rather than the shared parent — otherwise it would refuse the only
     layout we actually ship.
 
-    ⚠️ All three axes have to be *actually* siblings here, which is what the `ADGEN_LOG_DIR`
-    line in the fixture buys. Without it `log_dir` keeps its relative default and this test
-    passes while never having placed that axis beside the others — the direction it guards
-    (a correct layout wrongly refused) would go unmeasured (PR #208 리뷰, 정승호).
+    ⚠️ **All three axes have to be *actually* siblings, and one of them is set somewhere
+    else.** `log_dir` comes from the autouse `isolated_settings` fixture in `tests/conftest.py`,
+    not from `env` above — same `tmp_path`, so they do line up today. The asserts below say so
+    out loud because the alternative is a test that keeps passing after that fixture changes,
+    while silently no longer measuring the axis it claims to (PR #208 리뷰, 정승호).
     """
     settings = deps.settings()
     # 세 축이 정말 `tmp_path` 밑에 나란히 있는지부터 봅니다. 픽스처가 하나라도 빠뜨리면

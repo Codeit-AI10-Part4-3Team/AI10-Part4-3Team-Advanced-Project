@@ -78,6 +78,26 @@ def _art_style_ids(with_traits: bool) -> dict[int, str]:
     return ids
 
 
+def _plan(with_traits: set[int]) -> list[tuple[styles.ArtStyle, bool, str, Path]]:
+    """이번 회차에 쓸 원본 8장을 **지우기 전에** 전부 확인합니다.
+
+    정리가 검증보다 먼저면, 일부 화풍만 `--traits` 로 다시 돌리다 원본이 없는 조합을
+    지정했을 때 이전 회차를 다 지운 뒤 중간에 멈춥니다. 8장도 9장도 아닌 폴더가 남고,
+    그것은 아래 정리가 막으려던 것과 같은 모양의 사고입니다 (PR #205 리뷰).
+    """
+    plan = []
+    for style in styles.ART_STYLES:
+        traits = style.index in with_traits
+        # 원본 이름을 그대로 물려받습니다 (1번만 `-traits`). 접미어가 조건을 가리키므로
+        # 여기서 가지런히 고치면 그 사실이 사라집니다 - 자세한 이유는 파일 상단.
+        stem = f"{style.slug}-traits" if traits else style.slug
+        source = SOURCE / f"{stem}.png"
+        if not source.exists():
+            raise SystemExit(f"원본이 없습니다: {source.name}")
+        plan.append((style, traits, stem, source))
+    return plan
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="화풍 예시 전달본 생성 (C4)")
     parser.add_argument(
@@ -103,6 +123,8 @@ def main() -> int:
     plain_ids = _art_style_ids(with_traits=False)
     traits_ids = _art_style_ids(with_traits=True)
 
+    plan = _plan(with_traits)
+
     HANDOFF.mkdir(parents=True, exist_ok=True)
 
     # ⚠️ 덮어쓰기만 하면 **직전 회차의 파일이 남습니다.** 조건이나 이름 규칙이 바뀌면 지난
@@ -119,15 +141,7 @@ def main() -> int:
     saved = 0
     original = 0
 
-    for style in styles.ART_STYLES:
-        traits = style.index in with_traits
-        # 원본 이름을 그대로 물려받습니다 (1번만 `-traits`). 접미어가 조건을 가리키므로
-        # 여기서 가지런히 고치면 그 사실이 사라집니다 - 자세한 이유는 파일 상단.
-        stem = f"{style.slug}-traits" if traits else style.slug
-        source = SOURCE / f"{stem}.png"
-        if not source.exists():
-            raise SystemExit(f"원본이 없습니다: {source.name}")
-
+    for style, traits, stem, source in plan:
         buffer = io.BytesIO()
         with Image.open(source) as image:
             image.convert("RGB").save(buffer, "WEBP", quality=args.quality, method=6)

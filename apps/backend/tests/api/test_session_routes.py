@@ -10,6 +10,7 @@ The three questions this file exists to answer:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -161,6 +162,136 @@ def test_the_degraded_and_needs_input_cases_are_told_apart_by_one_key(
     assert degraded["state"] == asked["state"] == "brief_filling"
     assert "needsInput" not in degraded
     assert "needsInput" in asked
+
+
+# ---- 운영 관측 (05 일정 08-26) --------------------------------------------------------
+#
+# ⚠️ These pin the *outcome names*, not the numbers. The 08-26 report counts lines by
+# outcome, so a rename here silently changes what the report says happened - and a degraded
+# rate that reads zero because the word changed looks like good news.
+
+
+def test_a_degraded_brief_fill_is_recorded_as_degraded_not_as_a_failure(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`degraded` is a designed outcome (ADR-0005) and a reported metric in its own right.
+
+    ⚠️ Counting it as a failure would break both numbers at once: the failure rate would
+    climb for something that is working as designed, and the degraded rate - which the report
+    asks for by name - would have nothing left to count.
+    """
+    ai.available = False
+    with caplog.at_level(logging.INFO):
+        _create(client)
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=brief:fill")]
+    assert len(lines) == 1
+    assert "outcome=degraded" in lines[0]
+    assert "outcome=failed" not in lines[0]
+
+
+def test_a_needs_input_answer_is_told_apart_from_a_plain_fill(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Both are successful calls, and the report has to see them separately."""
+    ai.needs_input = NeedsInput(field="target", reason="대상을 판단하지 못했습니다.")
+    with caplog.at_level(logging.INFO):
+        _create(client)
+
+    assert any("obs seam=brief:fill outcome=needs_input" in m for m in caplog.messages)
+
+
+def test_a_guardrail_refusal_is_recorded_as_refused_not_unavailable(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A refusal is the guardrail working (INV-6), not the engine being down.
+
+    ⚠️ These two end at different status codes and mean opposite things - one says the input
+    was too thin, the other says the dependency is gone. Folding them together would make the
+    guardrail's own delta unmeasurable, and that delta is a reported figure.
+    """
+    session = _create(client)
+    ai.refuses = True
+    with caplog.at_level(logging.INFO):
+        client.post(f"/v1/sessions/{session['sessionId']}/draft")
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=draft:generate")]
+    assert len(lines) == 1
+    assert "outcome=refused" in lines[0]
+
+
+def test_a_retry_that_degrades_is_counted_too_not_only_the_first_call(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`PATCH .../brief` is the **second** `brief:fill` call site and it degrades on its own.
+
+    ⚠️ Measuring only session creation under-counts the degraded rate exactly when it matters
+    most: the engine is down and users are answering their `needsInput` prompts, so every
+    retry degrades while the report shows only first calls (PR #181 리뷰).
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    ai.available = False
+    # 생성 시점 호출도 같은 이음매로 남으므로, 재시도분만 보려면 비우고 시작합니다.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=brief:fill")]
+    assert len(lines) == 1
+    assert "outcome=degraded" in lines[0]
+
+
+def test_a_patch_that_cannot_find_the_photo_is_a_distinguishable_degradation(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """A vanished photo is our retention batch racing the user, not the engine being down.
+
+    ⚠️ Both end in `RefillOutcome(filled=None)` and both look the same to the user, but the
+    fixes are different - one is a period, the other is a dependency. Folding them into one
+    outcome would make the log unable to tell us which one we are looking at.
+    """
+    ai.needs_input = NeedsInput(field="note", reason="무슨 제품인지 알기 어렵습니다.")
+    created = _create(client)
+
+    for photo in Path(deps.settings().image_dir).rglob("*"):
+        if photo.is_file():
+            photo.unlink()
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _patch_brief(client, created, note="여름용 수분 크림입니다")
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=brief:fill")]
+    assert len(lines) == 1
+    assert "outcome=degraded_photo_gone" in lines[0]
+
+
+def test_a_draft_patch_is_measured_like_every_other_model_call(
+    client: TestClient, ai: FakeAiEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`draft:patch` calls the model and costs money like the other three.
+
+    ⚠️ Left unmeasured it would drop a whole user-facing generation call out of the reported
+    failure rate, and `scripts/observe.py` cannot tell an unmeasured seam from a healthy one
+    - both read 0% (PR #181 리뷰).
+    """
+    session = _create(client)
+    session_id = session["sessionId"]
+    drafted = client.post(f"/v1/sessions/{session_id}/draft").json()
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        response = client.patch(
+            f"/v1/sessions/{session_id}/draft",
+            json={"revision": drafted["revision"], "patch": {"copy": "새 카피입니다"}},
+        )
+
+    lines = [m for m in caplog.messages if m.startswith("obs seam=draft:patch")]
+    assert response.status_code == 200, response.text
+    assert len(lines) == 1
+    assert "outcome=ok" in lines[0]
 
 
 # ---- answering needsInput: the retry (계약 `PATCH .../brief`, 미결정_대장 B-11) ---------

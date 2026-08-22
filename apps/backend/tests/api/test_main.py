@@ -3,7 +3,11 @@
 Convention: tests/ mirrors src/ (src/api/main.py -> tests/api/test_main.py).
 """
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
+from api import deps
 
 
 def test_health(client: TestClient) -> None:
@@ -58,3 +62,21 @@ def test_a_trailing_slash_is_404_and_never_a_redirect(client: TestClient) -> Non
     assert response.status_code == 404
     assert "location" not in response.headers
     assert response.json()["code"] == "NOT_FOUND"
+
+
+def test_startup_installs_the_operational_log(client: TestClient) -> None:
+    """Starting the app has to put the log where a deploy cannot erase it.
+
+    ⚠️ **This is the only test that holds the wiring.** Every other observability test calls
+    `install_file_log` itself, so deleting the call in `api.main.lifespan` left the whole
+    suite green — found by removing it and watching nothing break (2026-08-21 변이 시험).
+    What would have happened in deployment is that measurements kept going to stdout only,
+    and the 30-day period in 세션_보관_정책 2절 would have quietly stayed at "one deploy".
+
+    `client` enters `TestClient` as a context manager, which is what runs `lifespan`.
+    """
+    log_dir = Path(deps.settings().log_dir)
+
+    assert (log_dir / "app.log").exists(), (
+        f"{log_dir} 에 app.log 가 없습니다. api.main.lifespan 의 install_file_log 호출을 보세요."
+    )

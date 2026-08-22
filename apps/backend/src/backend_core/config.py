@@ -235,6 +235,21 @@ class Settings(BaseSettings):
     # this file holds uploaded-photo paths and briefs, and the repo is public.
     db_path: str = "./data/adgen.sqlite"
 
+    # ---- 운영 로그 (세션_보관_정책 2절) ---------------------------------------------------
+
+    # ⚠️ **Under the same volume as the database, and that is the whole point.**
+    # `deploy-vm.sh` replaces containers on every deploy, so a container's own stdout log
+    # dies with it - the 30-day period the policy promises could not be kept by the runtime.
+    # 세션_보관_정책 2절 says "회전은 배포 쪽에서 정합니다"; the deployment had no `logging:`
+    # block at all, so the decision is made here instead (backend_core.observability).
+    log_dir: str = "./data/logs"
+
+    # 프롬프트 / 호출 로그 30일 (세션_보관_정책 2절 기간표). Daily files, this many kept.
+    # ⚠️ A period, not a size. Size-based rotation cannot state one - the same setting would
+    # hold four days in a busy week and ninety in a quiet month, and neither is what the
+    # document promises.
+    log_retention_d: int = 30
+
     # ---- auth (ADR-0008, ADR-0013) -----------------------------------------------------
 
     # Signs the session token. No default: see the module docstring.

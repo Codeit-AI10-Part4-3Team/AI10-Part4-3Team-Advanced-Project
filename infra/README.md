@@ -210,6 +210,31 @@ GPU가 아닙니다. 배포에서 조일 곳은 셋입니다.
 - 발급이 실패하면 `docker compose logs caddy` 에 즉시 드러납니다. 한도로 막히면 ADR-0016 의
   선택지 B(자체 서명)로 내려가고 그 ADR 을 갱신합니다.
 
+### 응답 헤더는 Caddyfile 한 곳에서만 정합니다 (2026-08-22, 이슈 #115)
+
+브라우저가 보는 출처가 프록시 하나뿐이므로 하드닝 헤더도 `infra/Caddyfile` 의 `header` 블록
+하나에만 둡니다. **`apps/frontend/nginx.conf` 에 같은 헤더를 또 넣지 마세요** -- 두 곳이 같은
+헤더를 쓰면 실제로 나가는 값이 어느 쪽인지 추적할 수 없습니다.
+
+| 헤더 | 값 | 왜 |
+|---|---|---|
+| `Server` | **지웁니다** | Caddy 가 업스트림 헤더를 그대로 통과시켜 `Server: nginx/1.27.5` 가 밖으로 나갔습니다. nginx 의 `server_tokens off` 는 버전만 지우고 `Server: nginx` 를 남깁니다 |
+| `X-Content-Type-Options` | `nosniff` | 사용자가 올린 사진이 그대로 실려 나가는 경로가 있습니다 (`GET /v1/sessions/{id}/image`) |
+| `Content-Security-Policy` | `frame-ancestors 'none'` | `X-Frame-Options` 를 대체하는 표준입니다. **둘 다 두지 않습니다** -- 함께 있으면 브라우저가 CSP 를 따르므로 뒤쪽은 읽히지 않는 줄이 됩니다 |
+
+`Via: 1.1 Caddy` 는 남깁니다 (RFC 9110 이 전달하는 프록시에 요구합니다). HSTS 는 넣지
+않았습니다 -- 공개 호스트가 `<외부 IP>.sslip.io` 라 VM 을 다시 만들면 이름이 바뀌는데, HSTS 는
+브라우저에 `max-age` 동안 붙어 있어 되돌릴 방법이 사용자 쪽에만 남습니다.
+
+확인은 실제 응답으로 합니다. 스택이 떠 있을 때:
+
+```bash
+curl -sI http://localhost/ | grep -iE 'server|x-content-type-options|content-security-policy'
+# X-Content-Type-Options: nosniff
+# Content-Security-Policy: frame-ancestors 'none'
+# (Server 줄이 없어야 정상입니다)
+```
+
 ### 배포 체크아웃은 `/srv/adcraft/app`
 
 배포 트리는 **개인 홈이 아니라 `adcraft` 그룹 소유의 공용 경로 하나**입니다.

@@ -49,12 +49,11 @@ URL_PREFIX = "/static/art-styles"
 05(`apps/backend`)이고, 여기서는 URL 을 그 약속대로 적기만 합니다.
 """
 
-TRAITS_BY_DEFAULT = (1,)
-"""특징 포함으로 넘길 화풍 번호. 2026-08-22 확정값입니다.
+TRAITS_BY_DEFAULT = sorted(styles.CONFIRMED_TRAITS)
+"""특징 포함으로 넘길 화풍 번호. **값은 `styles.CONFIRMED_TRAITS` 한 곳에만 있습니다.**
 
-1번(심플 플랫 웹툰)만 판정자 3명 만장일치였고, 자유 응답에서 2명이 독립으로 지적한
-"1 과 2 가 비슷하다" 도 1 에 특징을 붙이면 평면 채색으로 갈리며 풀립니다. 나머지 7종은
-다수결이 이름만이거나 `둘 다`(차이 없음) 라 더 짧은 쪽을 둡니다.
+여기에 숫자를 다시 적으면 05 에게 넘기는 값과 판정용으로 생성하는 값이 갈릴 수 있고,
+갈려도 알아챌 방법이 없습니다 (`run_style_sets.py` 가 같은 상수를 봅니다).
 """
 
 WEBP_QUALITY = 82

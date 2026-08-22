@@ -161,6 +161,13 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
     # explicit clock (tests/backend_core/test_retention.py); they never wait for this one.
     monkeypatch.setenv("ADGEN_SWEEP_ENABLED", "false")
 
+    # ⚠️ The operational log goes to a file under the state volume in deployment
+    # (backend_core.observability). Left at its default the suite would write into the
+    # working directory, and every test would append to the same file — so it is redirected
+    # rather than turned off. Turning it off would leave the emit path untested, and that
+    # path is what the 08-26 report reads.
+    monkeypatch.setenv("ADGEN_LOG_DIR", str(tmp_path / "logs"))
+
     deps.settings.cache_clear()
     yield
     deps.settings.cache_clear()

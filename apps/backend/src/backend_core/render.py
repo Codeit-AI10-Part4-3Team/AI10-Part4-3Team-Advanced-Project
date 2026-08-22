@@ -21,7 +21,7 @@ import sqlite3
 from datetime import timedelta
 from pathlib import Path
 
-from backend_core import images, jobs, session_flow, sessions
+from backend_core import images, jobs, observability, session_flow, sessions
 from backend_core.ai_client import AiEngineClient, AiEngineUnavailableError, GenerationTimeoutError
 from backend_core.models import (
     Error,
@@ -103,15 +103,34 @@ def run_one(
     # So the catch is `Exception`, deliberately, even though a bare catch is usually wrong.
     # The alternative here is not "fail loudly" — the loop above already swallows and
     # continues — it is "fail silently and take everything else with it".
-    try:
-        return _render(connection, engine, image_dir, job_id, session_id, result_retention)
-    except Exception:
-        logger.exception("render job %s failed unexpectedly", job_id)
-        jobs.mark_failed(
-            connection, job_id, Error(code="INTERNAL", message="렌더 중 내부 오류가 발생했습니다.")
+    #
+    # ⚠️ The measurement wraps the whole terminal-state region, not just the vendor call.
+    # What the report calls 지연 is what the user waited for, and that includes storing the
+    # image and closing the session - a number that stopped at the vendor would be smaller
+    # than any wait anyone ever had (backend_core.observability).
+    with observability.measured() as elapsed_ms:
+        try:
+            _render(connection, engine, image_dir, job_id, session_id, result_retention)
+        except Exception:
+            logger.exception("render job %s failed unexpectedly", job_id)
+            jobs.mark_failed(
+                connection,
+                job_id,
+                Error(code="INTERNAL", message="렌더 중 내부 오류가 발생했습니다."),
+            )
+            _fail_session(connection, session_id)
+
+        # The outcome is read back rather than inferred: `_render` handles its own failures
+        # (timeout, upstream) and returns the same value either way, so a branch here would
+        # count a designed failure as a success.
+        observability.record(
+            logger,
+            "image:render",
+            jobs.status_of(connection, job_id) or "unknown",
+            elapsed_ms(),
+            job=job_id,
         )
-        _fail_session(connection, session_id)
-        return job_id
+    return job_id
 
 
 def _render(

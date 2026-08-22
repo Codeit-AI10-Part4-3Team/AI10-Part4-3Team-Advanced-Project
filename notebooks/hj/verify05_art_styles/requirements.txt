@@ -1,0 +1,7 @@
+# 실험 전용 의존입니다. 앱의 dev extra에 넣지 마세요 - CI가 매번 끌고 옵니다
+# (apps/ai-engine/AGENTS.md).
+openai>=1.40
+# 10.1 이상: build_opinion_sheet.py 의 번호 배지가 ImageFont.load_default(size=) 를 씁니다
+# (10.0 까지는 기본 폰트 크기를 지정할 수 없습니다). 한글 폰트가 저장소에 없어 숫자만 그리며,
+# 그래서 기본 폰트로 충분합니다.
+pillow>=10.1

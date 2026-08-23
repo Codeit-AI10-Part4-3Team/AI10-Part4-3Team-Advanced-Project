@@ -218,7 +218,7 @@ GPU가 아닙니다. 배포에서 조일 곳은 셋입니다.
 
 | 헤더 | 값 | 왜 |
 |---|---|---|
-| `Server` | **지웁니다** | Caddy 가 업스트림 헤더를 그대로 통과시켜 `Server: nginx/1.27.5` 가 밖으로 나갔습니다. nginx 의 `server_tokens off` 는 버전만 지우고 `Server: nginx` 를 남깁니다 |
+| `Server` | **지웁니다** | Caddy 가 업스트림 헤더를 그대로 통과시켜 `Server: nginx/1.29.8` 이 밖으로 나갔습니다 (배포 이미지 `nginx:1.29-alpine`, `apps/frontend/Dockerfile`). nginx 의 `server_tokens off` 는 버전만 지우고 `Server: nginx` 를 남깁니다 |
 | `X-Content-Type-Options` | `nosniff` | 사용자가 올린 사진이 그대로 실려 나가는 경로가 있습니다 (`GET /v1/sessions/{id}/image`) |
 | `Content-Security-Policy` | `frame-ancestors 'none'` | `X-Frame-Options` 를 대체하는 표준입니다. **둘 다 두지 않습니다** -- 함께 있으면 브라우저가 CSP 를 따르므로 뒤쪽은 읽히지 않는 줄이 됩니다 |
 
@@ -226,14 +226,34 @@ GPU가 아닙니다. 배포에서 조일 곳은 셋입니다.
 않았습니다 -- 공개 호스트가 `<외부 IP>.sslip.io` 라 VM 을 다시 만들면 이름이 바뀌는데, HSTS 는
 브라우저에 `max-age` 동안 붙어 있어 되돌릴 방법이 사용자 쪽에만 남습니다.
 
-확인은 실제 응답으로 합니다. 스택이 떠 있을 때:
+확인은 실제 응답으로 합니다. **`ADGEN_PUBLIC_HOST` 가 채워졌는지에 따라 칠 명령이 다릅니다.**
 
 ```bash
+# 로컬과 CI (ADGEN_PUBLIC_HOST 비어 있음 -> 평문 80)
 curl -sI http://localhost/ | grep -iE 'server|x-content-type-options|content-security-policy'
-# X-Content-Type-Options: nosniff
-# Content-Security-Policy: frame-ancestors 'none'
-# (Server 줄이 없어야 정상입니다)
+
+# 배포 (ADGEN_PUBLIC_HOST 채워짐 -> HTTPS)
+curl -sIk "https://$ADGEN_PUBLIC_HOST/" | grep -iE 'server|x-content-type-options|content-security-policy'
+
+# 두 경우 모두 이렇게 나와야 정상입니다
+# x-content-type-options: nosniff
+# content-security-policy: frame-ancestors 'none'
+# (Server 줄이 없어야 합니다)
 ```
+
+⚠️ **배포에서 위쪽 `http://localhost/` 를 치면 반대 결론이 납니다.** 그 응답을 내는 것은 사이트
+블록이 아니라 Caddy 가 자동 HTTPS 를 켤 때 **따로 만드는 리다이렉트 라우트**입니다. `header`
+블록이 닿지 않으므로 `308` 과 `Server: Caddy` 만 나오고 두 헤더는 보이지 않습니다 -- 헤더가
+빠진 것이 아니라 다른 곳을 본 것입니다. `308` 자체는 `scripts/deploy-vm.sh` 가 기대값으로
+고정해 둔 값이기도 합니다.
+`로컬에서 확인함` (2026-08-23, `caddy:2.10-alpine` + `nginx:1.29-alpine`, `ADGEN_PUBLIC_HOST`
+를 채운 컨테이너 둘): 80 은 `308` + `Server: Caddy` 뿐이고, 443 에 두 헤더가 붙고 `Server` 가
+없었습니다.
+
+⚠️ **리다이렉트에 헤더를 붙이겠다고 두 번째 `header` 블록을 만들지 마세요.** 붙이려면 `http://`
+사이트 블록을 따로 선언해야 하는데, 그러면 Caddy 의 자동 리다이렉트가 꺼져 80 이 통째로 다르게
+동작합니다. `308` 은 프레이밍이나 스니핑의 대상이 아니고 `Server: Caddy` 에는 버전이 없어,
+이슈 #115 가 지우려던 것(버전 노출)은 그대로 지워집니다 (PR #218 리뷰, 05).
 
 ### 배포 체크아웃은 `/srv/adcraft/app`
 

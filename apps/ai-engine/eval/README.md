@@ -15,6 +15,7 @@
 | `test_metrics.py` | 지표 함수 자체의 단위 테스트 (CI에서 실행됨) |
 | `golden_dataset/*.jsonl` | 채점 기준 데이터. 변경 시 이유를 커밋 메시지에 남길 것 |
 | `run_guardrail_detector.py` | 검출기 단위 시험 — 위반 예문을 `check_claims`에 직접 통과 (모델 호출 없음, 요금 0) |
+| `run_collect_ad_copy.py` | 수집 — 골든셋(`ad_copy.jsonl`)을 실제로 `draft:generate`에 태워 가드레일 on/off 회차 기록을 만듦 |
 | `run_metrics.py` | 지표 채점 — 수집된 회차 기록(JSONL)을 읽어 지표 표를 채웁니다 |
 
 ## 수집과 채점을 파일로 가릅니다
@@ -27,10 +28,19 @@
 ```bash
 python eval/run_metrics.py --describe          # 기록 스키마. 입력 불필요
 python eval/run_metrics.py --input runs/x.jsonl
+
+python eval/run_collect_ad_copy.py --dry-run   # 수집 계획만 (호출 없음)
+python eval/run_collect_ad_copy.py --yes       # 수집 실행 (스텁이면 요금 0)
 ```
 
-**2026-08-22 기준 수집은 아직 없습니다.** 무엇이 왜 비어 있는지는 `--describe`가 함께
-출력합니다 — 특히 **브랜드 스타일 일치도는 막혀 있습니다**(브랜드 레퍼런스셋이 없습니다).
+**2026-08-24에 수집이 다섯 지표 중 하나(가드레일 위반 건수)만 생겼습니다.**
+`run_collect_ad_copy.py`가 `ad_copy.jsonl` 26건을 `draft:generate`에 태워 on/off 팔
+회차를 만들고, `run_metrics.py --input`이 바로 읽습니다. **스텁 모드에서는 comic
+16건이 전부 스킵됩니다**(구현_범위 1절, 스텁이 만화형을 안 채움) - 로컬에서 스텁으로
+직접 확인함(2026-08-24, single_ad 10건 x 2팔 = 20건 채점 가능, 표본 20/위반 0로
+`run_metrics.py`까지 정상 연결 확인. comic 포함 실측은 실물 모드가 있어야 합니다).
+나머지 넷이 왜 비어 있는지는 `--describe`가 함께 출력합니다 — 특히
+**브랜드 스타일 일치도는 막혀 있습니다**(브랜드 레퍼런스셋이 없습니다).
 
 ⚠️ **데이터가 없는 지표는 0이 아니라 "측정 안 함"으로 냅니다.** 0은 "쟀는데 0이었다"로 읽히고,
 목표치와 나란히 놓이면 미달로 읽힙니다. 재지 않은 것과 재서 나쁜 것은 다릅니다.
@@ -59,11 +69,11 @@ python eval/run_metrics.py --input runs/x.jsonl
 ```
 
 `request`는 **`ai_engine.models.generation.DraftGenerateRequest`의 와이어 형태와 그대로
-일치**하도록 만들었습니다 (`guardrailApplied`만 제외 - 아래 참고). **`draft:generate`를 실제로
-호출해 카피를 만드는 수집 스크립트는 아직 없습니다** - 생기면
-`DraftGenerateRequest.model_validate(case["request"])`로 바로 넣을 수 있어야 하고, 그 계약이
-깨지면(필드 추가·이름 변경) 이 파일도 같은 PR에서 함께 고쳐야 합니다. 수집된 출력은
-`run_metrics.py --input`이 읽는 JSONL로 쌓이고, 그 뒤 `claim_support_rate` 등으로 채점됩니다.
+일치**하도록 만들었습니다 (`guardrailApplied`만 제외 - 아래 참고), 그래서
+`DraftGenerateRequest.model_validate(case["request"])`로 바로 넣을 수 있습니다 -
+`run_collect_ad_copy.py`가 실제로 이렇게 씁니다. 이 계약이 깨지면(필드 추가·이름 변경)
+이 파일과 그 스크립트를 같은 PR에서 함께 고쳐야 합니다. 수집된 출력은 `run_metrics.py
+--input`이 읽는 JSONL로 쌓이고, 그 뒤 `claim_support_rate` 등으로 채점됩니다.
 
 **`golden_dataset/guardrail_claims.jsonl`(검출기 단위 시험, `run_guardrail_detector.py`)과는
 다른 파일이자 다른 지점을 잽니다.** `guardrail_claims.jsonl`은 사람이 미리 써 둔

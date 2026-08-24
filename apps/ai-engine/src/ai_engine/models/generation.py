@@ -57,9 +57,11 @@ class BriefFillResponse(Base):
 class DraftGenerateRequest(Base):
     """Contract: `components.schemas.DraftGenerateRequest`.
 
-    ⚠️ The evidence for the guardrail is `brief.sellingPoint` plus `brief.note`. `category`
-    and `target` are inferred values and are **not** evidence — grounding a claim in them
-    means grounding it in something the model made up.
+    ⚠️ The evidence for the guardrail is `brief.sellingPoint` plus `brief.note` plus
+    `brief.product_name` (생성_파이프라인 5.2절, added 2026-08-20 so a copy that echoes the
+    product name is not counted as an invented claim). `category` and `target` are inferred
+    values and are **not** evidence — grounding a claim in them means grounding it in
+    something the model made up.
     """
 
     output_type: OutputType

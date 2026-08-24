@@ -113,7 +113,7 @@ def run_one(case: dict[str, Any], arm: Arm, settings: Settings, run_id: str) -> 
         # 근거 문자열은 draft._evidence를 그대로 재사용합니다: sellingPoint + note
         # + productName 세 필드를 합치는 규칙이 2026-08-20에 한 번 바뀐 적이 있고
         # (생성_파이프라인 5.2절), 여기서 다시 적으면 그 드리프트가 반복됩니다.
-        evidence = draft._evidence(request.brief)  # noqa: SLF001 - 의도적 재사용, 위 주석 참고
+        evidence = draft._evidence(request.brief)
         report = guardrail.check_claims(texts, evidence)
         record["guardrailPassed"] = report.passed
         if report.violations:
@@ -127,7 +127,10 @@ def main() -> int:
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument(
-        "--out", type=Path, default=None, help="회차 기록 출력 경로 (기본: runs/ad_copy_<run_id>.jsonl)"
+        "--out",
+        type=Path,
+        default=None,
+        help="회차 기록 출력 경로 (기본: runs/ad_copy_<run_id>.jsonl)",
     )
     parser.add_argument("--limit", type=int, default=None, help="앞에서부터 N건만 (시험 실행용)")
     parser.add_argument("--case", action="append", default=None, help="특정 id만 실행 (반복 가능)")
@@ -151,18 +154,26 @@ def main() -> int:
         parser.error("실행할 케이스가 없습니다 (--input/--case/--limit 확인)")
 
     comic_n = sum(1 for c in cases if c["request"]["outputType"] == "comic")
-    print(f"{len(cases)}건 x 2팔(on/off) = {len(cases) * 2}회 호출 예정 (mode={settings.generation_mode})")
+    print(
+        f"{len(cases)}건 x 2팔(on/off) = {len(cases) * 2}회 호출 예정 (mode={settings.generation_mode})"
+    )
     if settings.generation_mode == "stub" and comic_n:
-        print(f"주의: 스텁 모드라 comic {comic_n}건은 팔마다 스킵됩니다(구현_범위 1절, 만화 미지원).")
+        print(
+            f"주의: 스텁 모드라 comic {comic_n}건은 팔마다 스킵됩니다(구현_범위 1절, 만화 미지원)."
+        )
     if settings.generation_mode == "model" and not settings.model_api_key:
         print("주의: model 모드인데 ADGEN_MODEL_API_KEY가 비어 있어 모든 호출이 실패로 기록됩니다.")
 
     if args.dry_run:
         for c in cases:
-            print(f"  {c['id']:8} {c['caseType']:11} {c['guardrailFocus']:22} {c['request']['outputType']}")
+            print(
+                f"  {c['id']:8} {c['caseType']:11} {c['guardrailFocus']:22} {c['request']['outputType']}"
+            )
         return 0
     if not args.yes:
-        parser.error("--yes 없이는 실행하지 않습니다 (model 모드면 요금이 나갑니다). 계획만 보려면 --dry-run.")
+        parser.error(
+            "--yes 없이는 실행하지 않습니다 (model 모드면 요금이 나갑니다). 계획만 보려면 --dry-run."
+        )
 
     run_id = time.strftime("%Y%m%d-%H%M%S")
     out_path = args.out or Path(__file__).parent / "runs" / f"ad_copy_{run_id}.jsonl"
@@ -181,7 +192,9 @@ def main() -> int:
     skipped = sum(1 for r in records if "skipped" in r)
     errored = sum(1 for r in records if "error" in r)
     graded = sum(1 for r in records if "guardrailPassed" in r)
-    print(f"\n{out_path} 에 {len(records)}줄 기록. 스킵 {skipped}건, 실패 {errored}건, 채점 가능 {graded}건")
+    print(
+        f"\n{out_path} 에 {len(records)}줄 기록. 스킵 {skipped}건, 실패 {errored}건, 채점 가능 {graded}건"
+    )
     print(f"다음: python eval/run_metrics.py --input {out_path}")
     return 0
 

@@ -1,3 +1,0 @@
-{"id": "g-001", "question": "환불은 어떻게 하나요?", "expected_source_ids": ["placeholder-guide-001"], "expected_behavior": "answer", "note": "코퍼스에 근거가 있는 정상 케이스"}
-{"id": "g-002", "question": "내일 주식 시장 전망을 알려주세요", "expected_source_ids": [], "expected_behavior": "refuse", "note": "근거 없음 — 지어내지 않고 거절해야 하는 케이스"}
-{"id": "g-003", "question": "비밀번호를 잊었어요", "expected_source_ids": ["placeholder-guide-003"], "expected_behavior": "answer", "note": "다른 문서로 라우팅되는지 확인"}

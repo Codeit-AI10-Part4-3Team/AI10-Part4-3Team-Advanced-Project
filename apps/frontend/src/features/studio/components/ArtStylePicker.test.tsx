@@ -103,3 +103,117 @@ describe("ArtStylePicker", () => {
     expect(screen.getByText(/무작위로 채웁니다/)).toBeInTheDocument();
   });
 });
+
+/**
+ * 예시 이미지 로드 실패 (#216).
+ *
+ * ⚠️ **여기서 재는 것은 "URL 이 있는데 그림이 없을 때"입니다.** 빈 문자열 쪽은 위에서 이미
+ * 고정돼 있고, 이 블록이 없으면 그 둘이 화면에서 같아 보인다는 사실 때문에 회귀가 눈에
+ * 띄지 않습니다 - 깨진 그림 아이콘은 시험이 통과하는 동안에도 떠 있을 수 있습니다.
+ */
+const THREE: ArtStyle[] = [
+  { artStyleId: "simple-flat-webtoon", name: "심플 플랫 웹툰", exampleImageUrl: "" },
+  { artStyleId: "retro-pop-art", name: "레트로 팝아트", exampleImageUrl: "/static/art-styles/a.webp" },
+  { artStyleId: "soft-watercolor", name: "감성 수채화", exampleImageUrl: "/static/art-styles/b.webp" },
+];
+
+/** 카드 하나의 썸네일 `<img>`. `alt` 가 비어 있어(장식) 역할로는 찾을 수 없습니다. */
+function thumb(container: HTMLElement, name: string): HTMLImageElement | null {
+  const card = screen.getByRole("radio", { name: new RegExp(name) }).closest(".art-style-card");
+  expect(card).not.toBeNull();
+  void container;
+  return card?.querySelector<HTMLImageElement>(".art-style-thumb img") ?? null;
+}
+
+describe("예시 이미지를 못 불러왔을 때 (#216)", () => {
+  it("깨진 그림 대신 자리를 잡는다", () => {
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    const image = thumb(container, "레트로 팝아트");
+    expect(image).not.toBeNull();
+
+    fireEvent.error(image as HTMLImageElement);
+
+    expect(screen.getByText("예시를 불러오지 못했습니다")).toBeInTheDocument();
+    expect(thumb(container, "레트로 팝아트")).toBeNull();
+  });
+
+  it("빈 문자열과 다른 문구를 씁니다", () => {
+    // 자리는 같지만 원인이 다릅니다. 2단계 전달을 하는 사람이 "아직 안 넣었나" 와 "넣었는데
+    // 못 읽나" 를 구분하지 못하면 절차서의 순서 규칙(파일이 먼저, URL 이 나중)을 확인할
+    // 방법이 없습니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+
+    expect(screen.getByText("예시 준비 중")).toBeInTheDocument();
+    expect(screen.getByText("예시를 불러오지 못했습니다")).toBeInTheDocument();
+  });
+
+  it("실패한 카드에서는 확대 버튼이 사라진다", () => {
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    expect(screen.getAllByRole("button", { name: /크게 보기/ })).toHaveLength(2);
+
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+
+    // 눌러도 빈 다이얼로그인 버튼을 없애는 것이 이 이슈의 DoD 두 번째 줄입니다.
+    expect(
+      screen.queryByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /감성 수채화 예시 크게 보기/ })).toBeInTheDocument();
+  });
+
+  it("실패가 카드마다 독립이다", () => {
+    // 여덟 중 하나만 이름이 어긋나는 것이 실제로 예상되는 실패입니다. 한 장이 나머지 일곱을
+    // 함께 끌어내리면 고칠 곳을 찾는 사람이 원인을 전달 전체로 오해합니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+
+    expect(thumb(container, "감성 수채화")).not.toBeNull();
+    expect(screen.getAllByText("예시를 불러오지 못했습니다")).toHaveLength(1);
+  });
+
+  it("URL 이 바뀌면 다시 시도한다", () => {
+    // ⚠️ **실패를 `artStyleId` 로 기억하면 이 시험이 깨집니다.** 운영자가 파일을 넣고 URL 을
+    // 고쳐도 그 카드는 영영 실패로 남아, 고친 사람이 화면으로는 확인할 방법이 없습니다.
+    // 실패한 것은 화풍이 아니라 그 주소입니다.
+    const { container, rerender } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+    expect(thumb(container, "레트로 팝아트")).toBeNull();
+
+    const fixed = THREE.map((style) =>
+      style.artStyleId === "retro-pop-art"
+        ? { ...style, exampleImageUrl: "/static/art-styles/retro-fixed.webp" }
+        : style,
+    );
+    rerender(<ArtStylePicker styles={fixed} value="" onChange={() => undefined} />);
+
+    expect(thumb(container, "레트로 팝아트")).not.toBeNull();
+    expect(screen.queryByText("예시를 불러오지 못했습니다")).not.toBeInTheDocument();
+  });
+
+  it("확대창이 열린 뒤 실패해도 창은 남고 이유를 말한다", () => {
+    // 스스로 닫으면 사용자는 자기가 잘못 눌렀다고 읽습니다. 격자의 썸네일은 `loading="lazy"`
+    // 라 화면 밖이면 받아 본 적이 없어, 여기서 처음 실패하는 경로가 실제로 있습니다.
+    render(<ArtStylePicker styles={THREE} value="" onChange={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }));
+
+    const dialog = screen.getByRole("dialog");
+    const large = dialog.querySelector("img");
+    expect(large).not.toBeNull();
+
+    fireEvent.error(large as HTMLImageElement);
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("예시를 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog").querySelector("img")).toBeNull();
+  });
+});

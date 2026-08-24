@@ -24,11 +24,28 @@ interface ArtStylePickerProps {
  * 준비 중"을 보여줍니다. 아무 그림이나 채우면 안 되는 이유가 따로 있습니다 - 예시와 실제
  * 결과의 화풍이 같은 프롬프트 조각에서 나와야 하고, 그렇지 않으면 선택 화면 전체가 거짓말이
  * 됩니다 (03-AI_생성_서빙.md).
+ *
+ * ⚠️ **URL 이 있는데 못 불러오는 경우도 같은 자리로 갑니다** (#216). 파일이 아직 볼륨에
+ * 없거나 이름이 어긋나면 그 URL 은 404 이고, `onError` 가 없으면 그 칸은 브라우저의 깨진
+ * 그림이 됩니다. 운영 절차가 "파일이 먼저, URL 이 나중" 으로 그 상태를 막고 있지만
+ * (infra/README.md), 절차가 아니라 화면이 버티게 하는 것이 이 처리입니다.
  */
 export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps) {
   // 같은 화면에 픽커가 둘 이상 있어도 라디오 그룹이 섞이지 않게 합니다.
   const groupName = useId();
   const [zoomed, setZoomed] = useState<ArtStyle | null>(null);
+
+  // ⚠️ **`artStyleId` 가 아니라 URL 로 기억합니다.** 운영자가 파일을 넣고 URL 을 고치면 같은
+  // 화풍에 새 URL 이 옵니다 - 식별자로 기억하면 그 카드는 고쳐진 뒤에도 영영 실패로 남습니다.
+  // 실패한 것은 화풍이 아니라 그 주소입니다.
+  const [failedUrls, setFailedUrls] = useState<ReadonlySet<string>>(() => new Set());
+  const markFailed = (url: string) => {
+    setFailedUrls((previous) => (previous.has(url) ? previous : new Set(previous).add(url)));
+  };
+  // 예시를 실제로 보여 줄 수 있는가. 빈 문자열(아직 안 옴)과 로드 실패(못 불러옴)를 함께
+  // 거릅니다 - 확대 버튼과 다이얼로그가 이 판단 하나를 같이 씁니다.
+  const hasExample = (style: ArtStyle) =>
+    style.exampleImageUrl !== "" && !failedUrls.has(style.exampleImageUrl);
 
   if (styles.length === 0) {
     // 후보가 비어 있는 것은 지금 정상입니다 (`ADGEN_ART_STYLES` 미설정). 빈 격자를 그리면
@@ -61,17 +78,31 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
                 onChange={() => onChange(style.artStyleId)}
               />
               <span className="art-style-thumb" aria-hidden="true">
+                {/* ⚠️ 두 문구를 가릅니다. 화면상 자리는 같지만 **원인이 다릅니다** - 빈
+                    문자열은 "아직 안 왔다" 이고 실패는 "왔는데 못 불러왔다" 입니다. 2단계
+                    전달을 하는 사람이 이 둘을 구분하지 못하면, URL 을 이미 채운 상태에서도
+                    "아직 안 넣었나" 로 읽습니다 (infra/README.md 의 순서 규칙).
+                    404 인지 권한 문제인지까지는 가르지 않습니다 - `<img>` 가 상태 코드를
+                    주지 않아 화면에서 알 수 있는 방법이 없습니다 (#216). */}
                 {style.exampleImageUrl === "" ? (
                   <em>예시 준비 중</em>
+                ) : failedUrls.has(style.exampleImageUrl) ? (
+                  <em>예시를 불러오지 못했습니다</em>
                 ) : (
-                  <img src={style.exampleImageUrl} alt="" loading="lazy" />
+                  <img
+                    src={style.exampleImageUrl}
+                    alt=""
+                    loading="lazy"
+                    onError={() => markFailed(style.exampleImageUrl)}
+                  />
                 )}
               </span>
               <span className="art-style-name">{style.name}</span>
             </label>
 
-            {/* 예시가 없으면 확대할 것도 없습니다. 눌러 봐야 빈 화면인 버튼은 두지 않습니다. */}
-            {style.exampleImageUrl !== "" && (
+            {/* 예시가 없으면 확대할 것도 없습니다. 눌러 봐야 빈 화면인 버튼은 두지 않습니다.
+                못 불러온 경우도 같습니다 - 크게 봐도 같은 그림이 없습니다. */}
+            {hasExample(style) && (
               <button
                 type="button"
                 className="art-style-zoom"
@@ -100,7 +131,14 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
         )}
       </div>
 
-      {zoomed !== null && <ArtStyleZoom style={zoomed} onClose={() => setZoomed(null)} />}
+      {zoomed !== null && (
+        <ArtStyleZoom
+          style={zoomed}
+          failed={!hasExample(zoomed)}
+          onLoadError={() => markFailed(zoomed.exampleImageUrl)}
+          onClose={() => setZoomed(null)}
+        />
+      )}
     </>
   );
 }
@@ -116,8 +154,23 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
  *
  * ⚠️ **여기서 화풍을 고를 수는 없습니다.** 크게 보는 것과 정하는 것은 다른 행동이고, 확대해
  * 놓고 닫으면 골라져 있는 화면은 사용자가 자기가 무엇을 했는지 알 수 없게 만듭니다.
+ *
+ * ⚠️ **여기서도 로드가 실패할 수 있습니다** (#216). 격자의 썸네일은 `loading="lazy"` 라
+ * 화면 밖이면 아직 받아 본 적이 없고, 캐시가 만료된 뒤 열 수도 있습니다. 그래서 실패를
+ * 부모에게 올려 두 자리가 같은 판단을 쓰게 합니다 - 그러지 않으면 다이얼로그는 실패를
+ * 아는데 격자의 확대 버튼은 그대로 남습니다.
  */
-function ArtStyleZoom({ style, onClose }: { style: ArtStyle; onClose: () => void }) {
+function ArtStyleZoom({
+  style,
+  failed,
+  onLoadError,
+  onClose,
+}: {
+  style: ArtStyle;
+  failed: boolean;
+  onLoadError: () => void;
+  onClose: () => void;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
 
   // 의존성이 비어 있는 것이 중요합니다. `onClose` 를 넣으면 부모가 리렌더될 때마다
@@ -165,7 +218,13 @@ function ArtStyleZoom({ style, onClose }: { style: ArtStyle; onClose: () => void
             닫기
           </button>
         </div>
-        <img src={style.exampleImageUrl} alt={`${style.name} 화풍 예시`} />
+        {failed ? (
+          // 다이얼로그를 스스로 닫지 않습니다. 열자마자 사라지면 사용자는 자기가 잘못
+          // 눌렀다고 읽습니다 - 무엇이 없는지 말하고 닫는 것은 사용자에게 맡깁니다.
+          <p className="art-zoom-missing">예시를 불러오지 못했습니다.</p>
+        ) : (
+          <img src={style.exampleImageUrl} alt={`${style.name} 화풍 예시`} onError={onLoadError} />
+        )}
         <small>이 화면에서는 고르지 않습니다. 닫고 카드를 눌러 선택하세요.</small>
       </div>
     </dialog>

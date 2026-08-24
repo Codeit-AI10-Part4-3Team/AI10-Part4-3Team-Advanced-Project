@@ -147,6 +147,9 @@ button { color: inherit; }
 /* 세로로 긴 예시가 화면을 넘지 않게 합니다. */
 .art-zoom img { width: 100%; max-height: 62vh; object-fit: contain; border-radius: 10px; background: #f2f3f6; }
 .art-zoom small { color: var(--muted); font-size: 10px; }
+/* 예시를 못 불러왔을 때 이미지 자리를 그대로 차지합니다 - 문구만 남으면 다이얼로그가
+   갑자기 납작해져 사용자가 다른 창이 열린 것으로 읽습니다. */
+.art-zoom-missing { display: grid; place-items: center; margin: 0; min-height: 180px; border-radius: 10px; background: #f2f3f6; color: var(--muted); font-size: 11px; }
 
 /* 브리프 확인 화면. 입력 폼과 같은 자리를 쓰고, 고치기를 누르면 같은 자리가 폼이 됩니다. */
 .brief-heading-actions { display: flex; align-items: center; gap: 10px; }

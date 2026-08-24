@@ -35,7 +35,7 @@ python eval/run_metrics.py --input runs/x.jsonl
 ⚠️ **데이터가 없는 지표는 0이 아니라 "측정 안 함"으로 냅니다.** 0은 "쟀는데 0이었다"로 읽히고,
 목표치와 나란히 놓이면 미달로 읽힙니다. 재지 않은 것과 재서 나쁜 것은 다릅니다.
 
-## golden_dataset/ad_copy.jsonl — 스키마 (2026-08-22, 2026-08-24에 20건으로 확장)
+## golden_dataset/ad_copy.jsonl — 스키마 (2026-08-22, 2026-08-24에 26건으로 확장)
 
 **템플릿이 남긴 `example.jsonl`(질의응답 스키마: `question` / `expected_source_ids` /
 `expected_behavior: answer|refuse`)을 지웠습니다.** 그 경로(`/v1/generate`, 템플릿 질의응답)는
@@ -98,9 +98,9 @@ python eval/run_metrics.py --input runs/x.jsonl
 근거가 없습니다. 필요하면 늘리거나 카테고리를 더 쪼개세요 - 이 파일이 정본이니 바꾸면
 이유를 커밋 메시지에 남기면 됩니다.
 
-초기 12건은 comic이 2건뿐이었습니다. comic은 칸 5개를 동시에 불러 실패 표면이 넓은데
-(N20-a, 한 칸만 막혀도 세트 전체 폐기) 표본이 제일 적은 상태였던 것을 고쳐, comic을
-16건(단일광고형 10건의 1.6배)까지 늘렸습니다. `caseType`은 control 9 / adversarial 10 /
+이 골든셋을 처음 놓으면서 comic을 16건(단일광고형 10건의 1.6배)으로 두텁게 잡았습니다.
+comic은 칸 5개를 동시에 불러 실패 표면이 넓은데(N20-a, 한 칸만 막혀도 세트 전체 폐기),
+표본이 적으면 그 위험을 못 잡기 때문입니다. `caseType`은 control 9 / adversarial 10 /
 trap 7, `guardrailFocus`는 6종 태그 전부 최소 3건 이상입니다. `efficacy_or_ingredient`
 (사람 판정 필요)가 7건으로 가장 많은데, `check_claims`가 애초에 못 잡는 갈래라 자동
 판정으로는 안 늘어나는 위험이라 의도적으로 두텁게 뒀습니다.
@@ -147,6 +147,12 @@ JSONL은 그 바이트를 담을 수 없어 `imagePlaceholder`(자리표시 경�
 |---|---|---|
 | `sufficient` | 텍스트만으로 category/target이 분명함 | `needsInput: false` + 기대 category/target |
 | `ambiguous` | 텍스트가 category 또는 target 중 하나를 좁히지 못함 | `needsInput: true` + `field`(어느 쪽이 막혔는지) + `reasonHint` |
+
+**`sufficient`도 자동 채점 대상은 `needsInput: false` 여부뿐입니다.** 기대 category/target은
+`ambiguous`의 `field`와 같은 참고용입니다 - bf-002의 기대 target `20대`에 엔진이
+`20대 후반 직장인`을 돌려주는 것처럼 합당한 값이 여러 개 가능해서, 문자열 일치로 채점하면
+그 판정 규칙을 채점하는 사람이 그때그때 지어내게 됩니다. category/target이 기대와 동떨어져
+보이면 사람이 보고서에서 눈으로 확인하는 몫으로 남겨 둡니다.
 
 `field`는 참고용입니다(bf-010 케이스 설명 참고) - `category`와 `target`이 동시에 막힌
 케이스는 엔진이 둘 중 어느 쪽을 먼저 물어도 설계 위반이 아니므로, 채점에서 `field`

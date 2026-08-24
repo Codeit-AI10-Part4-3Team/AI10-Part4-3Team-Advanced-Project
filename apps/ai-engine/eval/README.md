@@ -35,10 +35,16 @@ python eval/run_collect_ad_copy.py --yes       # 수집 실행 (스텁이면 요
 
 **2026-08-24에 수집이 다섯 지표 중 하나(가드레일 위반 건수)만 생겼습니다.**
 `run_collect_ad_copy.py`가 `ad_copy.jsonl` 26건을 `draft:generate`에 태워 on/off 팔
-회차를 만들고, `run_metrics.py --input`이 바로 읽습니다. **스텁 모드에서는 comic
-16건이 전부 스킵됩니다**(구현_범위 1절, 스텁이 만화형을 안 채움) - 로컬에서 스텁으로
-직접 확인함(2026-08-24, single_ad 10건 x 2팔 = 20건 채점 가능, 표본 20/위반 0로
-`run_metrics.py`까지 정상 연결 확인. comic 포함 실측은 실물 모드가 있어야 합니다).
+회차를 만듭니다. **on과 off는 서로 다른 파일에 나뉘어 기록됩니다**(`..._on.jsonl` /
+`..._off.jsonl`) - 같은 파일에 합치면 `run_metrics.py`가 팔을 모르고 `guardrailPassed`를
+전부 합산해 대조군(off)의 위반이 배포 설정(on)의 위반으로 보고됩니다. 두 파일을
+`run_metrics.py --input`으로 각각 채점하세요. **스텁 모드에서는 comic 16건이 전부
+스킵됩니다**(구현_범위 1절, 스텁이 만화형을 안 채움). **스텁의 on 팔은 애초에
+`check_claims`를 부르지 않으므로**(`_generate_stub`이 검사 없이 응답만 돌려줌)
+`guardrailPassed` 필드 자체가 비어 있어 채점 대상에서 빠집니다 - 로컬에서 스텁으로
+직접 확인함(2026-08-24, single_ad 10건: on 팔은 측정 안 함으로 정상 표시, off 팔만
+표본 10/위반 0로 `run_metrics.py`까지 정상 연결 확인. comic 포함 실측은 실물 모드가
+있어야 합니다).
 나머지 넷이 왜 비어 있는지는 `--describe`가 함께 출력합니다 — 특히
 **브랜드 스타일 일치도는 막혀 있습니다**(브랜드 레퍼런스셋이 없습니다).
 

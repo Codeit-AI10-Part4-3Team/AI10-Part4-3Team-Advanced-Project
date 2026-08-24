@@ -2,7 +2,7 @@
 
 **골격입니다. 수집은 아직 없습니다** (2026-08-22). 채점은 순수 함수라 여기서 끝나지만, 그
 함수들이 먹을 기록을 만드는 쪽 - 스택을 띄워 지연을 재고, 채점 모델을 부르고, 브랜드
-레퍼런스셋을 임베딩하는 쪽 - 은 08-26 ~ 27 실측의 몫입니다. 무엇이 왜 비어 있는지는
+레퍼런스셋을 임베딩하는 쪽 - 은 08-26 ~ 28 실측의 몫입니다. 무엇이 왜 비어 있는지는
 `--describe` 가 함께 출력합니다 (`_pending`).
 
     python eval/run_metrics.py --describe            # 기록 스키마만 출력. 입력 불필요
@@ -58,6 +58,8 @@ RECORD_SCHEMA = """\
 
     # 카피 사실 일치율. 주장 단위 채점 결과이고 채점은 모델이 합니다.
     # ⚠️ 채점 모델 != 생성 모델. 같으면 재는 것이 사실성이 아니라 자기 일치도입니다.
+    # ⚠️ 빈 배열([])과 필드 없음은 다릅니다 - 앞은 "채점했는데 주장이 0개", 뒤는 "아직
+    #    채점 안 함" 이라 러너가 두 건수를 따로 냅니다. 미채점을 [] 로 적지 마세요.
     "claimsSupported": [true, true, false],
     "gradingModel": "<채점에 쓴 모델>",
 
@@ -105,14 +107,19 @@ def score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if graded:
         claims = [ok for r in graded for ok in r["claimsSupported"]]
         models = sorted({str(r.get("gradingModel", "미상")) for r in graded})
+        # 분모에서 빠지는 회차는 두 종류이고 뜻이 반대라 칸을 가릅니다. 빈 배열은 "채점했는데
+        # 주장이 0개" 라는 실측 결과이고, 필드가 없는 것은 "아직 재지 않음" 입니다. 한 칸에
+        # 묶으면 뒤가 앞으로 읽히는데, 재지 않은 것과 재서 그랬던 것을 가르는 것이 이 하네스의
+        # 요점입니다 (아래 "측정 안 함" 줄과 같은 이유).
+        no_claims = sum(1 for r in rows if r.get("claimsSupported") == [])
+        ungraded = sum(1 for r in rows if r.get("claimsSupported") is None)
         scored["카피 사실 일치율"] = {
             "회차": len(graded),
             "주장": len(claims),
             "값": claim_support_rate(claims),
             "채점 모델": models,
-            # 주장이 없는 회차는 지표 대상 밖이라 분모에서 빠집니다. 몇 건인지 남겨야
-            # "일치율이 높다" 가 "잴 것이 없었다" 를 뜻하는지 읽는 쪽이 압니다.
-            "주장 없는 회차": sum(1 for r in rows if not r.get("claimsSupported")),
+            "주장 없는 회차": no_claims,
+            "미채점 회차": ungraded,
         }
 
     return scored
@@ -184,7 +191,7 @@ _TABLE = (
 def _pending() -> str:
     """아직 수집이 없는 자리. **비어 있는 이유가 서로 다르므로 함께 적습니다.**"""
     return (
-        "수집이 아직 없는 자리 (08-26 ~ 27 실측의 몫):\n"
+        "수집이 아직 없는 자리 (08-26 ~ 28 실측의 몫):\n"
         "  - 생성 지연: 스택을 띄워 HTTP 로 재야 합니다. backend 를 import 하면 앱 간 경계\n"
         "    위반이고, 그렇게 잰 값은 배포된 서비스의 지연도 아닙니다\n"
         "  - 카피 사실 일치율: 주장 단위 채점을 붙여야 합니다. 채점 모델 != 생성 모델이고,\n"

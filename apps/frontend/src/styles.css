@@ -99,7 +99,11 @@ button { color: inherit; }
       좁히면 4 x 2 때와 같은 크기로 돌아갑니다 - 08-24 회의가 86px 카드에서 6번과 8번이
       판정자 3/3 에게 헷갈렸다고 적은 그 크기입니다. */
 .new-session .workspace-header, .new-session .workspace-grid { max-width: none; }
-.workspace-grid-3 { grid-template-columns: minmax(290px, .92fr) minmax(320px, 1.06fr) minmax(330px, 1.02fr); }
+/* ⚠️ **가운데는 내용에 맞춘 고정 폭입니다.** 카드가 132px 상한이라 열을 넓혀도 그림은
+   커지지 않고 양옆 여백만 늘어납니다. 2 x 132 + 격자 간격 8 + 패널 안쪽 여백 46 이
+   그대로 이 값이고, 남는 폭은 양옆 두 패널이 가져갑니다. */
+.workspace-grid-3 { grid-template-columns: minmax(300px, 1fr) 318px minmax(320px, 1fr); align-items: stretch; gap: 26px; }
+
 /* `:has()` 를 못 읽는 브라우저는 기존 여백을 그대로 씁니다 - 좁아지지 않을 뿐 깨지지 않습니다. */
 .workspace:has(.new-session) { padding-inline: clamp(12px, 1.4vw, 22px); }
 .panel { padding: 23px; border: 1px solid var(--line); border-radius: 19px; background: var(--surface); box-shadow: 0 7px 26px rgb(36 41 61 / 4%); }
@@ -143,14 +147,18 @@ button { color: inherit; }
 /* 화풍 격자 (F2). 4 x 2 는 기획서 12.2 의 화면 도식이고, 후보가 8 종인 근거도 그 격자입니다.
    하나씩 열어 보는 드롭다운으로는 후보끼리 견줄 수 없어 한 화면에 전부 놓습니다. */
 .art-style-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
-/* ⚠️ **2 x 4 입니다** (STEP 02 전용). 카드 폭이 두 배가 되어 그림이 그만큼 커집니다 -
-   4 x 2 에서 86px 이던 칸이 여기서는 그 두 배 가까이 됩니다. 브리프 수정 화면의 픽커는
-   좁은 패널 안이라 4 x 2 를 그대로 씁니다. */
-.style-panel .art-style-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-.style-panel .art-style-card { padding: 7px; border-radius: 12px; }
-.style-panel .art-style-name { font-size: 11px; }
+
+/* STEP 02 전용 2 x 4.
+   ⚠️ **8 종이 스크롤 없이 다 보여야 합니다.** 4 행을 잘라 놓으면 사용자가 뒤의 두 종을 못
+      보고 고르게 되고, 그러면 격자로 만든 이유(후보끼리 견주기)가 없어집니다. 그래서 카드
+      폭에 상한을 둡니다 - 열 폭이 아니라 카드가 크기를 정하므로 4 행 전체가 들어옵니다.
+   ⚠️ 여백을 줄여 그림에 넘깁니다. 이름과 안쪽 여백에서 아낀 만큼 썸네일이 커집니다. */
+.style-panel .art-style-grid { justify-content: center; grid-template-columns: repeat(2, minmax(0, 132px)); gap: 8px; }
+.style-panel .art-style-card { padding: 5px; border-radius: 11px; }
+.style-panel .art-style-name { font-size: 10px; }
 .style-panel .art-style-thumb em { font-size: 10px; }
-.style-panel .art-style-zoom { width: 22px; height: 22px; font-size: 14px; }
+.style-panel .art-style-zoom { width: 21px; height: 21px; font-size: 13px; }
+.style-panel .art-style-foot { margin-top: 12px; }
 .art-style-card { position: relative; display: grid; gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: #fff; cursor: pointer; }
 .art-style-card:hover { border-color: #b9c0d4; }
 /* 라디오 자체는 감춥니다. 화살표 이동과 "하나만 고름"은 브라우저에 맡기고 카드만 보입니다. */

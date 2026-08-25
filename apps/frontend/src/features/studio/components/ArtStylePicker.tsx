@@ -156,7 +156,7 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
       <div className="art-style-foot">
         <small>
           {value === ""
-            ? "고르지 않으면 서버가 후보군에서 무작위로 채웁니다."
+            ? "고르지 않으면 무작위로 선택됩니다."
             : "선택한 화풍으로 생성합니다."}
         </small>
         {value !== "" && (

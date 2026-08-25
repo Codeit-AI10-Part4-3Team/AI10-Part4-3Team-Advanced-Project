@@ -23,6 +23,10 @@
     ADGEN_GENERATION_MODE=model ADGEN_MODEL_API_KEY=sk-... \\
         python eval/run_collect_ad_copy.py --yes --limit 2   # 실물 2건만 먼저 확인
 
+각 회차 기록에는 **가드레일이 검사한 문구 자체가 `texts`로 함께 남습니다.** `trap` 케이스
+(효능·성분)는 `check_claims`가 못 잡는 갈래라 사람 판정이 필요한데, 본문이 없으면 그
+판정을 하려고 같은 호출을 다시 사야 합니다.
+
 채우지 않는 것:
   - **카피 사실 일치율** - 주장 단위 채점에 별도 채점 모델이 필요합니다(채점 모델 !=
     생성 모델). PR #217이 의도적으로 범위 밖에 둔 것과 같은 이유로 여기서도 안 만듭니다.
@@ -108,6 +112,13 @@ def run_one(case: dict[str, Any], arm: Arm, settings: Settings, run_id: str) -> 
 
     assert response.draft is not None
     texts = render_prompt.dialogue_of(response.draft)
+    # 생성된 문구 자체를 남깁니다. `trap` 케이스(효능·성분)는 `check_claims`가 구조적으로
+    # 못 잡는 갈래라 사람이 회차 출력을 직접 봐야 판정됩니다(eval/README.md의 caseType 표).
+    # 판정 결과만 남기고 본문을 버리면 그 판정을 하려고 같은 호출을 다시 사야 합니다 -
+    # 2026-08-22 D2 회차가 겪은 유실입니다(가드레일_대조_실측_보고서 D-d절).
+    # ⚠️ adPlan과 visualPlan은 넣지 않습니다. 소비자에게 하는 주장이 아니라 제작 지시문이고,
+    # 가드레일이 검사하는 것도 여기 담긴 문자열뿐이라 판정 대상이 어긋납니다 (ADR-0019).
+    record["texts"] = texts
     if arm == "on":
         if settings.generation_mode == "stub":
             # _generate_stub는 check_claims를 아예 부르지 않습니다(guardrail_applied를

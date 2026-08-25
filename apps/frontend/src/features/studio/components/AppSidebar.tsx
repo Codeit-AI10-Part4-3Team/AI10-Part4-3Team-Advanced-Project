@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../../auth/useAuth";
+import { AccountMenu } from "./AccountMenu";
 import { listSessions } from "../api";
 import { OUTPUT_TYPE_LABEL } from "../labels";
 import type { SessionSummary } from "../types";
@@ -85,29 +86,11 @@ export function AppSidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        {/* 표시할 것은 `loginId` 뿐입니다. 계약의 `Me` 에 표시 이름도 이메일도 없고,
-            그것은 아직 안 넣은 것이 아니라 두지 않기로 한 결정입니다. */}
-        <button type="button" className="profile-button">
-          <span className="avatar" aria-hidden="true">
-            {me?.loginId.slice(0, 1).toUpperCase() ?? "?"}
-          </span>
-          {me?.loginId ?? "계정 확인 중"}
-        </button>
-        {/* ⚠️ 아이콘이 장식이 아닙니다. 좁은 폭에서는 `.sidebar-footer button` 의 글자가
-            `font-size: 0` 이 되므로(styles.css 960px 구간), 이 글리프가 남지 않으면 버튼이
-            빈 상자가 됩니다. `.profile-button` 이 `.avatar` 로 살아남는 것과 같은 방식입니다.
-            `aria-label` 은 그 구간에서도 이름을 잃지 않게 합니다. */}
-        <button
-          type="button"
-          className="logout-button"
-          aria-label="로그아웃"
-          onClick={() => void signOut()}
-        >
-          <span className="logout-mark" aria-hidden="true">
-            ⏻
-          </span>
-          로그아웃
-        </button>
+        {/* ⚠️ **로그아웃이 이 안으로 들어갔습니다.** 예전에는 프로필 버튼과 나란한 별도
+            버튼이었는데, 프로필 쪽에 `onClick` 이 없어 눌러도 아무 일이 없었습니다. 계정을
+            누르는 사람이 기대하는 것이 로그아웃이라, 죽은 버튼에 동작을 주는 대신 둘을
+            한 자리로 모았습니다. 계약의 `Me` 로 할 수 있는 행동이 이것 하나뿐입니다. */}
+        <AccountMenu me={me} onSignOut={() => void signOut()} />
       </div>
     </aside>
   );

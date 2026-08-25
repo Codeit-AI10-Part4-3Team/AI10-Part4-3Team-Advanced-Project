@@ -90,6 +90,19 @@ function SessionView({ sessionId }: { sessionId: string }) {
     }
   };
 
+  /**
+   * 멈춘 폴링을 되살립니다.
+   *
+   * ⚠️ **`clear()` 가 함께 있어야 합니다.** 되살리기는 `pollingStopped` 만 내리므로, 이것이
+   * 없으면 알림에 **옛 오류 문구는 그대로 남고 재시도 버튼만 사라집니다**(아래 `retry` 조건이
+   * `pollingStopped` 라서입니다). 사용자는 한 번 누른 뒤 같은 문구를 보면서 다시 누를 방법이
+   * 없어지고, 남는 길은 새로고침뿐입니다 (실측 확인).
+   */
+  const retryPolling = () => {
+    clear();
+    retryJob();
+  };
+
   const run = async (kind: "draft" | "finalize") => {
     clear();
     setPending(kind);
@@ -152,7 +165,7 @@ function SessionView({ sessionId }: { sessionId: string }) {
             failure ?? { label: "호출 실패", message: "렌더 상태 조회가 멈췄습니다." }
           }
           onDismiss={clear}
-          retry={pollingStopped ? { label: "다시 시도", onClick: retryJob } : undefined}
+          retry={pollingStopped ? { label: "다시 시도", onClick: retryPolling } : undefined}
         />
       )}
 
@@ -165,6 +178,10 @@ function SessionView({ sessionId }: { sessionId: string }) {
         <DraftPanel
           session={session}
           job={job}
+          // ⚠️ 이것이 없으면 패널이 **거짓말을 합니다.** 조회가 실패해 폴링이 멈춘 뒤에도
+          // `job` 은 `null` 이라, 패널만 보면 "확인하고 있습니다" 가 계속 떠 있습니다 -
+          // 같은 화면의 알림은 실패했다고 말하는 중입니다 (실측 확인).
+          pollingStopped={pollingStopped}
           pending={pending}
           onGenerate={() => void run("draft")}
           onFinalize={() => void run("finalize")}

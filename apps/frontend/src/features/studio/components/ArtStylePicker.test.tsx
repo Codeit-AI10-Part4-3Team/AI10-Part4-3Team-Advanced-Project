@@ -103,3 +103,180 @@ describe("ArtStylePicker", () => {
     expect(screen.getByText(/무작위로 채웁니다/)).toBeInTheDocument();
   });
 });
+
+/**
+ * 예시 이미지 로드 실패 (#216).
+ *
+ * ⚠️ **여기서 재는 것은 "URL 이 있는데 그림이 없을 때"입니다.** 빈 문자열 쪽은 위에서 이미
+ * 고정돼 있고, 이 블록이 없으면 그 둘이 화면에서 같아 보인다는 사실 때문에 회귀가 눈에
+ * 띄지 않습니다 - 깨진 그림 아이콘은 시험이 통과하는 동안에도 떠 있을 수 있습니다.
+ */
+const THREE: ArtStyle[] = [
+  { artStyleId: "simple-flat-webtoon", name: "심플 플랫 웹툰", exampleImageUrl: "" },
+  { artStyleId: "retro-pop-art", name: "레트로 팝아트", exampleImageUrl: "/static/art-styles/a.webp" },
+  { artStyleId: "soft-watercolor", name: "감성 수채화", exampleImageUrl: "/static/art-styles/b.webp" },
+];
+
+/** 카드 하나의 썸네일 `<img>`. `alt` 가 비어 있어(장식) 역할로는 찾을 수 없습니다. */
+function thumb(container: HTMLElement, name: string): HTMLImageElement | null {
+  const card = screen.getByRole("radio", { name: new RegExp(name) }).closest(".art-style-card");
+  expect(card).not.toBeNull();
+  void container;
+  return card?.querySelector<HTMLImageElement>(".art-style-thumb img") ?? null;
+}
+
+describe("예시 이미지를 못 불러왔을 때 (#216)", () => {
+  it("깨진 그림 대신 자리를 잡는다", () => {
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    const image = thumb(container, "레트로 팝아트");
+    expect(image).not.toBeNull();
+
+    fireEvent.error(image as HTMLImageElement);
+
+    expect(screen.getByText("예시를 불러오지 못했습니다")).toBeInTheDocument();
+    expect(thumb(container, "레트로 팝아트")).toBeNull();
+  });
+
+  it("빈 문자열과 다른 문구를 씁니다", () => {
+    // 자리는 같지만 원인이 다릅니다. 2단계 전달을 하는 사람이 "아직 안 넣었나" 와 "넣었는데
+    // 못 읽나" 를 구분하지 못하면 절차서의 순서 규칙(파일이 먼저, URL 이 나중)을 확인할
+    // 방법이 없습니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+
+    expect(screen.getByText("예시 준비 중")).toBeInTheDocument();
+    expect(screen.getByText("예시를 불러오지 못했습니다")).toBeInTheDocument();
+  });
+
+  it("실패한 카드에서는 확대 버튼이 사라진다", () => {
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    expect(screen.getAllByRole("button", { name: /크게 보기/ })).toHaveLength(2);
+
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+
+    // 눌러도 빈 다이얼로그인 버튼을 없애는 것이 이 이슈의 DoD 두 번째 줄입니다.
+    expect(
+      screen.queryByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /감성 수채화 예시 크게 보기/ })).toBeInTheDocument();
+  });
+
+  it("실패가 카드마다 독립이다", () => {
+    // 여덟 중 하나만 이름이 어긋나는 것이 실제로 예상되는 실패입니다. 한 장이 나머지 일곱을
+    // 함께 끌어내리면 고칠 곳을 찾는 사람이 원인을 전달 전체로 오해합니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+
+    expect(thumb(container, "감성 수채화")).not.toBeNull();
+    expect(screen.getAllByText("예시를 불러오지 못했습니다")).toHaveLength(1);
+  });
+
+  it("한 번 뜬 썸네일은 확대창 실패로 뒤집히지 않는다", () => {
+    // ⚠️ **같은 URL 을 두 `<img>` 가 각각 따로 요청합니다.** 실패를 URL 로 기억하므로,
+    // 확대창 쪽 요청만 실패해도 이미 잘 뜨고 있던 격자 썸네일이 실패 문구로 바뀌었습니다
+    // (PR #234 리뷰, 정승호. 실측으로 재현했습니다). 파일은 멀쩡한데 화면만 고장 난 것처럼
+    // 보이고, 재시도가 없어 새로고침 전까지 그대로입니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    const grid = thumb(container, "레트로 팝아트");
+    expect(grid).not.toBeNull();
+    fireEvent.load(grid as HTMLImageElement);
+
+    fireEvent.click(screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }));
+    fireEvent.error(screen.getByRole("dialog").querySelector("img") as HTMLImageElement);
+
+    // 확대창은 이유를 말하지만, 격자의 그림은 그대로 있어야 합니다.
+    expect(screen.getByText("예시를 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(thumb(container, "레트로 팝아트")).not.toBeNull();
+    expect(screen.queryByText("예시를 불러오지 못했습니다")).not.toBeInTheDocument();
+  });
+
+  it("뜬 적 없는 썸네일은 확대창 실패에 따라간다", () => {
+    // 반대쪽입니다. `loading="lazy"` 라 화면 밖이면 격자가 아직 받아 본 적이 없고, 그때는
+    // 확대창의 실패가 그 주소에 대해 우리가 아는 전부입니다. 위 시험이 "언제나 유지" 로
+    // 통과하지 않게 함께 겁니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }));
+    fireEvent.error(screen.getByRole("dialog").querySelector("img") as HTMLImageElement);
+
+    expect(thumb(container, "레트로 팝아트")).toBeNull();
+  });
+
+  it("URL 이 바뀌면 다시 시도한다", () => {
+    // ⚠️ **실패를 `artStyleId` 로 기억하면 이 시험이 깨집니다.** 운영자가 파일을 넣고 URL 을
+    // 고쳐도 그 카드는 영영 실패로 남아, 고친 사람이 화면으로는 확인할 방법이 없습니다.
+    // 실패한 것은 화풍이 아니라 그 주소입니다.
+    const { container, rerender } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.error(thumb(container, "레트로 팝아트") as HTMLImageElement);
+    expect(thumb(container, "레트로 팝아트")).toBeNull();
+
+    const fixed = THREE.map((style) =>
+      style.artStyleId === "retro-pop-art"
+        ? { ...style, exampleImageUrl: "/static/art-styles/retro-fixed.webp" }
+        : style,
+    );
+    rerender(<ArtStylePicker styles={fixed} value="" onChange={() => undefined} />);
+
+    expect(thumb(container, "레트로 팝아트")).not.toBeNull();
+    expect(screen.queryByText("예시를 불러오지 못했습니다")).not.toBeInTheDocument();
+  });
+
+  it("확대창 안에서 실패하면 닫을 때 그 카드로 포커스가 돌아온다", () => {
+    // ⚠️ **`opener` 가 그 사이에 사라지는 경우입니다.** 확대창 안에서 이미지가 실패하면 그
+    // 카드의 확대 버튼이 조건에서 빠져 DOM 에서 떨어지는데, 닫을 때 되돌아갈 자리로 잡아 둔
+    // 것이 바로 그 버튼입니다. 떨어진 노드의 `focus()` 는 아무 일도 하지 않아 포커스가
+    // `body` 에 남고, 8 칸 격자에서 있던 자리를 잃습니다.
+    //
+    // ⚠️ 이 파일 머리말이 적은 대로 포커스 **가두기**는 여기서 재지 않습니다(jsdom 이
+    // top layer 를 구현하지 않습니다). 재는 것은 `focus()` 를 **어디로 부르는가** 뿐이고,
+    // 그것은 jsdom 에서도 `document.activeElement` 로 확인됩니다.
+    render(<ArtStylePicker styles={THREE} value="" onChange={() => undefined} />);
+    const zoom = screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ });
+    // ⚠️ **포커스를 손으로 줍니다.** 실제 브라우저는 버튼을 누르면 포커스를 주지만 jsdom 은
+    // 주지 않습니다. 그대로 두면 `opener` 가 `body` 로 잡혀 이 시험이 재려는 경로("되돌아갈
+    // 자리가 사라진다")를 아예 지나지 않고, 회귀를 넣어도 통과합니다.
+    zoom.focus();
+    fireEvent.click(zoom);
+
+    const dialog = screen.getByRole("dialog");
+    fireEvent.error(dialog.querySelector("img") as HTMLImageElement);
+    // 되돌아갈 자리였던 확대 버튼이 이 시점에 사라집니다.
+    expect(
+      screen.queryByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "닫기" }));
+
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /레트로 팝아트/ }));
+  });
+
+  it("확대창이 열린 뒤 실패해도 창은 남고 이유를 말한다", () => {
+    // 스스로 닫으면 사용자는 자기가 잘못 눌렀다고 읽습니다. 격자의 썸네일은 `loading="lazy"`
+    // 라 화면 밖이면 받아 본 적이 없어, 여기서 처음 실패하는 경로가 실제로 있습니다.
+    render(<ArtStylePicker styles={THREE} value="" onChange={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }));
+
+    const dialog = screen.getByRole("dialog");
+    const large = dialog.querySelector("img");
+    expect(large).not.toBeNull();
+
+    fireEvent.error(large as HTMLImageElement);
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("예시를 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog").querySelector("img")).toBeNull();
+  });
+});

@@ -54,7 +54,17 @@ button { color: inherit; }
 .sidebar-footer button:hover { background: #f4f5f8; }
 .avatar { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--yellow); font-size: 10px; font-weight: 800; }
 /* 로그아웃 글리프. 좁은 폭에서 라벨이 사라져도 이 크기가 남아 버튼이 빈 상자가 되지 않습니다. */
-.logout-mark { width: 27px; display: grid; place-items: center; font-size: 15px; }
+.account { position: relative; display: grid; }
+/* ⚠️ 버튼 **위**로 엽니다. 사이드바 맨 아래라 아래로 열면 화면 밖으로 나갑니다.
+   620px 이하는 반대입니다 - 그 구간 참고. */
+/* ⚠️ `min-width` 가 없으면 78px 레일에서 메뉴가 안쪽 폭(55px)에 묶여 항목이 세 줄로
+   접힙니다 (실측). `left` 와 `right` 가 동시에 걸린 상자라 LTR 에서는 `right` 가 무시되고
+   레일 바깥으로 자랍니다 - 사이드바에 overflow 제한이 없어 잘리지 않습니다. */
+.account-menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 180px; z-index: 20; display: grid; gap: 2px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 32px rgb(18 21 33 / 16%); }
+.account-info { display: grid; gap: 2px; padding: 7px 9px 8px; border-bottom: 1px solid var(--line); }
+.account-info strong { font-size: 12px; overflow-wrap: anywhere; }
+.account-info small { color: var(--muted); font-size: 10px; }
+.account-item { width: 100%; font-size: 12px; }
 
 .workspace { min-width: 0; padding: 36px clamp(20px, 4vw, 60px) 56px; }
 .workspace-header { max-width: 1160px; margin: 0 auto 23px; display: flex; align-items: flex-end; justify-content: space-between; }
@@ -147,6 +157,9 @@ button { color: inherit; }
 /* 세로로 긴 예시가 화면을 넘지 않게 합니다. */
 .art-zoom img { width: 100%; max-height: 62vh; object-fit: contain; border-radius: 10px; background: #f2f3f6; }
 .art-zoom small { color: var(--muted); font-size: 10px; }
+/* 예시를 못 불러왔을 때 이미지 자리를 그대로 차지합니다 - 문구만 남으면 다이얼로그가
+   갑자기 납작해져 사용자가 다른 창이 열린 것으로 읽습니다. */
+.art-zoom-missing { display: grid; place-items: center; margin: 0; min-height: 180px; border-radius: 10px; background: #f2f3f6; color: var(--muted); font-size: 11px; }
 
 /* 브리프 확인 화면. 입력 폼과 같은 자리를 쓰고, 고치기를 누르면 같은 자리가 폼이 됩니다. */
 .brief-heading-actions { display: flex; align-items: center; gap: 10px; }
@@ -198,12 +211,21 @@ button { color: inherit; }
 .result-actions { display: grid; gap: 6px; justify-items: center; }
 .result-actions .submit-button { display: grid; place-items: center; text-decoration: none; }
 .result-actions small { color: var(--muted); font-size: 10px; }
+/* 이미지가 있던 자리를 그대로 차지합니다 - 문구만 남으면 결과 칸이 접혀 사용자가 세션을
+   잘못 열었다고 읽습니다. */
+.result-expired { display: grid; gap: 6px; place-content: center; margin: 0; padding: 24px 16px; min-height: 160px; border: 1px dashed var(--line); border-radius: 12px; background: #f7f8fa; text-align: center; }
+.result-expired strong { font-size: 12px; }
+.result-expired span { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 @media (max-width: 960px) {
   .app-shell { grid-template-columns: 78px minmax(0, 1fr); }
   .sidebar { padding-inline: 11px; }
   .brand { justify-content: center; padding-inline: 0; }
-  .brand > span:last-child, .primary-action, .search-field input, .sidebar-label, .session-item > span:last-child, .sidebar-footer button:not(.profile-button), .profile-button { font-size: 0; }
+  /* ⚠️ **팝오버 안은 대상이 아닙니다.** 예전에는 `.sidebar-footer button:not(.profile-button)`
+     로 별도 로그아웃 버튼까지 함께 지웠는데, 그 선택자를 남기면 계정 메뉴 안의 항목도
+     `font-size: 0` 이 되어 열어 봐야 빈 칸입니다. 접힌 레일에서 이름을 지우는 것과
+     그 위에 띄운 메뉴는 다른 자리입니다. */
+  .brand > span:last-child, .primary-action, .search-field input, .sidebar-label, .session-item > span:last-child, .profile-button { font-size: 0; }
   .primary-action { display: block; }
   .primary-action span { font-size: 20px; }
   .search-field, .session-item { justify-content: center; }
@@ -219,10 +241,19 @@ button { color: inherit; }
   .primary-action { width: 42px; flex: 0 0 42px; }
   .search-field, .sidebar-label, .session-list { display: none; }
   /* ⚠️ 푸터는 숨기지 않습니다. 이 폭에서 사이드바가 가로 막대가 되면서 예전에는 푸터를
-     통째로 감췄는데, 그 안에 로그아웃 버튼이 들어온 뒤로는 그것이 **폰에서 로그아웃할
-     방법이 없어진다**는 뜻이 됩니다. 960px 구간이 이미 라벨을 지워 아이콘만 남으므로
-     가로 배치로 바꾸기만 하면 됩니다. */
+     통째로 감췄는데, 로그아웃이 그 안에 있으므로 감추면 **폰에서 로그아웃할 방법이
+     없어집니다**. 로그아웃이 계정 메뉴로 들어간 뒤에도 같습니다 - 그 메뉴를 여는 곳이
+     여기뿐입니다. 960px 구간이 이미 라벨을 지워 아바타만 남으므로 가로 배치로 바꾸기만
+     하면 됩니다. */
   .sidebar-footer { margin-top: 0; grid-auto-flow: column; align-items: center; }
+  /* ⚠️ **이 폭에서는 아래로 엽니다.** 위 `.account-menu` 는 사이드바가 세로 기둥이고
+     트리거가 화면 맨 아래라는 전제로 위로 열지만, 여기서는 사이드바가 문서 최상단 가로
+     막대라(`.app-shell { display: block }` + `position: static`) 트리거 윗변이 뷰포트
+     13px 지점입니다. 그대로 두면 메뉴가 `top: -137px` 에 그려져 화면 밖으로 나가고
+     스크롤로도 닿지 않습니다 (390 x 844 실측, `elementFromPoint` 가 `null`).
+     **로그아웃이 이 메뉴 뒤에 있으므로 그것은 폰에서 로그아웃할 방법이 없다는 뜻입니다.**
+     (PR #235 리뷰, 신호정) */
+  .account-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; }
   .workspace { padding: 23px 13px 42px; }
   .panel { padding: 17px; border-radius: 15px; }
   .brief-fields { grid-template-columns: 1fr; }

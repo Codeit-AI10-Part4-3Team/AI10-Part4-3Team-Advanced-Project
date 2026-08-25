@@ -9,6 +9,9 @@
   --yellow: #ffd95a;
   --line: #e5e7ed;
   --muted: #737781;
+  /* 오류 문구가 이미 쓰던 값입니다 (`.form-error`, `.workspace-error`). 필수 표시가
+     같은 색을 쓰도록 변수로 올렸습니다 - 두 곳이 갈리면 한쪽만 고쳐집니다. */
+  --danger: #8d2033;
   --surface: #ffffff;
 }
 
@@ -90,6 +93,15 @@ button { color: inherit; }
 .workspace-error { max-width: 1160px; margin: 0 auto 15px; padding: 11px 13px; border-radius: 10px; color: #8d2033; background: #fdecef; font-size: 12px; line-height: 1.6; }
 .workspace-loading { max-width: 1160px; margin: 0 auto; color: var(--muted); font-size: 13px; }
 .workspace-grid { max-width: 1160px; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, .8fr) minmax(430px, 1.2fr); gap: 17px; align-items: start; }
+
+/* 새 세션 화면. 세 패널이 화면을 채우도록 폭 제한을 풀고 좌우 여백을 좁힙니다.
+   ⚠️ 가운데(화풍)에 폭을 넉넉히 줍니다. 2 x 4 격자라 **패널 폭이 곧 그림 크기**이고,
+      좁히면 4 x 2 때와 같은 크기로 돌아갑니다 - 08-24 회의가 86px 카드에서 6번과 8번이
+      판정자 3/3 에게 헷갈렸다고 적은 그 크기입니다. */
+.new-session .workspace-header, .new-session .workspace-grid { max-width: none; }
+.workspace-grid-3 { grid-template-columns: minmax(290px, .92fr) minmax(320px, 1.06fr) minmax(330px, 1.02fr); }
+/* `:has()` 를 못 읽는 브라우저는 기존 여백을 그대로 씁니다 - 좁아지지 않을 뿐 깨지지 않습니다. */
+.workspace:has(.new-session) { padding-inline: clamp(12px, 1.4vw, 22px); }
 .panel { padding: 23px; border: 1px solid var(--line); border-radius: 19px; background: var(--surface); box-shadow: 0 7px 26px rgb(36 41 61 / 4%); }
 .panel-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 19px; }
 .panel-heading h2 { margin: 4px 0 0; font-size: 19px; letter-spacing: -.035em; }
@@ -100,6 +112,9 @@ button { color: inherit; }
 .type-tabs button.active { color: #17191f; background: #fff; box-shadow: 0 2px 7px rgb(40 45 60 / 8%); }
 .field { display: grid; gap: 7px; margin-bottom: 15px; }
 .field > span { font-size: 11px; font-weight: 750; }
+/* ⚠️ 색만으로 가르지 않습니다. "(필수)" 라는 **글자**가 표시이고 색은 거드는 것뿐이라,
+   색을 구분하지 못하는 사용자에게도 그대로 읽힙니다. */
+.required { color: var(--danger); font-size: 10px; font-style: normal; font-weight: 700; }
 .field input, .field textarea, .field select { width: 100%; border: 1px solid var(--line); border-radius: 9px; outline: 0; background: #fff; }
 .field input, .field select { height: 42px; padding: 0 11px; }
 .field textarea { padding: 10px 11px; resize: vertical; }
@@ -120,6 +135,7 @@ button { color: inherit; }
 .empty-blocks i:nth-child(2) { background: var(--blue-soft); }
 .step-list { max-width: 330px; margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.9; text-align: left; }
 .form-error { margin: -6px 0 15px; color: #8d2033; font-size: 11px; }
+.submit-hint { margin: 7px 0 0; color: var(--muted); font-size: 10px; text-align: center; }
 .link-button { margin-top: 4px; padding: 0; border: 0; color: var(--blue); background: transparent; font-size: 11px; font-weight: 700; text-decoration: underline; cursor: pointer; }
 /* 오류 배너 안에서는 문장의 일부입니다 - 파란 링크로 튀면 안내가 아니라 다른 곳으로 보내는 것처럼 읽힙니다. */
 .workspace-error .link-button { margin-top: 0; color: inherit; font-size: inherit; }
@@ -127,6 +143,14 @@ button { color: inherit; }
 /* 화풍 격자 (F2). 4 x 2 는 기획서 12.2 의 화면 도식이고, 후보가 8 종인 근거도 그 격자입니다.
    하나씩 열어 보는 드롭다운으로는 후보끼리 견줄 수 없어 한 화면에 전부 놓습니다. */
 .art-style-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+/* ⚠️ **2 x 4 입니다** (STEP 02 전용). 카드 폭이 두 배가 되어 그림이 그만큼 커집니다 -
+   4 x 2 에서 86px 이던 칸이 여기서는 그 두 배 가까이 됩니다. 브리프 수정 화면의 픽커는
+   좁은 패널 안이라 4 x 2 를 그대로 씁니다. */
+.style-panel .art-style-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.style-panel .art-style-card { padding: 7px; border-radius: 12px; }
+.style-panel .art-style-name { font-size: 11px; }
+.style-panel .art-style-thumb em { font-size: 10px; }
+.style-panel .art-style-zoom { width: 22px; height: 22px; font-size: 14px; }
 .art-style-card { position: relative; display: grid; gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: #fff; cursor: pointer; }
 .art-style-card:hover { border-color: #b9c0d4; }
 /* 라디오 자체는 감춥니다. 화살표 이동과 "하나만 고름"은 브라우저에 맡기고 카드만 보입니다. */

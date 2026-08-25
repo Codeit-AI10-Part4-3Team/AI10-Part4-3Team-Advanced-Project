@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { listArtStyles } from "../api";
 import { ArtStylePicker } from "./ArtStylePicker";
 import { OUTPUT_TYPE_LABEL } from "../labels";
@@ -7,6 +7,13 @@ import type { ArtStyle, OutputType, SessionCreateInput } from "../types";
 interface BriefFormProps {
   onSubmit: (input: SessionCreateInput) => void;
   pending: boolean;
+  /**
+   * 세 번째 패널(STEP 03). 폼이 그리지 않고 받아서 격자에 놓기만 합니다.
+   *
+   * ⚠️ 폼 **안**에 들어갑니다. 세 패널이 한 격자를 이루려면 격자의 자식이어야 하고, 격자가
+   * 곧 `<form>` 이기 때문입니다. 그 안에 제출 버튼을 두지 마세요 - 이 폼이 제출됩니다.
+   */
+  guide: ReactNode;
 }
 
 /** 계약의 `SessionCreateRequest.productImage` 가 정한 상한입니다. */
@@ -22,7 +29,7 @@ const INITIAL: TextFields = {
   artStyle: "",
 };
 
-export function BriefForm({ onSubmit, pending }: BriefFormProps) {
+export function BriefForm({ onSubmit, pending, guide }: BriefFormProps) {
   const [fields, setFields] = useState<TextFields>(INITIAL);
   const [image, setImage] = useState<File | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -67,23 +74,41 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
     );
   };
 
+  /**
+   * 필수 넷이 다 찼는가. 버튼의 활성 조건입니다.
+   *
+   * ⚠️ **계약의 `required` 와 같은 목록입니다** (openapi.yaml 의 `SessionCreateRequest`):
+   * `outputType`, `productImage`, `productName`, `sellingPoint`. `outputType` 은 기본값이
+   * 있어 비는 경우가 없으므로 여기서 세지 않습니다.
+   *
+   * ⚠️ 공백만 친 것은 채운 것이 아닙니다. 계약이 `minLength: 1` 이라 서버는 공백 하나도
+   * 받지만, 그렇게 만든 세션은 가드레일의 근거가 비어 시안이 거절됩니다.
+   */
+  const ready =
+    image !== null &&
+    imageError === null &&
+    fields.productName.trim() !== "" &&
+    fields.sellingPoint.trim() !== "";
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (image === null || imageError !== null) return;
+    if (image === null || !ready) return;
     onSubmit({ ...fields, productImage: image });
   };
 
   return (
-    <section className="panel brief-panel" aria-labelledby="brief-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">STEP 01</p>
-          <h2 id="brief-heading">광고 정보 입력</h2>
+    // ⚠️ **`<form>` 이 격자 자체입니다.** 세 패널이 같은 폼에 속해야 화풍 라디오가 제출에
+    // 함께 실리고, Enter 키와 필수 검사도 한 덩어리로 동작합니다. 패널마다 폼을 따로 두면
+    // 화풍이 다른 폼에 갇혀 제출에서 빠집니다.
+    <form className="workspace-grid workspace-grid-3" onSubmit={submit}>
+      <section className="panel brief-panel" aria-labelledby="brief-heading">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">STEP 01</p>
+            <h2 id="brief-heading">광고 정보 입력</h2>
+          </div>
         </div>
-        <span>* 필수 항목</span>
-      </div>
 
-      <form onSubmit={submit}>
         <div className="type-tabs" role="tablist" aria-label="출력 유형">
           {(["single_ad", "comic"] as OutputType[]).map((type) => (
             <button
@@ -100,7 +125,11 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
         </div>
 
         <label className="field">
-          <span>제품 이미지 *</span>
+          {/* ⚠️ 별표 하나로는 필수라는 것이 전달되지 않습니다. 글자로 적고 색을 줍니다 -
+              색만으로 가르면 색을 구분하지 못하는 사용자에게는 표시가 없는 것과 같습니다. */}
+          <span>
+            제품 이미지 <em className="required">(필수)</em>
+          </span>
           <input
             className="file-input"
             type="file"
@@ -113,7 +142,9 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
         {imageError !== null && <p className="form-error">{imageError}</p>}
 
         <label className="field">
-          <span>제품명 *</span>
+          <span>
+            제품명 <em className="required">(필수)</em>
+          </span>
           <input
             value={fields.productName}
             maxLength={40}
@@ -124,28 +155,24 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
         </label>
 
         <label className="field">
-          <span>핵심 소구점 *</span>
+          {/* ⚠️ 계약의 필드 이름은 `sellingPoint` 그대로입니다. 바꾼 것은 **화면 문구**뿐이고,
+              "소구점" 이 업계 용어라 처음 쓰는 사람이 무엇을 적어야 할지 모릅니다. */}
+          <span>
+            제품 장점 <em className="required">(필수)</em>
+          </span>
           <textarea
             value={fields.sellingPoint}
             maxLength={200}
             required
             rows={3}
-            placeholder="광고가 근거로 사용할 제품의 실제 특징을 적어주세요."
+            placeholder="예: 무향 무알코올, 두꺼운 원단"
             onChange={(event) => update("sellingPoint", event.target.value)}
           />
           {/* 여기 적은 것이 가드레일의 **근거 원문**입니다. 없는 효능과 수치는 생성물에
               등장할 수 없으므로, 비어 있을수록 시안이 거절될 확률이 올라갑니다. */}
+          <small>광고가 근거로 쓸 제품의 실제 특징을 적어주세요.</small>
           <small>{fields.sellingPoint.length}/200</small>
         </label>
-
-        <div className="field">
-          <span>화풍</span>
-          <ArtStylePicker
-            styles={artStyles}
-            value={fields.artStyle}
-            onChange={(id) => update("artStyle", id)}
-          />
-        </div>
 
         <label className="field">
           <span>추가 메모</span>
@@ -158,10 +185,32 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
           />
         </label>
 
-        <button className="submit-button" type="submit" disabled={pending || imageError !== null}>
+        {/* ⚠️ 필수를 다 채우기 전에는 누를 수 없습니다. 브라우저의 `required` 검사도 그대로
+            두었습니다 - 이 버튼이 막는 것은 **누르는 행동**이고, 그 검사는 어떤 칸이
+            비었는지를 말해 줍니다. 둘 중 하나만 두면 왜 안 되는지 알 수 없습니다. */}
+        <button className="submit-button" type="submit" disabled={pending || !ready}>
           {pending ? "세션을 만드는 중..." : "광고 만들기 시작"}
         </button>
-      </form>
-    </section>
+        {!ready && !pending && (
+          <p className="submit-hint">필수 항목을 모두 채우면 시작할 수 있습니다.</p>
+        )}
+      </section>
+
+      <section className="panel style-panel" aria-labelledby="style-heading">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">STEP 02</p>
+            <h2 id="style-heading">화풍 선택</h2>
+          </div>
+        </div>
+        <ArtStylePicker
+          styles={artStyles}
+          value={fields.artStyle}
+          onChange={(id) => update("artStyle", id)}
+        />
+      </section>
+
+      {guide}
+    </form>
   );
 }

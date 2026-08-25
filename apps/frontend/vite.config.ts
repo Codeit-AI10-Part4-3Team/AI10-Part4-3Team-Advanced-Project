@@ -19,6 +19,24 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      // 화풍 예시 이미지. backend 가 볼륨에서 정적으로 내줍니다 (apps/backend/src/api/main.py).
+      //
+      // ⚠️ Without this the dev server answers **index.html with status 200** for an <img>,
+      // so the picture is simply blank and nothing in the network tab says why. The
+      // deployment has the same trap in the other direction — there it is nginx's SPA
+      // fallback that catches it (apps/frontend/nginx.conf).
+      //
+      // ⚠️ Unlike /v1 this path is not in the contract, so no rule pulls it along: it is a
+      // static asset served by us, and the two files above are the only places that know it
+      // exists. Change one and change the other.
+      //
+      // The files are not committed (구현_범위 4.3절 keeps generated images out of the
+      // repository), so locally the directory is usually empty and the URL 404s. That is the
+      // same state the screen already handles for an empty `exampleImageUrl`.
+      "/static/art-styles": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
   // ⚠️ 테스트는 **브라우저 환경을 흉내 낸 곳**에서 돕니다 (`jsdom`). 여기서 잡으려는 것이

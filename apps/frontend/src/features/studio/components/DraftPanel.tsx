@@ -6,6 +6,8 @@ import { ResultView } from "./ResultView";
 interface DraftPanelProps {
   session: Session;
   job: Job | null;
+  /** 조회 실패로 폴링이 멈춘 상태. 잡 자체의 실패(`Job.status === "failed"`)와 다른 층입니다. */
+  pollingStopped: boolean;
   pending: "draft" | "finalize" | null;
   onGenerate: () => void;
   onFinalize: () => void;
@@ -17,6 +19,7 @@ const READY_STATES = new Set(["draft_ready", "finalized", "rendering", "complete
 export function DraftPanel({
   session,
   job,
+  pollingStopped,
   pending,
   onGenerate,
   onFinalize,
@@ -121,11 +124,24 @@ export function DraftPanel({
         </div>
       )}
 
+      {/* ⚠️ **아직 못 읽은 것과 못 읽게 된 것을 가릅니다.** 둘 다 `job` 이 `null` 이지만
+          앞은 진행 중이고 뒤는 멈춰 있습니다. 하나로 묶으면 폴링이 멈춘 뒤에도 "확인하고
+          있습니다" 가 남아, 같은 화면의 알림과 서로 다른 말을 합니다 (실측 확인).
+          되살리는 버튼은 여기 두지 않습니다 - 알림이 이미 갖고 있고, 둘로 나누면 같은
+          행동에 버튼이 두 개가 됩니다. */}
       {session.jobId !== undefined &&
-        (job === null ? (
-          <p className="notice">렌더 상태를 확인하고 있습니다...</p>
+        (job !== null ? (
+          <ResultView
+            job={job}
+            productName={session.brief.productName}
+            pollingStopped={pollingStopped}
+          />
+        ) : pollingStopped ? (
+          <p className="notice notice-failed">
+            렌더 상태를 확인하지 못했습니다. 위 알림에서 다시 시도할 수 있습니다.
+          </p>
         ) : (
-          <ResultView job={job} productName={session.brief.productName} />
+          <p className="notice">렌더 상태를 확인하고 있습니다...</p>
         ))}
 
       {state === "failed" && (

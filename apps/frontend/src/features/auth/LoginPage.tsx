@@ -10,6 +10,26 @@ import { useAuth } from "./useAuth";
  * `INVALID_CREDENTIALS` 로 답하는 것이 계약이고(API_계약 6절), 화면이 문구로 갈라 놓으면
  * 서버가 감춘 아이디 존재 여부가 화면에서 새어 나갑니다.
  */
+/**
+ * 로그인 뒤 돌아갈 자리. `RequireAuth` 가 넘긴 값만 받습니다.
+ *
+ * ⚠️ **모양을 검사합니다.** 지금은 우리 코드만 이 값을 넣지만, 라우터 state 는 `history` 에
+ * 실려 뒤로 가기와 새로고침을 넘어 살아남습니다. `//evil.example` 처럼 스킴이 생략된 주소를
+ * 그대로 넘기면 다른 출처로 나가는 길이 되므로, **`/` 하나로 시작하는 경로만** 받습니다.
+ * 지금 뚫려 있다는 뜻이 아니라, 값이 밖에서 올 수 있게 되는 날 이 자리가 조용히 열리는 것을
+ * 막아 둔 것입니다.
+ *
+ * ⚠️ `/login` 으로 되돌리지 않습니다. 로그인에 성공한 사람을 로그인 화면으로 보내면 그
+ * 화면이 다시 복귀를 시도해 왕복이 남습니다.
+ */
+function returnTo(state: unknown): string {
+  const from = (state as { from?: unknown } | null)?.from;
+  if (typeof from !== "string") return "/";
+  if (!from.startsWith("/") || from.startsWith("//")) return "/";
+  if (from === "/login" || from.startsWith("/login?")) return "/";
+  return from;
+}
+
 export function LoginPage() {
   const { status, signIn } = useAuth();
   const navigate = useNavigate();
@@ -22,8 +42,7 @@ export function LoginPage() {
 
   if (status === "signed_in") {
     // 로그인한 채로 이 화면에 오면 원래 가려던 곳으로 돌려보냅니다.
-    const from = (location.state as { from?: string } | null)?.from ?? "/";
-    return <Navigate to={from} replace />;
+    return <Navigate to={returnTo(location.state)} replace />;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -32,8 +51,7 @@ export function LoginPage() {
     setSubmitting(true);
     try {
       await signIn(loginId, password);
-      const from = (location.state as { from?: string } | null)?.from ?? "/";
-      void navigate(from, { replace: true });
+      void navigate(returnTo(location.state), { replace: true });
     } catch (error: unknown) {
       setMessage(describe(error));
     } finally {

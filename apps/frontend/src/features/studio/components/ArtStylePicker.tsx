@@ -24,11 +24,61 @@ interface ArtStylePickerProps {
  * 준비 중"을 보여줍니다. 아무 그림이나 채우면 안 되는 이유가 따로 있습니다 - 예시와 실제
  * 결과의 화풍이 같은 프롬프트 조각에서 나와야 하고, 그렇지 않으면 선택 화면 전체가 거짓말이
  * 됩니다 (03-AI_생성_서빙.md).
+ *
+ * ⚠️ **URL 이 있는데 못 불러오는 경우도 같은 자리로 갑니다** (#216). 파일이 아직 볼륨에
+ * 없거나 이름이 어긋나면 그 URL 은 404 이고, `onError` 가 없으면 그 칸은 브라우저의 깨진
+ * 그림이 됩니다. 운영 절차가 "파일이 먼저, URL 이 나중" 으로 그 상태를 막고 있지만
+ * (infra/README.md), 절차가 아니라 화면이 버티게 하는 것이 이 처리입니다.
  */
 export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps) {
   // 같은 화면에 픽커가 둘 이상 있어도 라디오 그룹이 섞이지 않게 합니다.
   const groupName = useId();
   const [zoomed, setZoomed] = useState<ArtStyle | null>(null);
+
+  // ⚠️ **`artStyleId` 가 아니라 URL 로 기억합니다.** 운영자가 파일을 넣고 URL 을 고치면 같은
+  // 화풍에 새 URL 이 옵니다 - 식별자로 기억하면 그 카드는 고쳐진 뒤에도 영영 실패로 남습니다.
+  // 실패한 것은 화풍이 아니라 그 주소입니다.
+  //
+  // ⚠️ **이 이득이 발동하는 조건은 좁습니다.** 실제 복구는 대개 URL 이 아니라 빠진 파일을
+  // 볼륨에 넣는 쪽이고(infra/README.md), 파일명과 URL 은 `prepare_handoff.py` 가 함께
+  // 고정해 내주므로 고친 뒤에도 같은 URL 이 옵니다. 그때는 열려 있던 탭이 새로고침 전까지
+  // 실패로 남습니다. 그래도 이쪽이 나은 것은 식별자로 기억하는 편이 더 나쁘기 때문이지,
+  // "고치면 화면이 따라온다" 는 뜻이 아닙니다 (PR #234 리뷰, 신호정).
+  const [failedUrls, setFailedUrls] = useState<ReadonlySet<string>>(() => new Set());
+  const markFailed = (url: string) => {
+    setFailedUrls((previous) => (previous.has(url) ? previous : new Set(previous).add(url)));
+  };
+
+  // ⚠️ **한 번이라도 뜬 적이 있으면 기억합니다.** 같은 URL 을 격자 썸네일과 확대창의
+  // `<img>` 두 개가 각각 따로 요청하는데, 실패는 URL 단위로 기억하므로 확대창 쪽 요청만
+  // 실패해도 **이미 잘 뜨고 있던 썸네일이 실패 문구로 뒤집힙니다** (실측 확인). 파일은
+  // 멀쩡한데 화면만 고장 난 것처럼 보이고, 재시도가 없어 새로고침 전까지 그대로입니다
+  // (PR #234 리뷰, 정승호).
+  const [loadedUrls, setLoadedUrls] = useState<ReadonlySet<string>>(() => new Set());
+  const markLoaded = (url: string) => {
+    setLoadedUrls((previous) => (previous.has(url) ? previous : new Set(previous).add(url)));
+  };
+  /**
+   * 확대를 권할 수 있는가. 확대 버튼과 다이얼로그가 이 판단 하나를 같이 씁니다.
+   *
+   * ⚠️ **아래 `thumbBroken` 과 일부러 다릅니다.** 이쪽은 **한 번이라도 실패했으면** 권하지
+   * 않습니다 - 크게 보기는 새 요청이고, 실패한 적이 있는 주소로 빈 창을 여는 것보다 버튼을
+   * 내리는 편이 낫습니다. 격자 쪽은 반대로, 이미 뜬 그림을 지우지 않습니다.
+   */
+  const hasExample = (style: ArtStyle) =>
+    style.exampleImageUrl !== "" && !failedUrls.has(style.exampleImageUrl);
+
+  /**
+   * 격자 칸에 실패 문구를 띄워야 하는가.
+   *
+   * ⚠️ **한 번 뜬 그림은 지우지 않습니다.** 확대창의 별도 요청이 실패했다고 눈앞에 잘 떠
+   * 있는 썸네일을 문구로 바꾸면, 사용자에게는 멀쩡하던 것이 갑자기 고장 난 것으로 보입니다.
+   */
+  const thumbBroken = (style: ArtStyle) =>
+    failedUrls.has(style.exampleImageUrl) && !loadedUrls.has(style.exampleImageUrl);
+  // 확대창이 닫힐 때 포커스가 돌아올 자리입니다. 라디오는 눈에 보이지 않지만 포커스를
+  // 받으며, `.art-style-card:focus-within` 이 그 카드에 테두리를 그립니다.
+  const radioId = (artStyleId: string) => `${groupName}-${artStyleId}`;
 
   if (styles.length === 0) {
     // 후보가 비어 있는 것은 지금 정상입니다 (`ADGEN_ART_STYLES` 미설정). 빈 격자를 그리면
@@ -55,23 +105,39 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
             <label>
               <input
                 type="radio"
+                id={radioId(style.artStyleId)}
                 name={groupName}
                 value={style.artStyleId}
                 checked={style.artStyleId === value}
                 onChange={() => onChange(style.artStyleId)}
               />
               <span className="art-style-thumb" aria-hidden="true">
+                {/* ⚠️ 두 문구를 가릅니다. 화면상 자리는 같지만 **원인이 다릅니다** - 빈
+                    문자열은 "아직 안 왔다" 이고 실패는 "왔는데 못 불러왔다" 입니다. 2단계
+                    전달을 하는 사람이 이 둘을 구분하지 못하면, URL 을 이미 채운 상태에서도
+                    "아직 안 넣었나" 로 읽습니다 (infra/README.md 의 순서 규칙).
+                    404 인지 권한 문제인지까지는 가르지 않습니다 - `<img>` 가 상태 코드를
+                    주지 않아 화면에서 알 수 있는 방법이 없습니다 (#216). */}
                 {style.exampleImageUrl === "" ? (
                   <em>예시 준비 중</em>
+                ) : thumbBroken(style) ? (
+                  <em>예시를 불러오지 못했습니다</em>
                 ) : (
-                  <img src={style.exampleImageUrl} alt="" loading="lazy" />
+                  <img
+                    src={style.exampleImageUrl}
+                    alt=""
+                    loading="lazy"
+                    onLoad={() => markLoaded(style.exampleImageUrl)}
+                    onError={() => markFailed(style.exampleImageUrl)}
+                  />
                 )}
               </span>
               <span className="art-style-name">{style.name}</span>
             </label>
 
-            {/* 예시가 없으면 확대할 것도 없습니다. 눌러 봐야 빈 화면인 버튼은 두지 않습니다. */}
-            {style.exampleImageUrl !== "" && (
+            {/* 예시가 없으면 확대할 것도 없습니다. 눌러 봐야 빈 화면인 버튼은 두지 않습니다.
+                못 불러온 경우도 같습니다 - 크게 봐도 같은 그림이 없습니다. */}
+            {hasExample(style) && (
               <button
                 type="button"
                 className="art-style-zoom"
@@ -100,7 +166,18 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
         )}
       </div>
 
-      {zoomed !== null && <ArtStyleZoom style={zoomed} onClose={() => setZoomed(null)} />}
+      {zoomed !== null && (
+        <ArtStyleZoom
+          // 화풍마다 새 인스턴스입니다. 아래 효과가 빈 의존성으로 한 번만 도므로, 인스턴스가
+          // 재사용되면 첫 화풍의 값을 계속 들게 됩니다.
+          key={zoomed.artStyleId}
+          style={zoomed}
+          failed={!hasExample(zoomed)}
+          fallbackFocusId={radioId(zoomed.artStyleId)}
+          onLoadError={() => markFailed(zoomed.exampleImageUrl)}
+          onClose={() => setZoomed(null)}
+        />
+      )}
     </>
   );
 }
@@ -116,12 +193,35 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
  *
  * ⚠️ **여기서 화풍을 고를 수는 없습니다.** 크게 보는 것과 정하는 것은 다른 행동이고, 확대해
  * 놓고 닫으면 골라져 있는 화면은 사용자가 자기가 무엇을 했는지 알 수 없게 만듭니다.
+ *
+ * ⚠️ **여기서도 로드가 실패할 수 있습니다** (#216). 격자의 썸네일은 `loading="lazy"` 라
+ * 화면 밖이면 아직 받아 본 적이 없고, 캐시가 만료된 뒤 열 수도 있습니다. 그래서 실패를
+ * 부모에게 올려 두 자리가 같은 판단을 쓰게 합니다 - 그러지 않으면 다이얼로그는 실패를
+ * 아는데 격자의 확대 버튼은 그대로 남습니다.
  */
-function ArtStyleZoom({ style, onClose }: { style: ArtStyle; onClose: () => void }) {
+function ArtStyleZoom({
+  style,
+  failed,
+  fallbackFocusId,
+  onLoadError,
+  onClose,
+}: {
+  style: ArtStyle;
+  failed: boolean;
+  /** `opener` 가 사라졌을 때 대신 포커스를 받을 요소. 그 화풍 카드의 라디오입니다. */
+  fallbackFocusId: string;
+  onLoadError: () => void;
+  onClose: () => void;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
 
-  // 의존성이 비어 있는 것이 중요합니다. `onClose` 를 넣으면 부모가 리렌더될 때마다
-  // 정리와 재실행이 돌아 포커스가 흔들립니다 - 그 함수는 아래 이벤트 핸들러에서만 씁니다.
+  // `onClose` 는 여기 넣지 않습니다. 부모가 리렌더될 때마다 정리와 재실행이 돌아 포커스가
+  // 흔들리고, 그 함수는 아래 이벤트 핸들러에서만 씁니다.
+  //
+  // ⚠️ `fallbackFocusId` 는 배열에 있어도 재실행을 만들지 않습니다 - 위의
+  // `key={zoomed.artStyleId}` 가 화풍마다 인스턴스를 새로 만들어 **이 인스턴스에서는
+  // 상수**이기 때문입니다. 그 `key` 를 지우면 이 효과가 도중에 다시 돌고 `opener` 가 새로
+  // 잡히므로, 그것은 대비가 아니라 **현재 동작의 전제**입니다 (PR #234 리뷰, 신호정).
   useEffect(() => {
     const dialog = ref.current;
     // ⚠️ 열기 **전에** 기억합니다. `<dialog>` 가 닫을 때 포커스를 되돌려 주기는 하지만, 여기서는
@@ -130,9 +230,16 @@ function ArtStyleZoom({ style, onClose }: { style: ArtStyle; onClose: () => void
     dialog?.showModal();
     return () => {
       dialog?.close();
-      opener?.focus?.();
+      // ⚠️ **`opener` 가 그 사이에 사라질 수 있습니다.** 여기서 이미지가 실패하면 그 카드의
+      // 확대 버튼이 조건에서 빠져 DOM 에서 떨어지는데, `opener` 가 바로 그 버튼입니다.
+      // 문서에 붙어 있지 않은 노드의 `focus()` 는 아무 일도 하지 않아, 포커스가 `body` 로
+      // 남고 다음 Tab 이 화면 맨 위에서 다시 시작합니다. 8 칸 격자에서 있던 자리를 잃는
+      // 것이라, 그때는 그 카드의 라디오로 보냅니다 (PR #234 리뷰, 신호정).
+      const target =
+        opener?.isConnected === true ? opener : document.getElementById(fallbackFocusId);
+      target?.focus?.();
     };
-  }, []);
+  }, [fallbackFocusId]);
 
   // ⚠️ **`close` 가 아니라 `cancel` 을 듣습니다.** `close` 는 우리가 부른 `close()` 에도
   // 발생하는데, StrictMode 는 효과를 두 번 돌리므로 정리 단계의 `close()` 가 곧바로
@@ -165,7 +272,13 @@ function ArtStyleZoom({ style, onClose }: { style: ArtStyle; onClose: () => void
             닫기
           </button>
         </div>
-        <img src={style.exampleImageUrl} alt={`${style.name} 화풍 예시`} />
+        {failed ? (
+          // 다이얼로그를 스스로 닫지 않습니다. 열자마자 사라지면 사용자는 자기가 잘못
+          // 눌렀다고 읽습니다 - 무엇이 없는지 말하고 닫는 것은 사용자에게 맡깁니다.
+          <p className="art-zoom-missing">예시를 불러오지 못했습니다.</p>
+        ) : (
+          <img src={style.exampleImageUrl} alt={`${style.name} 화풍 예시`} onError={onLoadError} />
+        )}
         <small>이 화면에서는 고르지 않습니다. 닫고 카드를 눌러 선택하세요.</small>
       </div>
     </dialog>

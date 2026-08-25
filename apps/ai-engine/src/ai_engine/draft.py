@@ -71,9 +71,10 @@ def generate_draft(request: DraftGenerateRequest, settings: Settings) -> DraftGe
 def _generate_stub(request: DraftGenerateRequest, settings: Settings) -> DraftGenerateResponse:
     """Fixed single-ad draft, visibly marked.
 
-    ⚠️ The copy is built **only** from `sellingPoint`, which is the guardrail's evidence
-    (`sellingPoint` + `note`). Even a stub must not put a number or a claim on the wire that
-    the input did not carry — the skeleton is where that habit is set.
+    ⚠️ The copy is built **only** from `sellingPoint`, part of the guardrail's evidence
+    (`sellingPoint` + `note` + product name, see `_evidence`). Even a stub must not put a
+    number or a claim on the wire that the input did not carry — the skeleton is where that
+    habit is set.
     """
     if request.output_type == "comic":
         raise NotImplementedError(

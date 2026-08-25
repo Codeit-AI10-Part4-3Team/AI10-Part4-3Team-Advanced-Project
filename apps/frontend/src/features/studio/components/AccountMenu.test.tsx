@@ -21,7 +21,7 @@ const ME: Me = {
 describe("AccountMenu", () => {
   it("처음에는 닫혀 있다", () => {
     render(<AccountMenu me={ME} onSignOut={() => undefined} />);
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "계정" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "계정 메뉴" })).toHaveAttribute(
       "aria-expanded",
       "false",
@@ -33,11 +33,11 @@ describe("AccountMenu", () => {
     const trigger = screen.getByRole("button", { name: "계정 메뉴" });
 
     fireEvent.click(trigger);
-    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "계정" })).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     fireEvent.click(trigger);
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "계정" })).not.toBeInTheDocument();
   });
 
   it("로그아웃을 부를 수 있다", () => {
@@ -46,11 +46,11 @@ describe("AccountMenu", () => {
     render(<AccountMenu me={ME} onSignOut={signOut} />);
 
     fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "로그아웃" }));
+    fireEvent.click(screen.getByRole("button", { name: "로그아웃" }));
 
     expect(signOut).toHaveBeenCalledTimes(1);
     // 부르고 나면 닫힙니다. 열린 채로 두면 로그인 화면 위에 메뉴가 한 프레임 남습니다.
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "계정" })).not.toBeInTheDocument();
   });
 
   it("계약이 주는 것만 보여 준다", () => {
@@ -59,18 +59,18 @@ describe("AccountMenu", () => {
     render(<AccountMenu me={ME} onSignOut={() => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
 
-    expect(screen.getByRole("menu")).toHaveTextContent("demo1");
+    expect(screen.getByRole("group", { name: "계정" })).toHaveTextContent("demo1");
     expect(screen.getByText(/^가입/)).toBeInTheDocument();
   });
 
   it("바깥을 누르면 닫힌다", () => {
     render(<AccountMenu me={ME} onSignOut={() => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
-    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "계정" })).toBeInTheDocument();
 
     fireEvent.pointerDown(document.body);
 
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "계정" })).not.toBeInTheDocument();
   });
 
   it("Escape 로 닫으면 포커스가 버튼으로 돌아온다", () => {
@@ -81,8 +81,22 @@ describe("AccountMenu", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
 
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "계정" })).not.toBeInTheDocument();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("트리거가 메뉴보다 DOM 앞에 있다", () => {
+    // ⚠️ **동작이 아니라 구조를 검사합니다.** 위치는 `position: absolute` 가 정하므로 순서를
+    // 뒤집어도 보이는 자리는 같고 스타일도 그대로입니다. 하지만 Tab 순서는 DOM 을 따라서,
+    // 메뉴가 앞이면 열고 나서 Tab 을 눌러도 항목이 아니라 사이드바 밖으로 나갑니다.
+    // jsdom 은 실제 Tab 이동을 재현하지 않으므로 순서 자체를 고정합니다.
+    render(<AccountMenu me={ME} onSignOut={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
+
+    const trigger = screen.getByRole("button", { name: "계정 메뉴" });
+    const menu = screen.getByRole("group", { name: "계정" });
+    // 4 = DOCUMENT_POSITION_FOLLOWING: 메뉴가 트리거 **뒤**에 옵니다.
+    expect(trigger.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("아직 계정을 못 읽었어도 열린다", () => {
@@ -91,7 +105,7 @@ describe("AccountMenu", () => {
     render(<AccountMenu me={null} onSignOut={() => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
 
-    expect(screen.getByRole("menuitem", { name: "로그아웃" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
     expect(screen.queryByText(/^가입/)).not.toBeInTheDocument();
   });
 });

@@ -55,8 +55,12 @@ button { color: inherit; }
 .avatar { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--yellow); font-size: 10px; font-weight: 800; }
 /* 로그아웃 글리프. 좁은 폭에서 라벨이 사라져도 이 크기가 남아 버튼이 빈 상자가 되지 않습니다. */
 .account { position: relative; display: grid; }
-/* ⚠️ 버튼 **위**로 엽니다. 사이드바 맨 아래라 아래로 열면 화면 밖으로 나갑니다. */
-.account-menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 20; display: grid; gap: 2px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 32px rgb(18 21 33 / 16%); }
+/* ⚠️ 버튼 **위**로 엽니다. 사이드바 맨 아래라 아래로 열면 화면 밖으로 나갑니다.
+   620px 이하는 반대입니다 - 그 구간 참고. */
+/* ⚠️ `min-width` 가 없으면 78px 레일에서 메뉴가 안쪽 폭(55px)에 묶여 항목이 세 줄로
+   접힙니다 (실측). `left` 와 `right` 가 동시에 걸린 상자라 LTR 에서는 `right` 가 무시되고
+   레일 바깥으로 자랍니다 - 사이드바에 overflow 제한이 없어 잘리지 않습니다. */
+.account-menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 180px; z-index: 20; display: grid; gap: 2px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 32px rgb(18 21 33 / 16%); }
 .account-info { display: grid; gap: 2px; padding: 7px 9px 8px; border-bottom: 1px solid var(--line); }
 .account-info strong { font-size: 12px; overflow-wrap: anywhere; }
 .account-info small { color: var(--muted); font-size: 10px; }
@@ -234,6 +238,14 @@ button { color: inherit; }
      여기뿐입니다. 960px 구간이 이미 라벨을 지워 아바타만 남으므로 가로 배치로 바꾸기만
      하면 됩니다. */
   .sidebar-footer { margin-top: 0; grid-auto-flow: column; align-items: center; }
+  /* ⚠️ **이 폭에서는 아래로 엽니다.** 위 `.account-menu` 는 사이드바가 세로 기둥이고
+     트리거가 화면 맨 아래라는 전제로 위로 열지만, 여기서는 사이드바가 문서 최상단 가로
+     막대라(`.app-shell { display: block }` + `position: static`) 트리거 윗변이 뷰포트
+     13px 지점입니다. 그대로 두면 메뉴가 `top: -137px` 에 그려져 화면 밖으로 나가고
+     스크롤로도 닿지 않습니다 (390 x 844 실측, `elementFromPoint` 가 `null`).
+     **로그아웃이 이 메뉴 뒤에 있으므로 그것은 폰에서 로그아웃할 방법이 없다는 뜻입니다.**
+     (PR #235 리뷰, 신호정) */
+  .account-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; }
   .workspace { padding: 23px 13px 42px; }
   .panel { padding: 17px; border-radius: 15px; }
   .brief-fields { grid-template-columns: 1fr; }

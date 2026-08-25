@@ -26,7 +26,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
 
   if (status === "signed_out") {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    // ⚠️ **경로만으로는 부족합니다.** 쿼리와 해시를 빼면 `/sessions/{id}?tab=render` 같은
+    // 주소로 들어온 사용자가 로그인 뒤 같은 세션의 **다른 화면**에 도착합니다. 돌아왔는데
+    // 보던 자리가 아닌 것이라, 복귀가 있는 것보다 더 헷갈립니다 (#114).
+    const from = `${location.pathname}${location.search}${location.hash}`;
+    return <Navigate to="/login" replace state={{ from }} />;
   }
 
   return <>{children}</>;

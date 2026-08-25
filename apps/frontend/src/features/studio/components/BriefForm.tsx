@@ -28,10 +28,13 @@ export function BriefForm({ onSubmit, pending }: BriefFormProps) {
   const [imageError, setImageError] = useState<string | null>(null);
   const [artStyles, setArtStyles] = useState<ArtStyle[]>([]);
 
-  // ⚠️ **후보 목록은 지금 비어 있는 것이 정상입니다** (미결정_대장 A절 3번, 차단). 그래서
-  // 화면에 그럴듯한 값을 적어 두지 않습니다 - 여기에 손으로 적은 값은 그대로 브리프에 실려
-  // 세션에 저장되고, 나중에 진짜 후보가 정해지면 어느 세션이 무엇으로 생성됐는지 알 수 없게
-  // 됩니다. 비어 있으면 미선택으로 보내고 서버가 채웁니다.
+  // ⚠️ **후보를 화면에 지어내지 않습니다.** 값이 들어오는 통로는 `ADGEN_ART_STYLES` 설정
+  // 하나이고(AGENTS.md), 여기에 손으로 적은 값은 그대로 브리프에 실려 세션에 저장되므로
+  // 나중에 어느 세션이 무엇으로 생성됐는지 알 수 없게 됩니다.
+  //
+  // 목록 자체는 확정됐습니다 - A-3 는 2026-08-24 회의 안건 01 이 닫았고 05 가 08-22 에
+  // 값 8종을 배포했습니다. 그래도 **비어 있는 응답은 여전히 정상 경로입니다**: 설정이 아직
+  // 안 들어간 환경(새 로컬 스택, 새 배포)이 그렇고, 그때는 미선택으로 보내 서버가 채웁니다.
   useEffect(() => {
     let cancelled = false;
 

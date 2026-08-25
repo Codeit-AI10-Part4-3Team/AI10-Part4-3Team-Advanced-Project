@@ -179,6 +179,40 @@ describe("예시 이미지를 못 불러왔을 때 (#216)", () => {
     expect(screen.getAllByText("예시를 불러오지 못했습니다")).toHaveLength(1);
   });
 
+  it("한 번 뜬 썸네일은 확대창 실패로 뒤집히지 않는다", () => {
+    // ⚠️ **같은 URL 을 두 `<img>` 가 각각 따로 요청합니다.** 실패를 URL 로 기억하므로,
+    // 확대창 쪽 요청만 실패해도 이미 잘 뜨고 있던 격자 썸네일이 실패 문구로 바뀌었습니다
+    // (PR #234 리뷰, 정승호. 실측으로 재현했습니다). 파일은 멀쩡한데 화면만 고장 난 것처럼
+    // 보이고, 재시도가 없어 새로고침 전까지 그대로입니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    const grid = thumb(container, "레트로 팝아트");
+    expect(grid).not.toBeNull();
+    fireEvent.load(grid as HTMLImageElement);
+
+    fireEvent.click(screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }));
+    fireEvent.error(screen.getByRole("dialog").querySelector("img") as HTMLImageElement);
+
+    // 확대창은 이유를 말하지만, 격자의 그림은 그대로 있어야 합니다.
+    expect(screen.getByText("예시를 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(thumb(container, "레트로 팝아트")).not.toBeNull();
+    expect(screen.queryByText("예시를 불러오지 못했습니다")).not.toBeInTheDocument();
+  });
+
+  it("뜬 적 없는 썸네일은 확대창 실패에 따라간다", () => {
+    // 반대쪽입니다. `loading="lazy"` 라 화면 밖이면 격자가 아직 받아 본 적이 없고, 그때는
+    // 확대창의 실패가 그 주소에 대해 우리가 아는 전부입니다. 위 시험이 "언제나 유지" 로
+    // 통과하지 않게 함께 겁니다.
+    const { container } = render(
+      <ArtStylePicker styles={THREE} value="" onChange={() => undefined} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }));
+    fireEvent.error(screen.getByRole("dialog").querySelector("img") as HTMLImageElement);
+
+    expect(thumb(container, "레트로 팝아트")).toBeNull();
+  });
+
   it("URL 이 바뀌면 다시 시도한다", () => {
     // ⚠️ **실패를 `artStyleId` 로 기억하면 이 시험이 깨집니다.** 운영자가 파일을 넣고 URL 을
     // 고쳐도 그 카드는 영영 실패로 남아, 고친 사람이 화면으로는 확인할 방법이 없습니다.

@@ -48,10 +48,34 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
   const markFailed = (url: string) => {
     setFailedUrls((previous) => (previous.has(url) ? previous : new Set(previous).add(url)));
   };
-  // 예시를 실제로 보여 줄 수 있는가. 빈 문자열(아직 안 옴)과 로드 실패(못 불러옴)를 함께
-  // 거릅니다 - 확대 버튼과 다이얼로그가 이 판단 하나를 같이 씁니다.
+
+  // ⚠️ **한 번이라도 뜬 적이 있으면 기억합니다.** 같은 URL 을 격자 썸네일과 확대창의
+  // `<img>` 두 개가 각각 따로 요청하는데, 실패는 URL 단위로 기억하므로 확대창 쪽 요청만
+  // 실패해도 **이미 잘 뜨고 있던 썸네일이 실패 문구로 뒤집힙니다** (실측 확인). 파일은
+  // 멀쩡한데 화면만 고장 난 것처럼 보이고, 재시도가 없어 새로고침 전까지 그대로입니다
+  // (PR #234 리뷰, 정승호).
+  const [loadedUrls, setLoadedUrls] = useState<ReadonlySet<string>>(() => new Set());
+  const markLoaded = (url: string) => {
+    setLoadedUrls((previous) => (previous.has(url) ? previous : new Set(previous).add(url)));
+  };
+  /**
+   * 확대를 권할 수 있는가. 확대 버튼과 다이얼로그가 이 판단 하나를 같이 씁니다.
+   *
+   * ⚠️ **아래 `thumbBroken` 과 일부러 다릅니다.** 이쪽은 **한 번이라도 실패했으면** 권하지
+   * 않습니다 - 크게 보기는 새 요청이고, 실패한 적이 있는 주소로 빈 창을 여는 것보다 버튼을
+   * 내리는 편이 낫습니다. 격자 쪽은 반대로, 이미 뜬 그림을 지우지 않습니다.
+   */
   const hasExample = (style: ArtStyle) =>
     style.exampleImageUrl !== "" && !failedUrls.has(style.exampleImageUrl);
+
+  /**
+   * 격자 칸에 실패 문구를 띄워야 하는가.
+   *
+   * ⚠️ **한 번 뜬 그림은 지우지 않습니다.** 확대창의 별도 요청이 실패했다고 눈앞에 잘 떠
+   * 있는 썸네일을 문구로 바꾸면, 사용자에게는 멀쩡하던 것이 갑자기 고장 난 것으로 보입니다.
+   */
+  const thumbBroken = (style: ArtStyle) =>
+    failedUrls.has(style.exampleImageUrl) && !loadedUrls.has(style.exampleImageUrl);
   // 확대창이 닫힐 때 포커스가 돌아올 자리입니다. 라디오는 눈에 보이지 않지만 포커스를
   // 받으며, `.art-style-card:focus-within` 이 그 카드에 테두리를 그립니다.
   const radioId = (artStyleId: string) => `${groupName}-${artStyleId}`;
@@ -96,13 +120,14 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
                     주지 않아 화면에서 알 수 있는 방법이 없습니다 (#216). */}
                 {style.exampleImageUrl === "" ? (
                   <em>예시 준비 중</em>
-                ) : failedUrls.has(style.exampleImageUrl) ? (
+                ) : thumbBroken(style) ? (
                   <em>예시를 불러오지 못했습니다</em>
                 ) : (
                   <img
                     src={style.exampleImageUrl}
                     alt=""
                     loading="lazy"
+                    onLoad={() => markLoaded(style.exampleImageUrl)}
                     onError={() => markFailed(style.exampleImageUrl)}
                   />
                 )}
@@ -190,8 +215,13 @@ function ArtStyleZoom({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
 
-  // 의존성이 비어 있는 것이 중요합니다. `onClose` 를 넣으면 부모가 리렌더될 때마다
-  // 정리와 재실행이 돌아 포커스가 흔들립니다 - 그 함수는 아래 이벤트 핸들러에서만 씁니다.
+  // `onClose` 는 여기 넣지 않습니다. 부모가 리렌더될 때마다 정리와 재실행이 돌아 포커스가
+  // 흔들리고, 그 함수는 아래 이벤트 핸들러에서만 씁니다.
+  //
+  // ⚠️ `fallbackFocusId` 는 배열에 있어도 재실행을 만들지 않습니다 - 위의
+  // `key={zoomed.artStyleId}` 가 화풍마다 인스턴스를 새로 만들어 **이 인스턴스에서는
+  // 상수**이기 때문입니다. 그 `key` 를 지우면 이 효과가 도중에 다시 돌고 `opener` 가 새로
+  // 잡히므로, 그것은 대비가 아니라 **현재 동작의 전제**입니다 (PR #234 리뷰, 신호정).
   useEffect(() => {
     const dialog = ref.current;
     // ⚠️ 열기 **전에** 기억합니다. `<dialog>` 가 닫을 때 포커스를 되돌려 주기는 하지만, 여기서는

@@ -33,7 +33,7 @@ env:
   #     ruff는 pip 설치 버전을 pyproject에 문자열로 박아야 해서 핀을 하나로 줄일 수 없습니다.)
   #    이 값은 pre-commit의 `ruff-sync` 훅(scripts/check_ruff_sync.py)이 검사 대상으로 읽습니다 —
   #    변수 이름을 바꾸면 그 스크립트도 함께 고쳐야 합니다.
-  RUFF_VERSION: 0.16.3
+  RUFF_VERSION: 0.16.4
   # ruff/pre-commit이 대상으로 삼는 파이썬 경로와 동일하게 유지하세요.
   # ⚠️ .pre-commit-config.yaml 의 ruff 훅 `files:` 정규식과 같은 집합입니다
   #    (apps|packages|scripts|e2e|training). training 이 빠져 있던 적이 있는데, 그 폴더에 아직

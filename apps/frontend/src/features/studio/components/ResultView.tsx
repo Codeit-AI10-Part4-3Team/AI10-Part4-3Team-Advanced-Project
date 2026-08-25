@@ -5,6 +5,15 @@ import type { ApiErrorBody, Job } from "../types";
 interface ResultViewProps {
   job: Job;
   productName: string;
+  /**
+   * 조회 실패로 폴링이 멈춘 상태.
+   *
+   * ⚠️ **`job` 이 있는데도 멈춰 있을 수 있습니다.** `useRenderJob` 은 조회가 실패해도 직전
+   * 값을 지우지 않아, 몇 번 왕복한 뒤 실패하면 여기 실린 잡은 **마지막에 읽은 값**이고 더
+   * 이상 갱신되지 않습니다. 그 사실을 모르면 아래 대기 문구가 "완료되면 이 화면이 자동으로
+   * 바뀝니다" 라고 계속 말합니다 (PR #248 리뷰, 정승호).
+   */
+  pollingStopped: boolean;
 }
 
 function expiryText(expiresAt: string): string {
@@ -37,7 +46,7 @@ function JobFailure({ error }: { error?: ApiErrorBody }) {
   );
 }
 
-export function ResultView({ job, productName }: ResultViewProps) {
+export function ResultView({ job, productName, pollingStopped }: ResultViewProps) {
   return (
     <div className="result-section">
       <div className="result-heading">
@@ -52,12 +61,22 @@ export function ResultView({ job, productName }: ResultViewProps) {
           <div className="empty-blocks" aria-hidden="true"><i /><i /><i /></div>
           {/* 진행률을 만들지 않습니다. 외부 생성 API 는 남은 시간을 알려 주지 않으므로,
               여기서 그리는 진행률은 전부 지어낸 값입니다. */}
+          {/* ⚠️ **약속하는 문장만 갈아 끼웁니다.** "만들고 있습니다" 는 마지막으로 읽은
+              사실이라 폴링이 멈춰도 그대로 참이지만, "자동으로 바뀝니다" 는 폴링이 살아
+              있어야 성립합니다. 대기 순서도 갱신이 멈춘 값이라 함께 내립니다. */}
           <strong>이미지를 만들고 있습니다</strong>
-          <p>
-            {job.queuePosition === undefined
-              ? "완료되면 이 화면이 자동으로 바뀝니다. 창을 닫아도 다시 열면 이어집니다."
-              : `대기 순서 ${job.queuePosition}번입니다. GPU 한 대로 한 건씩 처리합니다.`}
-          </p>
+          {pollingStopped ? (
+            <p>
+              다만 상태 확인이 멈춰 이 화면은 더 이상 갱신되지 않습니다. 위 알림에서 다시
+              시도할 수 있습니다.
+            </p>
+          ) : (
+            <p>
+              {job.queuePosition === undefined
+                ? "완료되면 이 화면이 자동으로 바뀝니다. 창을 닫아도 다시 열면 이어집니다."
+                : `대기 순서 ${job.queuePosition}번입니다. GPU 한 대로 한 건씩 처리합니다.`}
+            </p>
+          )}
         </div>
       )}
 

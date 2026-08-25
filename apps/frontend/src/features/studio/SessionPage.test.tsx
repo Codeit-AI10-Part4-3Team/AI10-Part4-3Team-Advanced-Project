@@ -91,6 +91,28 @@ describe("렌더 상태 조회가 실패했을 때", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("읽다가 못 읽게 돼도 '자동으로 바뀝니다' 를 계속 말하지 않는다", async () => {
+    // ⚠️ **`job` 이 있는데도 멈춘 경우입니다.** `useRenderJob` 은 조회가 실패해도 직전 값을
+    // 지우지 않으므로(`job: previous.job`), 몇 번 왕복한 뒤 실패하면 `job !== null` 이 먼저
+    // 걸려 `ResultView` 가 그대로 그려집니다. 이 파일의 다른 시험은 전부 `job` 이 처음부터
+    // `null` 인 상태로 시작해 이 경로를 지나지 않았습니다 (PR #248 리뷰, 정승호).
+    //
+    // ⚠️ 오히려 이쪽이 더 흔합니다. 렌더가 분 단위라 여러 번 왕복하는 동안 한 번 실패하는
+    // 것이, 첫 요청부터 실패하는 것보다 자연스럽습니다 (`useRenderJob` 주석).
+    vi.mocked(api.getJob)
+      .mockResolvedValueOnce({ job: RUNNING_JOB, retryAfterS: 0.01 })
+      .mockRejectedValue(new ApiError(500, "INTERNAL", "dev"));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument(), { timeout: 3000 });
+
+    // 마지막으로 읽은 사실은 그대로 둡니다 - 잡은 실제로 돌고 있었습니다.
+    expect(screen.getByText(/이미지를 만들고 있습니다/)).toBeInTheDocument();
+    // 갱신을 약속하는 문장만 사라져야 합니다.
+    expect(screen.queryByText(/자동으로 바뀝니다/)).not.toBeInTheDocument();
+    expect(screen.getByText(/더 이상 갱신되지 않습니다/)).toBeInTheDocument();
+  });
+
   it("다시 시도를 누르면 옛 오류가 남지 않는다", async () => {
     // ⚠️ 되살리기는 `pollingStopped` 만 내립니다. `clear()` 가 없으면 문구는 그대로 남고
     // 재시도 버튼만 사라져, 사용자가 한 번 누른 뒤 다시 누를 방법이 없어집니다.

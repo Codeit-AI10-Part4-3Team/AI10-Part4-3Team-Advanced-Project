@@ -131,7 +131,11 @@ export function DraftPanel({
           행동에 버튼이 두 개가 됩니다. */}
       {session.jobId !== undefined &&
         (job !== null ? (
-          <ResultView job={job} productName={session.brief.productName} />
+          <ResultView
+            job={job}
+            productName={session.brief.productName}
+            pollingStopped={pollingStopped}
+          />
         ) : pollingStopped ? (
           <p className="notice notice-failed">
             렌더 상태를 확인하지 못했습니다. 위 알림에서 다시 시도할 수 있습니다.

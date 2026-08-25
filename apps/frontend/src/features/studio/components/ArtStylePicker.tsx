@@ -38,6 +38,12 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
   // ⚠️ **`artStyleId` 가 아니라 URL 로 기억합니다.** 운영자가 파일을 넣고 URL 을 고치면 같은
   // 화풍에 새 URL 이 옵니다 - 식별자로 기억하면 그 카드는 고쳐진 뒤에도 영영 실패로 남습니다.
   // 실패한 것은 화풍이 아니라 그 주소입니다.
+  //
+  // ⚠️ **이 이득이 발동하는 조건은 좁습니다.** 실제 복구는 대개 URL 이 아니라 빠진 파일을
+  // 볼륨에 넣는 쪽이고(infra/README.md), 파일명과 URL 은 `prepare_handoff.py` 가 함께
+  // 고정해 내주므로 고친 뒤에도 같은 URL 이 옵니다. 그때는 열려 있던 탭이 새로고침 전까지
+  // 실패로 남습니다. 그래도 이쪽이 나은 것은 식별자로 기억하는 편이 더 나쁘기 때문이지,
+  // "고치면 화면이 따라온다" 는 뜻이 아닙니다 (PR #234 리뷰, 신호정).
   const [failedUrls, setFailedUrls] = useState<ReadonlySet<string>>(() => new Set());
   const markFailed = (url: string) => {
     setFailedUrls((previous) => (previous.has(url) ? previous : new Set(previous).add(url)));
@@ -46,6 +52,9 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
   // 거릅니다 - 확대 버튼과 다이얼로그가 이 판단 하나를 같이 씁니다.
   const hasExample = (style: ArtStyle) =>
     style.exampleImageUrl !== "" && !failedUrls.has(style.exampleImageUrl);
+  // 확대창이 닫힐 때 포커스가 돌아올 자리입니다. 라디오는 눈에 보이지 않지만 포커스를
+  // 받으며, `.art-style-card:focus-within` 이 그 카드에 테두리를 그립니다.
+  const radioId = (artStyleId: string) => `${groupName}-${artStyleId}`;
 
   if (styles.length === 0) {
     // 후보가 비어 있는 것은 지금 정상입니다 (`ADGEN_ART_STYLES` 미설정). 빈 격자를 그리면
@@ -72,6 +81,7 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
             <label>
               <input
                 type="radio"
+                id={radioId(style.artStyleId)}
                 name={groupName}
                 value={style.artStyleId}
                 checked={style.artStyleId === value}
@@ -133,8 +143,12 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
 
       {zoomed !== null && (
         <ArtStyleZoom
+          // 화풍마다 새 인스턴스입니다. 아래 효과가 빈 의존성으로 한 번만 도므로, 인스턴스가
+          // 재사용되면 첫 화풍의 값을 계속 들게 됩니다.
+          key={zoomed.artStyleId}
           style={zoomed}
           failed={!hasExample(zoomed)}
+          fallbackFocusId={radioId(zoomed.artStyleId)}
           onLoadError={() => markFailed(zoomed.exampleImageUrl)}
           onClose={() => setZoomed(null)}
         />
@@ -163,11 +177,14 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
 function ArtStyleZoom({
   style,
   failed,
+  fallbackFocusId,
   onLoadError,
   onClose,
 }: {
   style: ArtStyle;
   failed: boolean;
+  /** `opener` 가 사라졌을 때 대신 포커스를 받을 요소. 그 화풍 카드의 라디오입니다. */
+  fallbackFocusId: string;
   onLoadError: () => void;
   onClose: () => void;
 }) {
@@ -183,9 +200,16 @@ function ArtStyleZoom({
     dialog?.showModal();
     return () => {
       dialog?.close();
-      opener?.focus?.();
+      // ⚠️ **`opener` 가 그 사이에 사라질 수 있습니다.** 여기서 이미지가 실패하면 그 카드의
+      // 확대 버튼이 조건에서 빠져 DOM 에서 떨어지는데, `opener` 가 바로 그 버튼입니다.
+      // 문서에 붙어 있지 않은 노드의 `focus()` 는 아무 일도 하지 않아, 포커스가 `body` 로
+      // 남고 다음 Tab 이 화면 맨 위에서 다시 시작합니다. 8 칸 격자에서 있던 자리를 잃는
+      // 것이라, 그때는 그 카드의 라디오로 보냅니다 (PR #234 리뷰, 신호정).
+      const target =
+        opener?.isConnected === true ? opener : document.getElementById(fallbackFocusId);
+      target?.focus?.();
     };
-  }, []);
+  }, [fallbackFocusId]);
 
   // ⚠️ **`close` 가 아니라 `cancel` 을 듣습니다.** `close` 는 우리가 부른 `close()` 에도
   // 발생하는데, StrictMode 는 효과를 두 번 돌리므로 정리 단계의 `close()` 가 곧바로

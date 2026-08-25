@@ -200,6 +200,35 @@ describe("예시 이미지를 못 불러왔을 때 (#216)", () => {
     expect(screen.queryByText("예시를 불러오지 못했습니다")).not.toBeInTheDocument();
   });
 
+  it("확대창 안에서 실패하면 닫을 때 그 카드로 포커스가 돌아온다", () => {
+    // ⚠️ **`opener` 가 그 사이에 사라지는 경우입니다.** 확대창 안에서 이미지가 실패하면 그
+    // 카드의 확대 버튼이 조건에서 빠져 DOM 에서 떨어지는데, 닫을 때 되돌아갈 자리로 잡아 둔
+    // 것이 바로 그 버튼입니다. 떨어진 노드의 `focus()` 는 아무 일도 하지 않아 포커스가
+    // `body` 에 남고, 8 칸 격자에서 있던 자리를 잃습니다.
+    //
+    // ⚠️ 이 파일 머리말이 적은 대로 포커스 **가두기**는 여기서 재지 않습니다(jsdom 이
+    // top layer 를 구현하지 않습니다). 재는 것은 `focus()` 를 **어디로 부르는가** 뿐이고,
+    // 그것은 jsdom 에서도 `document.activeElement` 로 확인됩니다.
+    render(<ArtStylePicker styles={THREE} value="" onChange={() => undefined} />);
+    const zoom = screen.getByRole("button", { name: /레트로 팝아트 예시 크게 보기/ });
+    // ⚠️ **포커스를 손으로 줍니다.** 실제 브라우저는 버튼을 누르면 포커스를 주지만 jsdom 은
+    // 주지 않습니다. 그대로 두면 `opener` 가 `body` 로 잡혀 이 시험이 재려는 경로("되돌아갈
+    // 자리가 사라진다")를 아예 지나지 않고, 회귀를 넣어도 통과합니다.
+    zoom.focus();
+    fireEvent.click(zoom);
+
+    const dialog = screen.getByRole("dialog");
+    fireEvent.error(dialog.querySelector("img") as HTMLImageElement);
+    // 되돌아갈 자리였던 확대 버튼이 이 시점에 사라집니다.
+    expect(
+      screen.queryByRole("button", { name: /레트로 팝아트 예시 크게 보기/ }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "닫기" }));
+
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /레트로 팝아트/ }));
+  });
+
   it("확대창이 열린 뒤 실패해도 창은 남고 이유를 말한다", () => {
     // 스스로 닫으면 사용자는 자기가 잘못 눌렀다고 읽습니다. 격자의 썸네일은 `loading="lazy"`
     // 라 화면 밖이면 받아 본 적이 없어, 여기서 처음 실패하는 경로가 실제로 있습니다.

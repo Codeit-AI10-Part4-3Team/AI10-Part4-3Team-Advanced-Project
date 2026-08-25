@@ -198,6 +198,11 @@ button { color: inherit; }
 .result-actions { display: grid; gap: 6px; justify-items: center; }
 .result-actions .submit-button { display: grid; place-items: center; text-decoration: none; }
 .result-actions small { color: var(--muted); font-size: 10px; }
+/* 이미지가 있던 자리를 그대로 차지합니다 - 문구만 남으면 결과 칸이 접혀 사용자가 세션을
+   잘못 열었다고 읽습니다. */
+.result-expired { display: grid; gap: 6px; place-content: center; margin: 0; padding: 24px 16px; min-height: 160px; border: 1px dashed var(--line); border-radius: 12px; background: #f7f8fa; text-align: center; }
+.result-expired strong { font-size: 12px; }
+.result-expired span { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 @media (max-width: 960px) {
   .app-shell { grid-template-columns: 78px minmax(0, 1fr); }

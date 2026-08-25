@@ -90,7 +90,7 @@ button { color: inherit; }
   .error-notice { top: 10px; right: 10px; left: 10px; width: auto; }
 }
 
-.workspace-error { max-width: 1160px; margin: 0 auto 15px; padding: 11px 13px; border-radius: 10px; color: #8d2033; background: #fdecef; font-size: 12px; line-height: 1.6; }
+.workspace-error { max-width: 1160px; margin: 0 auto 15px; padding: 11px 13px; border-radius: 10px; color: var(--danger); background: #fdecef; font-size: 12px; line-height: 1.6; }
 .workspace-loading { max-width: 1160px; margin: 0 auto; color: var(--muted); font-size: 13px; }
 .workspace-grid { max-width: 1160px; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, .8fr) minmax(430px, 1.2fr); gap: 17px; align-items: start; }
 
@@ -102,7 +102,14 @@ button { color: inherit; }
 /* ⚠️ **가운데는 내용에 맞춘 고정 폭입니다.** 카드가 132px 상한이라 열을 넓혀도 그림은
    커지지 않고 양옆 여백만 늘어납니다. 2 x 132 + 격자 간격 8 + 패널 안쪽 여백 46 이
    그대로 이 값이고, 남는 폭은 양옆 두 패널이 가져갑니다. */
-.workspace-grid-3 { grid-template-columns: minmax(300px, 1fr) 318px minmax(320px, 1fr); align-items: stretch; gap: 26px; }
+.workspace-grid-3 { grid-template-columns: minmax(200px, 1fr) 318px minmax(220px, 1fr); align-items: stretch; gap: 26px; }
+/* ⚠️ **3열은 여기서 접습니다.** `minmax` 의 최소값은 열을 접지 않고 **넘치게** 만듭니다 -
+   세 열의 하한 합계가 남는 폭보다 커지면 가로 스크롤이 나고, 그러면 '8종이 스크롤 없이
+   보인다' 는 이 화면의 목적이 세로에서 가로로 옮겨 갈 뿐입니다. 1052px 은 위 하한으로
+   실측한 경계입니다(1053 부터 3열이 넘치지 않습니다).
+   기존 960px 구간과 별개로 두는 이유는 그쪽이 2열 화면(`workspace-grid`) 몫이기
+   때문입니다 (PR #266 리뷰, 신호정). */
+@media (max-width: 1052px) { .workspace-grid-3 { grid-template-columns: minmax(0, 1fr); } }
 
 /* `:has()` 를 못 읽는 브라우저는 기존 여백을 그대로 씁니다 - 좁아지지 않을 뿐 깨지지 않습니다. */
 .workspace:has(.new-session) { padding-inline: clamp(12px, 1.4vw, 22px); }
@@ -138,7 +145,7 @@ button { color: inherit; }
 .empty-blocks i { width: 35px; height: 45px; border-radius: 7px; background: #e5e7ed; }
 .empty-blocks i:nth-child(2) { background: var(--blue-soft); }
 .step-list { max-width: 330px; margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.9; text-align: left; }
-.form-error { margin: -6px 0 15px; color: #8d2033; font-size: 11px; }
+.form-error { margin: -6px 0 15px; color: var(--danger); font-size: 11px; }
 .submit-hint { margin: 7px 0 0; color: var(--muted); font-size: 10px; text-align: center; }
 .link-button { margin-top: 4px; padding: 0; border: 0; color: var(--blue); background: transparent; font-size: 11px; font-weight: 700; text-decoration: underline; cursor: pointer; }
 /* 오류 배너 안에서는 문장의 일부입니다 - 파란 링크로 튀면 안내가 아니라 다른 곳으로 보내는 것처럼 읽힙니다. */

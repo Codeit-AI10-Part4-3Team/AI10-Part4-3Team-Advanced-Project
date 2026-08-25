@@ -437,6 +437,62 @@ ssh "$ADCRAFT_VM" 'cd /srv/adcraft/app && bash scripts/deploy-vm.sh'
   보존 기간 정리 배치가 한 곳만 보게 하기 위해서입니다
   ([세션_보관_정책.md](../docs/기술문서/세션_보관_정책.md) 2절).
 
+### 화풍 예시 8장을 볼륨에 넣기 (`/data/art-styles`)
+
+이 여덟 장만 **사람이 직접 넣습니다.** 생성 이미지는 커밋하지 않으므로(구현_범위 4.3절)
+공유 드라이브에서 받아 볼륨에 옮기는 절차가 필요합니다. 파일 이름과 값은
+`notebooks/hj/verify05_art_styles/prepare_handoff.py`가 정하고, 그대로 씁니다.
+
+```bash
+cd /srv/adcraft/app
+C="docker compose -f infra/docker-compose.yml -p adgen"
+
+$C exec -T backend mkdir -p /data/art-styles       # 컨테이너 사용자 소유로 만듭니다
+$C cp ./전달/style-01-traits.webp backend:/data/art-styles/
+# ... 나머지 일곱 장
+$C exec -T backend ls -l /data/art-styles
+```
+
+- ⚠️ **`ADGEN_ART_STYLE_DIR`을 `/data`로 줄이지 마세요.** 이 경로는 `/static/art-styles`로
+  **인증 없이** 열립니다. 한 단계 위를 가리키면 `adgen.sqlite`(계정 해시와 세션)와 업로드
+  사진이 그대로 공개됩니다. backend가 기동에서 검사하고 어기면 뜨지 않습니다
+  (`api/main.py`의 `_check_art_style_dir`).
+- ⚠️ **파일이 먼저, `exampleImageUrl`이 나중입니다. 순서를 뒤집지 마세요.**
+  `ArtStylePicker`의 분기는 `exampleImageUrl === ""` 하나이고 `<img>`에 `onError`가
+  없습니다. 즉 **URL이 채워졌는데 파일이 없으면 "예시 준비 중"이 아니라 브라우저의 깨진
+  이미지**가 뜨고, 확대 버튼도 함께 떠서 누르면 빈 다이얼로그가 열립니다. 여덟 중 하나만
+  이름이 어긋나도 그 칸이 그렇게 됩니다 (PR #208 리뷰, 신호정).
+- **디렉토리가 없어도 스택은 뜹니다.** 그때는 그 URL만 404입니다. 파일이 오기 전에
+  `ADGEN_ART_STYLES`를 **빈 `exampleImageUrl`로** 먼저 넣어도 되는 이유가 이것입니다 -
+  빈 문자열이라야 화면이 자리를 잡습니다.
+- **파일을 넣은 뒤 재배포는 필요 없습니다.** 마운트가 요청 시점에 디렉토리를 읽습니다.
+  다만 `ADGEN_ART_STYLES`의 `exampleImageUrl`을 채우는 것은 `.env` 변경이므로 그쪽은
+  `bash scripts/deploy-vm.sh --no-build`가 필요합니다.
+- **같은 이름으로 다시 넣어도 됩니다.** 캐시는 `public, max-age=3600`이라 한 시간 안에
+  갈립니다 (`api/main.py`의 `ART_STYLE_CACHE_CONTROL`).
+
+**2026-08-22에 8장으로 실제 돌렸습니다.** 아래는 그때 나온 것입니다.
+
+- **`compose cp`는 파일을 root가 아니라 보낸 쪽 uid 그대로 만듭니다.** 호스트에서
+  `spai1029`(1022:1023)로 보냈더니 컨테이너 안에서도 `1022 1023`으로 보입니다 - 컨테이너에
+  그 uid를 가진 사용자가 없어 이름 대신 숫자로 나옵니다. 이 절에 원래 "root 소유가 된다"고
+  적어 두었는데 **틀린 예상이었습니다.**
+- **그래도 읽힙니다.** 0644라 appuser(10001)가 소유자도 그룹도 아니지만 others 읽기로
+  전부 열립니다. 컨테이너 안에서 8장을 실제로 읽어 sha256을 냈고, `handoff.csv`의 값과
+  8/8 일치했습니다(전달 중 손상 없음). 합계 1.01MB.
+- 그래서 **소유권을 고치는 단계는 필요 없습니다.** 앱이 읽기만 하기 때문이며, 쓰는 경로였다면
+  이야기가 달라집니다 - 복원 절차가 `cp`를 금지하는 이유가 그것입니다(위 "복원할 때").
+
+**권한이 틀렸을 때는 404처럼 보이지 않습니다.** 나중에 이 절차가 실패하면 증상이 이렇습니다
+(PR #208 리뷰에서 신호정 실측):
+
+- 파일을 읽지 못하면(예: 0600에 다른 소유자) **응답이 시작된 뒤 `PermissionError`**가 납니다.
+  클라이언트에는 끊긴 200으로 보이고 backend 로그에만 트레이스백이 남습니다.
+- **디렉토리 자체를 읽지 못하면 starlette이 그것을 401로 바꿉니다.** 인증 밖 경로가
+  `{"code":"UNAUTHORIZED"}`를 돌려주므로 원인이 로그인 문제로 보입니다.
+
+그래서 확인할 것이 파일 모드만이 아니라 `mkdir -p`로 만든 디렉토리의 실행 비트까지입니다.
+
 ### 상태 파일 백업 (`scripts/backup-db.sh`)
 
 ```bash

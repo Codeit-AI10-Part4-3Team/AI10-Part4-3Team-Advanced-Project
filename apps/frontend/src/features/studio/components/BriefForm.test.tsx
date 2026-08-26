@@ -62,9 +62,11 @@ describe("필수 항목 표시", () => {
   it("계약이 required 로 둔 세 항목에 (필수) 가 붙는다", () => {
     // ⚠️ 목록의 근거는 openapi.yaml 의 `SessionCreateRequest.required` 입니다. `outputType`
     // 은 기본값이 있어 비는 경우가 없으므로 표시하지 않습니다.
+    // ⚠️ 라벨을 **문구가 아니라 폼 컨트롤로** 찾습니다. 비활성 안내가 같은 단어를 쓰기
+    // 때문에(`아직 비어 있습니다: 제품명, ...`) 텍스트로 찾으면 둘 다 걸립니다.
     setup();
     for (const label of ["제품 이미지", "제품명", "제품 장점"]) {
-      const field = screen.getByText(label, { exact: false }).closest("label");
+      const field = screen.getByLabelText(new RegExp(label)).closest("label");
       expect(within(field as HTMLElement).getByText("(필수)")).toBeInTheDocument();
     }
   });
@@ -79,7 +81,7 @@ describe("필수 항목 표시", () => {
     // "소구점" 은 업계 용어라 처음 쓰는 사람이 무엇을 적어야 할지 모릅니다. 계약의 필드
     // 이름(`sellingPoint`)은 그대로이고 바뀐 것은 화면 문구뿐입니다.
     setup();
-    expect(screen.getByText("제품 장점", { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText(/제품 장점/)).toBeInTheDocument();
     expect(screen.queryByText(/소구점/)).not.toBeInTheDocument();
   });
 });
@@ -90,7 +92,27 @@ describe("시작 버튼", () => {
   it("필수가 비면 눌리지 않는다", () => {
     setup();
     expect(startButton()).toBeDisabled();
-    expect(screen.getByText(/필수 항목을 모두 채우면/)).toBeInTheDocument();
+    // ⚠️ **어느 칸이 비었는지 이름을 댑니다.** 버튼을 잠그면 브라우저의 `required` 안내가
+    // 도달하지 못해(비활성 버튼은 클릭도 Enter 도 아무 일을 하지 않습니다), 필수 셋 중
+    // 무엇이 남았는지 화면이 말하지 않으면 사용자가 스스로 찾아야 합니다.
+    expect(screen.getByText(/아직 비어 있습니다: 제품 이미지, 제품명, 제품 장점/)).toBeInTheDocument();
+  });
+
+  it("채운 것은 안내에서 빠진다", () => {
+    setup();
+    fireEvent.change(screen.getByPlaceholderText(/행복 블렌드 커피/), {
+      target: { value: "행복 블렌드 커피" },
+    });
+    const hint = screen.getByText(/아직 비어 있습니다/);
+    expect(hint).toHaveTextContent("제품 이미지");
+    expect(hint).toHaveTextContent("제품 장점");
+    expect(hint).not.toHaveTextContent("제품명,");
+  });
+
+  it("공백만 친 칸은 여전히 비어 있다고 말한다", () => {
+    setup();
+    fireEvent.change(screen.getByPlaceholderText(/행복 블렌드 커피/), { target: { value: "   " } });
+    expect(screen.getByText(/아직 비어 있습니다/)).toHaveTextContent("제품명");
   });
 
   it("사진과 제품명만으로는 열리지 않는다", () => {

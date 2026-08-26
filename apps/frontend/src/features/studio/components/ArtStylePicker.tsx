@@ -3,7 +3,7 @@ import type { ArtStyle } from "../types";
 
 interface ArtStylePickerProps {
   styles: ArtStyle[];
-  /** 빈 문자열은 **미선택**입니다. 그때 서버가 후보군에서 무작위로 채웁니다. */
+  /** 빈 문자열은 **미선택**입니다. 그때 서버가 후보군에서 무작위로 선택합니다. */
   value: string;
   onChange: (artStyleId: string) => void;
 }
@@ -14,6 +14,10 @@ interface ArtStylePickerProps {
  * ⚠️ **드롭다운이 아니라 격자인 이유는 비교입니다.** 화풍은 말로 전달되지 않아 예시 이미지를
  * 함께 보여주기로 되어 있고(2026-08-11 회의), 하나씩 열어 보는 방식으로는 후보끼리 견줄 수가
  * 없습니다. 4 x 2 는 기획서 12.2 의 화면 도식이며 **후보가 8 종인 근거도 그 격자**입니다.
+ *
+ * ⚠️ **열 수는 이 컴포넌트가 정하지 않습니다.** 새 세션의 STEP 02 는 `styles.css` 가 2 x 4 로
+ * 덮어써 그림을 키웁니다(86px 조건을 벗어나기 위해서입니다). 4 x 2 가 남는 곳은 브리프 수정
+ * 화면이고, 그쪽은 패널이 좁아 2열이면 카드가 오히려 작아집니다.
  *
  * ⚠️ **후보를 화면이 지어내지 않습니다.** 목록은 `GET /v1/art-styles` 에서만 오고, 카드에
  * 적을 수 있는 것은 계약의 `ArtStyle` 이 주는 `name` 과 `exampleImageUrl` 뿐입니다. 특징
@@ -85,7 +89,7 @@ export function ArtStylePicker({ styles, value, onChange }: ArtStylePickerProps)
     // 고장으로 읽히므로 이유를 말하고 격자를 내립니다.
     return (
       <p className="art-style-empty">
-        화풍 후보가 아직 설정에 들어오지 않았습니다. 서버가 무작위로 채웁니다.
+        화풍 후보가 아직 설정에 들어오지 않았습니다. 서버가 무작위로 선택합니다.
       </p>
     );
   }

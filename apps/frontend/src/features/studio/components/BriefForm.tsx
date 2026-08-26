@@ -84,11 +84,21 @@ export function BriefForm({ onSubmit, pending, guide }: BriefFormProps) {
    * ⚠️ 공백만 친 것은 채운 것이 아닙니다. 계약이 `minLength: 1` 이라 서버는 공백 하나도
    * 받지만, 그렇게 만든 세션은 가드레일의 근거가 비어 시안이 거절됩니다.
    */
-  const ready =
-    image !== null &&
-    imageError === null &&
-    fields.productName.trim() !== "" &&
-    fields.sellingPoint.trim() !== "";
+  /**
+   * 아직 비어 있는 필수 칸.
+   *
+   * ⚠️ **버튼을 잠그면 브라우저의 `required` 안내가 도달하지 못합니다.** 예전에는 눌렀을 때
+   * 브라우저가 "이 입력란을 작성하세요" 를 빈 칸 위에 띄웠는데, 비활성 버튼은 클릭도 암묵적
+   * 제출(Enter)도 아무 일을 하지 않습니다. 필수가 셋이라 이름을 대 주지 않으면 사용자가
+   * 스스로 찾아야 합니다 (PR #266 리뷰, 신호정).
+   */
+  const missing = [
+    image === null ? "제품 이미지" : null,
+    fields.productName.trim() === "" ? "제품명" : null,
+    fields.sellingPoint.trim() === "" ? "제품 장점" : null,
+  ].filter((name): name is string => name !== null);
+
+  const ready = missing.length === 0 && imageError === null;
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -185,14 +195,19 @@ export function BriefForm({ onSubmit, pending, guide }: BriefFormProps) {
           />
         </label>
 
-        {/* ⚠️ 필수를 다 채우기 전에는 누를 수 없습니다. 브라우저의 `required` 검사도 그대로
-            두었습니다 - 이 버튼이 막는 것은 **누르는 행동**이고, 그 검사는 어떤 칸이
-            비었는지를 말해 줍니다. 둘 중 하나만 두면 왜 안 되는지 알 수 없습니다. */}
+        {/* ⚠️ 필수를 다 채우기 전에는 누를 수 없습니다. `required` 속성은 남겨 두었지만
+            **그 검사는 이제 도달하지 않습니다** - `ready` 가 거짓인 조건이 세 칸이 빈 조건의
+            상집합이라, 폼이 제출되는데 그 칸이 비어 있는 상태가 존재하지 않습니다. 그래서
+            어느 칸이 비었는지는 아래 문구가 직접 말합니다. */}
         <button className="submit-button" type="submit" disabled={pending || !ready}>
           {pending ? "세션을 만드는 중..." : "광고 만들기 시작"}
         </button>
         {!ready && !pending && (
-          <p className="submit-hint">필수 항목을 모두 채우면 시작할 수 있습니다.</p>
+          <p className="submit-hint">
+            {missing.length > 0
+              ? `아직 비어 있습니다: ${missing.join(", ")}`
+              : "이미지를 다시 골라 주세요."}
+          </p>
         )}
       </section>
 

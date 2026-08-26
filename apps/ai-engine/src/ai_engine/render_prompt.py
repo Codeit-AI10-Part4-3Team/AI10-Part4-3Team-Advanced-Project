@@ -11,7 +11,16 @@
 않는 문장이 됩니다. 실험 조건을 고칠 때 이 파일도 함께 보세요.
 """
 
-from ai_engine.models import ComicDraft, Draft, ImageRenderRequest, Panel, SingleAdDraft
+from ai_engine.draft_prompt import ROLE_BEATS
+from ai_engine.models import (
+    PANEL_ROLES,
+    ComicDraft,
+    Draft,
+    ImageRenderRequest,
+    Panel,
+    PanelRole,
+    SingleAdDraft,
+)
 
 GROUNDING = "이 정보에 없는 효능, 수치, 성분, 수상 이력, 타사 비교를 이미지 안에 쓰지 않는다."
 """근거 기반 생성 (INV-6, AGENTS.md 설계 제약).
@@ -77,8 +86,8 @@ SINGLE_PANEL = "정사각형 만화 한 칸. 격자나 여러 칸으로 나누�
 문장입니다 (`notebooks/hj/verify01_korean_text_rendering/run_panels.py`)."""
 
 KEEP_REFERENCE = (
-    "입력으로 준 이미지에 나온 인물과 제품을 그대로 유지한다. 얼굴, 머리 모양, 복장, "
-    "제품 패키지의 색과 문구가 같아야 한다. 장면과 동작만 아래 지시대로 바꾼다."
+    "입력으로 준 이미지에 나온 인물을 그대로 유지한다. 얼굴, 머리 모양, 복장이 같아야 한다. "
+    "장면과 동작만 아래 지시대로 바꾼다."
 )
 """2 ~ 6번 칸에만 붙습니다. 1번 칸은 레퍼런스가 될 그림 자체라 붙일 대상이 없습니다.
 
@@ -87,7 +96,43 @@ KEEP_REFERENCE = (
 해결되는 종류가 아니므로 - 레퍼런스는 1번 칸 하나뿐이고 그 안에 "닦은 뒤"라는 상태가 없습니다 -
 여기에 상태 관련 지시를 덧붙이지 마세요. 검증 3순위 판정 시트가 이 축을 묻도록 고치는 것이
 먼저입니다.
+
+⚠️ **"제품을 유지한다" 는 2026-08-26 에 빠졌습니다** (이슈 #272). 1번 칸은 후킹이라 제품이
+없고, 레퍼런스에 없는 것을 유지하라고 하면 모델이 제품을 지어내 1 ~ 3번 칸에 그립니다 -
+대사는 문제 제기인데 그림은 이미 해결 중인 세트가 그렇게 나왔습니다. **대신 4 ~ 6번 칸의
+포장 모양이 서로 고정되지 않습니다** - 다섯 칸 모두 1번 칸 하나를 레퍼런스로 보기 때문이고
+(ADR-0017 의 동시 호출), 이 축을 고정하려면 제품 사진을 두 번째 레퍼런스로 보내야 합니다
+(`brief.product_image_url` 이 URL 이라 받아 오는 경로가 따로 필요합니다).
 """
+
+PRODUCT_ENTERS_AT: PanelRole = "solution"
+"""제품이 그림에 처음 등장하는 칸의 역할 (기획서 7.3 의 4번 "제품 등장 및 해결").
+
+칸 번호가 아니라 역할로 적습니다. 번호는 역할에서 나오고(INV-5) 순서를 정하는 것은
+`PANEL_ROLES` 이므로, 여기에 `4` 를 박으면 같은 사실이 두 곳에 생깁니다.
+"""
+
+PRODUCT_ENTERS_AT_INDEX = PANEL_ROLES.index(PRODUCT_ENTERS_AT) + 1
+"""제품이 처음 등장하는 칸 번호. 프롬프트 문장이 사람에게 읽히는 번호로 말해야 해서 씁니다."""
+
+PRODUCT_NOT_YET = (
+    f"제품과 포장은 이 칸에 그리지 않는다. 제품은 {PRODUCT_ENTERS_AT_INDEX}번 칸에서 처음 "
+    "등장한다. 이 칸에는 인물과 상황만 그린다."
+)
+"""`PRODUCT_ENTERS_AT` 앞 칸들(후킹, 상황 제시, 문제와 고민)에 붙습니다.
+
+⚠️ **제품명과 소구점은 그대로 보냅니다.** 여기서 막는 것은 "그리지 마라" 하나이고, 근거를
+빼면 `GROUNDING` 이 검사할 대상이 사라집니다 (`_common_head` 의 이유와 같습니다).
+"""
+
+
+def shows_product(role: PanelRole) -> bool:
+    """이 역할의 칸이 제품을 그리는가. `PRODUCT_ENTERS_AT` 부터 참입니다 (기획서 7.3).
+
+    역할 이름이 아니라 **순서**로 봅니다 - 뒤 칸(성능과 효과, 만족과 CTA)은 제품이 이미
+    등장한 뒤라 함께 참이어야 하고, 목록에 역할이 하나 늘면 그 자리도 순서가 정합니다.
+    """
+    return PANEL_ROLES.index(role) >= PANEL_ROLES.index(PRODUCT_ENTERS_AT)
 
 
 def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bool) -> str:
@@ -97,14 +142,27 @@ def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bo
     `request.spec` 에서 나눠 나옵니다 - 문장에도 적으면 기획서 10.2 의 숫자가 두 곳에 생기고,
     한쪽만 고치는 순간 어긋납니다 (미결정_대장 N16 과 같은 이유).
 
-    문장의 뼈대는 실험 하네스의 `panel_prompt` 입니다. **한 곳만 다릅니다** - 브리프의
-    `character` 를 함께 보냅니다. 실험은 시나리오가 고정이라 인물 묘사가 장면 문장 안에 있었지만,
-    운영 경로에서는 1번 칸에 인물을 알려 줄 통로가 이 필드뿐입니다 (레퍼런스가 없는 유일한 칸).
+    문장의 뼈대는 실험 하네스의 `panel_prompt` 입니다. **두 곳이 다릅니다** - 브리프의
+    `character` 를 함께 보내고(실험은 시나리오가 고정이라 인물 묘사가 장면 문장 안에 있었지만,
+    운영 경로에서는 1번 칸에 인물을 알려 줄 통로가 이 필드뿐입니다. 레퍼런스가 없는 유일한
+    칸입니다), **칸의 역할을 함께 보냅니다.**
+
+    ⚠️ **역할이 빠지면 대사와 그림이 어긋납니다** (이슈 #272, 2026-08-26 실물 회차). 카피
+    쪽은 `draft_prompt` 가 역할을 알려 주고 받아 오므로 `scene` 과 `dialogue` 는 기획서 7.3
+    을 따르는데, 그림 쪽에는 통로가 없어 1 ~ 3번 칸(문제 제기)에 제품이 이미 놓이고 주인공이
+    이미 쓰고 있는 세트가 나왔습니다. 역할은 `panel.index` 가 정하므로 여기서 새로 고를 값이
+    없습니다 (INV-5).
     """
-    lines = [SINGLE_PANEL, f"전체 6칸 중 {panel.index}번 칸이다."]
+    lines = [
+        SINGLE_PANEL,
+        f"전체 6칸 중 {panel.index}번 칸이다.",
+        f"이 칸의 역할은 {ROLE_BEATS[panel.role]}.",
+    ]
     if with_reference:
         lines.append(KEEP_REFERENCE)
     lines.append(_common_head(request))
+    if not shows_product(panel.role):
+        lines.append(PRODUCT_NOT_YET)
     if request.brief.character is not None:
         character = request.brief.character
         lines.append(f"등장인물의 외모는 {character.appearance}, 복장은 {character.outfit}.")

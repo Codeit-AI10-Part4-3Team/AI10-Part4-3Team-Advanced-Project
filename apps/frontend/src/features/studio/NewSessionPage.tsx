@@ -34,7 +34,9 @@ export function NewSessionPage() {
   };
 
   return (
-    <>
+    // ⚠️ 이 클래스가 폭을 정합니다. 세 패널이 화면을 채우도록 여기서만 `max-width` 를 풀고,
+    // 좌우 여백도 좁힙니다 (styles.css 의 `.workspace:has(.new-session)`).
+    <div className="new-session">
       <header className="workspace-header">
         <div>
           <p className="eyebrow">AI CREATIVE STUDIO</p>
@@ -44,29 +46,33 @@ export function NewSessionPage() {
 
       {failure !== null && <ErrorNotice failure={failure} onDismiss={clear} />}
 
-      <div className="workspace-grid">
-        <BriefForm onSubmit={(input) => void create(input)} pending={pending} />
-
-        <section className="panel draft-panel" aria-labelledby="guide-heading">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">STEP 02</p>
-              <h2 id="guide-heading">브리프 · 시안 · 결과</h2>
+      {/* 격자는 `BriefForm` 이 그립니다 - 세 패널이 한 `<form>` 에 속해야 화풍 라디오가
+          제출에 함께 실립니다. 여기서는 세 번째 칸의 내용만 넘깁니다. */}
+      <BriefForm
+        onSubmit={(input) => void create(input)}
+        pending={pending}
+        guide={
+          <section className="panel draft-panel" aria-labelledby="guide-heading">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">STEP 03</p>
+                <h2 id="guide-heading">브리프, 시안, 결과</h2>
+              </div>
+              <span className="status-chip">입력 대기</span>
             </div>
-            <span className="status-chip">입력 대기</span>
-          </div>
 
-          <div className="empty-state">
-            <div className="empty-blocks" aria-hidden="true"><i /><i /><i /></div>
-            <strong>왼쪽 정보를 제출하면 여기서 이어집니다</strong>
-            <ol className="step-list">
-              {STEPS.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-          </div>
-        </section>
-      </div>
-    </>
+            <div className="empty-state">
+              <div className="empty-blocks" aria-hidden="true"><i /><i /><i /></div>
+              <strong>왼쪽 정보를 제출하면 여기서 이어집니다</strong>
+              <ol className="step-list">
+                {STEPS.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          </section>
+        }
+      />
+    </div>
   );
 }

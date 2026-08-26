@@ -45,7 +45,7 @@ export function AppSidebar() {
     <aside className="sidebar" aria-label="광고 세션 탐색">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">3</span>
-        <span>행복한 3팀</span>
+        <span>HAPPY 3팀</span>
       </div>
 
       <NavLink className="primary-action" to="/">

@@ -66,7 +66,7 @@ export function LoginPage() {
           <span className="brand-mark" aria-hidden="true">
             3
           </span>
-          <span>행복한 3팀</span>
+          <span>HAPPY 3팀</span>
         </div>
 
         <h1>로그인</h1>

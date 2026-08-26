@@ -98,6 +98,14 @@ describe("시작 버튼", () => {
     expect(screen.getByText(/아직 비어 있습니다: 제품 이미지, 제품명, 제품 장점/)).toBeInTheDocument();
   });
 
+  it("안내가 스크린 리더에 전달된다", () => {
+    // ⚠️ **비활성 버튼은 탭 순서에서 건너뜁니다.** 화면을 못 보는 사용자는 이 문구까지
+    // 오지 못하고, `role="status"` 가 없으면 문구가 바뀌어도 알림이 없습니다 - 칸을
+    // 채워 나가도 무엇이 남았는지 계속 모르게 됩니다 (PR #266 리뷰, 신호정).
+    setup();
+    expect(screen.getByRole("status")).toHaveTextContent(/아직 비어 있습니다/);
+  });
+
   it("채운 것은 안내에서 빠진다", () => {
     setup();
     fireEvent.change(screen.getByPlaceholderText(/행복 블렌드 커피/), {

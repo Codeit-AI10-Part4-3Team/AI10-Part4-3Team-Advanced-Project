@@ -203,7 +203,12 @@ export function BriefForm({ onSubmit, pending, guide }: BriefFormProps) {
           {pending ? "세션을 만드는 중..." : "광고 만들기 시작"}
         </button>
         {!ready && !pending && (
-          <p className="submit-hint">
+          // ⚠️ **`role="status"` 가 이 문구의 전부입니다.** 비활성 버튼은 탭 순서에서
+          //    건너뛰므로, 화면을 못 보는 사용자는 여기까지 오지 못하고 문구가 바뀌어도
+          //    알림이 없습니다. 그러면 칸을 채워 나가도 무엇이 남았는지 계속 모릅니다.
+          //    바뀌는 횟수는 필수 셋이 채워지는 동안 최대 세 번이라 시끄럽지 않습니다
+          //    (PR #266 리뷰, 신호정). 같은 규약을 `BriefSummary` 와 `ResultView` 가 씁니다.
+          <p className="submit-hint" role="status">
             {missing.length > 0
               ? `아직 비어 있습니다: ${missing.join(", ")}`
               : "이미지를 다시 골라 주세요."}

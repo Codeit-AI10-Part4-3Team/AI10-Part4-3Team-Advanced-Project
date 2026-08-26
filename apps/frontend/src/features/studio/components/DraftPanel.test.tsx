@@ -88,9 +88,22 @@ describe("오류가 아닌 것 두 가지", () => {
   });
 
   it("degraded 는 열화 표기로 보인다", () => {
+    // ⚠️ **안내 문단 자체를 붙듭니다.** "카테고리와 타겟을 채워" 는 아래 empty-state 가
+    // 내는 문구이고 그 조건은 `needsInput` 유무뿐이라, 그것만 재면 `messageMode` 블록을
+    // 통째로 지워도 시험이 통과합니다(실측). 그 안내가 사라지면 사용자는 카테고리와 타겟이
+    // 왜 비어 있는지 모른 채 다시 채우고, 팀은 설계된 열화(ADR-0005)를 원인 불명으로
+    // 보고하게 됩니다 (PR #277 리뷰, 신호정).
     setup({ state: "brief_filling" as SessionState, messageMode: "degraded" } as Partial<Session>);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(/자동 채움을 건너뛰고/)).toBeInTheDocument();
     expect(screen.getByText(/카테고리와 타겟을 채워/)).toBeInTheDocument();
+  });
+
+  it("degraded 가 아니면 그 안내가 없다", () => {
+    // 위 시험이 "항상 보인다" 로 통과하지 않게 반대쪽을 겁니다. `messageMode` 가 실제로
+    // 분기를 만드는지 여기서 갈립니다.
+    setup({ state: "brief_filling" as SessionState, messageMode: "normal" } as Partial<Session>);
+    expect(screen.queryByText(/자동 채움을 건너뛰고/)).not.toBeInTheDocument();
   });
 
   it("되물음과 열화가 다른 안내를 낸다", () => {
@@ -102,6 +115,17 @@ describe("오류가 아닌 것 두 가지", () => {
     } as Partial<Session>);
     expect(screen.getByText(/추가 메모를 채워 주세요/)).toBeInTheDocument();
     expect(screen.queryByText(/카테고리와 타겟을 채워/)).not.toBeInTheDocument();
+  });
+});
+
+describe("시안 만들기 버튼", () => {
+  it("진행 중에는 눌리지 않고 문구가 바뀐다", () => {
+    // ⚠️ 시안 생성도 브리프를 잠그는 **되돌릴 수 없는 지점**이고(INV-7), 실물 모드에서는
+    // 연타가 그대로 외부 호출 비용입니다. 확정 버튼에는 이 시험이 있었는데 여기만
+    // 빠져 있었습니다 (PR #277 리뷰, 신호정).
+    setup({ state: "brief_ready" as SessionState }, { pending: "draft" });
+    expect(screen.getByRole("button", { name: "시안을 만드는 중..." })).toBeDisabled();
+    expect(generateButton()).not.toBeInTheDocument();
   });
 });
 

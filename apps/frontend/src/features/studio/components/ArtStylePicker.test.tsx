@@ -100,7 +100,7 @@ describe("ArtStylePicker", () => {
     expect(value()).toBe("retro-pop-art");
     fireEvent.click(screen.getByRole("button", { name: "선택 해제" }));
     expect(value()).toBe("(미선택)");
-    expect(screen.getByText(/무작위로 채웁니다/)).toBeInTheDocument();
+    expect(screen.getByText(/무작위로 선택됩니다/)).toBeInTheDocument();
   });
 });
 

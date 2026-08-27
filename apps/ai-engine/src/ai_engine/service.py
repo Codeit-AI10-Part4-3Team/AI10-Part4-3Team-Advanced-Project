@@ -128,9 +128,14 @@ def generate_draft(request: DraftGenerateRequest) -> DraftGenerateResponse:
     try:
         return draft.generate_draft(request, settings())
     except (NotImplementedError, draft.DraftFailedError) as exc:
-        # ⚠️ 둘 다 503 입니다. "아직 안 만들었다"(스텁의 만화형 갈래)와 "지금 못 만든다"는
-        # 우리에게는 다른 이야기지만 호출자에게는 같은 답이고, 계약이 이 경로에 준 실패 코드는
-        # 하나입니다. 거절은 여기로 오지 않습니다 - 그것은 200 입니다.
+        # ⚠️ 둘 다 503 입니다. "아직 안 만들었다"와 "지금 못 만든다"는 우리에게는 다른 이야기지만
+        # 호출자에게는 같은 답이고, 계약이 이 경로에 준 실패 코드는 하나입니다. 거절은 여기로
+        # 오지 않습니다 - 그것은 200 입니다.
+        #
+        # ⚠️ 이 자리가 "다른 오류 코드를 주자"는 안(미결정_대장 N22)의 반대 근거였습니다.
+        # 그 안은 채택되지 않았고, 앞의 갈래(스텁의 만화형)는 아예 사라졌습니다 - 스텁이 이제
+        # 여섯 칸을 채웁니다 (ADR-0020). `NotImplementedError` 를 계속 잡는 것은 앞으로 생길
+        # 미구현 분기를 위한 그물이지, 지금 도는 경로가 있어서가 아닙니다.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

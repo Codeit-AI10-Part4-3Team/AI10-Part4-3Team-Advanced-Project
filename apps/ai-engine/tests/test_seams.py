@@ -15,6 +15,7 @@ from PIL import Image
 from ai_engine import brief_fill, draft, render, service
 from ai_engine.config import Settings
 from ai_engine.models import (
+    PANEL_ROLES,
     Brief,
     ComicDraft,
     DraftGenerateRequest,
@@ -54,6 +55,13 @@ def brief() -> Brief:
     return Brief.model_validate(BRIEF_FIELDS)
 
 
+def comic_brief() -> Brief:
+    """만화형 브리프. `character` 를 실을 수 있는 쪽은 이쪽뿐입니다 (`check_brief_matches_output_type`)."""
+    return Brief.model_validate(
+        {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
+    )
+
+
 def render_request(width: int = 1088, height: int = 1088) -> ImageRenderRequest:
     return ImageRenderRequest(
         output_type="single_ad",
@@ -86,21 +94,21 @@ def patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
     )
 
 
+def comic_draft() -> ComicDraft:
+    return ComicDraft(
+        ad_plan="기획안",
+        panels=[
+            Panel(index=index, role=role, scene=f"{role} 장면", dialogue=f"{role} 대사")
+            for index, role in enumerate(PANEL_ROLES, start=1)
+        ],
+    )
+
+
 def comic_patch_request(**patch_fields: object) -> DraftPatchEngineRequest:
     return DraftPatchEngineRequest(
         output_type="comic",
-        brief=Brief.model_validate(
-            {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
-        ),
-        draft=ComicDraft(
-            ad_plan="기획안",
-            panels=[
-                Panel(index=index, role=role, scene="장면", dialogue="대사")
-                for index, role in enumerate(
-                    ["hook", "setup", "problem", "solution", "proof", "cta"], start=1
-                )
-            ],
-        ),
+        brief=comic_brief(),
+        draft=comic_draft(),
         patch=DraftPatch.model_validate(patch_fields),
     )
 
@@ -183,20 +191,54 @@ def test_draft_stub_echoes_guardrail_applied(stub_settings: Settings) -> None:
     assert draft.generate_draft(request, stub_settings).guardrail_applied is False
 
 
-def test_comic_branch_exists_but_is_not_faked(stub_settings: Settings) -> None:
-    """The branch is structure (기획서 5.3); filling it with six fake panels would make the
-    comic path look finished.
+def test_the_comic_stub_fills_six_panels_in_role_order(stub_settings: Settings) -> None:
+    """⚠️ 스텁이 만화형을 거절하던 자리입니다 (ADR-0020, 미결정_대장 N22).
 
-    ⚠️ **스텁 이야기입니다.** 실물 분기는 2026-08-20 부터 여섯 칸을 실제로 씁니다 - 칸 수와
-    역할이 계약과 기획서 7.3 에 있으므로 거기서 새로 정하는 값이 없기 때문입니다. 스텁이
-    같은 일을 하면 지어내는 것이 됩니다.
+    거절이 라우트에서 503 이 되어 실장애와 구분되지 않았고, 그래서 화면이 만화형 버튼을 내리고
+    있었습니다. 칸 수와 역할은 계약과 기획서 7.3 이 정하므로 여기서 새로 정하는 값은 없습니다.
     """
-    comic = Brief.model_validate(
-        {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
-    )
-    request = draft_request("comic", comic)
-    with pytest.raises(NotImplementedError, match="comic"):
-        draft.generate_draft(request, stub_settings)
+    request = draft_request("comic", comic_brief())
+    response = draft.generate_draft(request, stub_settings)
+
+    assert isinstance(response.draft, ComicDraft)
+    assert [panel.index for panel in response.draft.panels] == [1, 2, 3, 4, 5, 6]
+    assert [panel.role for panel in response.draft.panels] == list(PANEL_ROLES)
+
+
+def test_the_comic_stub_marks_every_cell_and_grounds_the_dialogue(
+    stub_settings: Settings,
+) -> None:
+    """⚠️ 채운다고 결과물처럼 보이면 안 됩니다 (구현_범위 1.1절).
+
+    표시가 여섯 칸 전부에 붙고, 대사는 `sellingPoint` 에서만 옵니다 - 추론값(`target`)이 섞이면
+    스텁이 입력에 없는 주장을 실어 나르게 됩니다.
+    """
+    request = draft_request("comic", comic_brief())
+    response = draft.generate_draft(request, stub_settings)
+
+    assert isinstance(response.draft, ComicDraft)
+    assert stub_settings.stub_marker in response.draft.ad_plan
+    for panel in response.draft.panels:
+        assert stub_settings.stub_marker in panel.scene
+        assert stub_settings.stub_marker in panel.dialogue
+        assert "하루 종일 촉촉합니다" in panel.dialogue
+        assert "30대 직장인" not in panel.dialogue
+
+
+def test_the_comic_stub_writes_no_digits(stub_settings: Settings) -> None:
+    """⚠️ 칸 번호를 문구에 적으면 근거에 없는 수치가 됩니다 (ADR-0019).
+
+    스텁 회차로 가드레일을 돌려 보는 것이 금지된 적은 없고, 그때 우리가 만든 숫자가 위반으로
+    잡히면 그 회차는 무엇을 잰 것인지 알 수 없게 됩니다.
+    """
+    request = draft_request("comic", comic_brief())
+    response = draft.generate_draft(request, stub_settings)
+
+    assert isinstance(response.draft, ComicDraft)
+    written = [response.draft.ad_plan]
+    written += [panel.scene for panel in response.draft.panels]
+    written += [panel.dialogue for panel in response.draft.panels]
+    assert not [text for text in written if any(character.isdigit() for character in text)]
 
 
 # ---- S6 렌더 ----------------------------------------------------------------------
@@ -359,13 +401,24 @@ def test_the_patch_cannot_name_the_read_only_fields() -> None:
             patch_request(**{field: "무엇이든"})
 
 
-def test_the_comic_branch_of_the_patch_stub_raises(stub_settings: Settings) -> None:
-    """Comic-blind like `_generate_stub`: patching six panels here would make the comic path
-    look finished (구현_범위 1절)."""
+def test_the_comic_patch_stub_moves_only_what_the_patch_names(stub_settings: Settings) -> None:
+    """⚠️ 부분 교체와 전체 재생성의 차이가 이것입니다 (ADR-0020 이 이 갈래를 열었습니다).
+
+    지목되지 않은 칸도, 지목된 칸의 지목되지 않은 부분도 그대로여야 합니다. 스텁이 통째로 다시
+    쓰면 화면은 부분 교체가 되는지를 확인할 방법이 없습니다.
+    """
+    original = comic_draft()
     request = comic_patch_request(panels={"4": {"dialogue": "새 대사"}})
 
-    with pytest.raises(NotImplementedError, match="구현_범위"):
-        draft.patch_draft(request, stub_settings)
+    response = draft.patch_draft(request, stub_settings)
+
+    assert isinstance(response.draft, ComicDraft)
+    patched = response.draft.panels[3]
+    assert patched.dialogue == f"[{stub_settings.stub_marker}] 새 대사"
+    assert patched.scene == original.panels[3].scene
+    assert [panel for index, panel in enumerate(response.draft.panels) if index != 3] == [
+        panel for index, panel in enumerate(original.panels) if index != 3
+    ]
 
 
 def test_a_single_ad_patch_cannot_name_panels() -> None:
@@ -401,9 +454,11 @@ def test_a_single_ad_patch_naming_panels_is_rejected_even_when_it_also_names_cop
 
 @pytest.mark.parametrize("field", ["copy", "visualPlan"])
 def test_a_comic_patch_cannot_name_the_single_ad_fields(field: str) -> None:
-    """The other direction of the same pairing. It has no silent path today only because
-    `_patch_stub` refuses comic outright — which is a property of the skeleton, not of the
-    contract, and would disappear the moment the comic branch is written."""
+    """The other direction of the same pairing, and it is no longer hypothetical.
+
+    ⚠️ 만화형 갈래가 열린 2026-08-27 부터(ADR-0020) 이 검사가 유일한 방어선입니다. 전에는
+    `_patch_stub` 이 만화형을 통째로 거절해 조용한 경로가 생길 수 없었지만, 지금은 `copy` 가
+    붙은 만화형 패치가 여기서 막히지 않으면 `panels` 만 반영된 200 이 나갑니다."""
     with pytest.raises(ValueError, match=f"{field} does not apply to comic"):
         comic_patch_request(**{field: "무엇이든"})
 

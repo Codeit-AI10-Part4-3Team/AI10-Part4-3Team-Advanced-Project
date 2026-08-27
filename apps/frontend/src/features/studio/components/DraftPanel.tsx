@@ -31,7 +31,9 @@ export function DraftPanel({
     <section className="panel draft-panel" aria-labelledby="draft-heading">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">STEP 02</p>
+          {/* ⚠️ 새 세션 화면의 세 번째 칸(STEP 03)이 그대로 이어지는 자리입니다. 번호가
+              어긋나면 사용자는 03 을 보고 누른 뒤 02 로 되돌아온 것으로 읽습니다. */}
+          <p className="eyebrow">STEP 03</p>
           <h2 id="draft-heading">시안 · 확정 · 결과</h2>
         </div>
         <span className={`status-chip ${READY_STATES.has(state) ? "ready" : ""}`}>

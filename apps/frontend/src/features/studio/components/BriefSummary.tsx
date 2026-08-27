@@ -210,7 +210,9 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
     <section className="panel brief-panel" aria-labelledby="brief-heading">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">STEP 01</p>
+          {/* ⚠️ 새 세션 화면의 **01 과 02 를 합친 결과**입니다 - 입력(01)과 화풍(02)이
+              여기 한 칸에 모여 있습니다. 그래서 번호를 하나로 적지 않습니다. */}
+          <p className="eyebrow">STEP 01 - 02</p>
           <h2 id="brief-heading">광고 브리프</h2>
         </div>
         {isEditing ? (

@@ -21,7 +21,9 @@ from PIL import Image
 
 from ai_engine import render, render_prompt
 from ai_engine.config import Settings
+from ai_engine.draft_prompt import ROLE_BEATS
 from ai_engine.models import (
+    PANEL_ROLES,
     Brief,
     ComicDraft,
     ImageRenderRequest,
@@ -78,7 +80,14 @@ def comic_request(width: int = 3456, height: int = 2304) -> ImageRenderRequest:
 
 
 def comic_panel(index: int = 1) -> Panel:
-    return Panel(index=index, role="hook", scene=f"{index}번 장면", dialogue=f"대사 {index}")
+    """⚠️ 역할은 번호가 정합니다 (INV-5). 여기서 `role` 을 번호와 무관하게 고정하면 1 ~ 3번
+    칸에 제품이 등장하는지 같은 성질을 이 픽스처로는 잴 수 없습니다 (이슈 #272)."""
+    return Panel(
+        index=index,
+        role=PANEL_ROLES[index - 1],
+        scene=f"{index}번 장면",
+        dialogue=f"대사 {index}",
+    )
 
 
 def png_bytes(width: int = 32, height: int = 32) -> bytes:
@@ -260,6 +269,52 @@ def test_only_the_later_panels_are_told_to_keep_the_reference() -> None:
     assert render_prompt.KEEP_REFERENCE in render_prompt.build_panel(
         request, comic_panel(2), with_reference=True
     )
+
+
+def test_the_panel_role_reaches_the_image_prompt() -> None:
+    """⚠️ 이슈 #272. 카피 쪽은 `draft_prompt` 가 역할을 알려 주고 받아 오는데 그림 쪽에는
+    통로가 없었습니다. 그래서 `scene` 과 `dialogue` 는 기획서 7.3 을 따르는데 그림만 따르지
+    않는 세트가 나옵니다 - 2026-08-26 실물 회차에서 1 ~ 3번 칸에 제품이 이미 놓였습니다."""
+    request = comic_request()
+
+    for index in range(1, 7):
+        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=index > 1)
+
+        assert ROLE_BEATS[PANEL_ROLES[index - 1]] in prompt
+
+
+def test_the_product_is_not_drawn_before_the_solution_panel() -> None:
+    """기획서 7.3 이 제품 등장을 4번 칸("제품 등장 및 해결")에 두었습니다. 1 ~ 3번은 후킹,
+    상황 제시, 문제와 고민이라 그림에 제품이 있으면 문제에서 해결로 넘어가는 구조가 그림만
+    보면 성립하지 않습니다.
+
+    ⚠️ **제품명과 소구점은 앞 칸에도 그대로 갑니다.** 막는 것은 "그리지 마라" 하나이고,
+    근거를 빼면 `GROUNDING` 이 검사할 대상이 사라집니다.
+    """
+    request = comic_request()
+
+    for index in (1, 2, 3):
+        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=index > 1)
+
+        assert render_prompt.PRODUCT_NOT_YET in prompt
+        assert BRIEF_FIELDS["productName"] in prompt
+        assert render_prompt.GROUNDING in prompt
+
+    for index in (4, 5, 6):
+        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=True)
+
+        assert render_prompt.PRODUCT_NOT_YET not in prompt
+
+
+def test_the_reference_does_not_ask_to_keep_a_product_that_is_not_there() -> None:
+    """⚠️ 1번 칸은 후킹이라 제품이 없습니다. 레퍼런스에 없는 것을 유지하라고 하면 모델이
+    제품을 지어내 앞 칸에 그립니다 (이슈 #272).
+
+    ⚠️ **대가가 있습니다** - 4 ~ 6번 칸의 포장 모양이 서로 고정되지 않습니다. 다섯 칸 모두
+    1번 칸 하나를 레퍼런스로 보기 때문이고(ADR-0017 의 동시 호출), 고정하려면 제품 사진을
+    두 번째 레퍼런스로 보내야 합니다. 이 시험은 그것까지 재지 않습니다.
+    """
+    assert "제품" not in render_prompt.KEEP_REFERENCE
 
 
 def test_the_character_reaches_the_panel_that_has_no_reference() -> None:

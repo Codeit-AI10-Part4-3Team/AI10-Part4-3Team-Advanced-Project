@@ -263,10 +263,17 @@ reload_caddy() {
   log "Caddy 설정 다시 읽기"
   # `caddy reload` 는 먼저 설정을 검증하고, 통과했을 때만 무중단으로 갈아 끼웁니다.
   # 검증에서 걸리면 도는 설정은 손대지 않습니다.
-  local failed="Caddy 설정 재적용 실패 — 도는 프록시는 이전 설정 그대로입니다."
-  compose exec -T caddy \
-    caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
-    || die "$failed infra/caddy/Caddyfile 을 확인하세요."
+  if compose exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    return 0
+  fi
+
+  # ⚠️ `die` 로 끝내지 않습니다. `die` 의 `exit` 는 ERR 트랩을 태우지 않아 `on_failure` 가
+  #    돌지 않고, 그러면 이 실패만 로그 40줄과 롤백 명령 없이 끝납니다 - `bring_up` 이나
+  #    `verify` 가 죽었을 때와 달라질 이유가 없습니다.
+  warn "Caddy 설정 재적용 실패 — 도는 프록시는 이전 설정 그대로입니다."
+  warn "새 설정이 유효하지 않다는 뜻입니다. infra/caddy/Caddyfile 을 확인하세요."
+  return 1
 }
 
 # HTTPS 확인에서 --resolve 를 실어야 하므로 배열로 받습니다. 비어 있을 때 set -u 에 걸리지

@@ -12,7 +12,7 @@ docker compose -f infra/docker-compose.yml up --build
 | 파일 | 역할 |
 |---|---|
 | `docker-compose.yml` | 전체 스택(caddy + frontend + backend + ai-engine). 로컬과 배포가 같은 파일을 씁니다 |
-| `Caddyfile` | 앞단 프록시 설정. **HTTPS 종단 지점**입니다 ([ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md)) |
+| `caddy/Caddyfile` | 앞단 프록시 설정. **HTTPS 종단 지점**입니다 ([ADR-0016](../docs/adr/0016-HTTPS_종단_지점과_인증서_발급_경로.md)). ⚠️ **디렉토리째 컨테이너에 붙으므로 `caddy/` 에는 이 파일만 둡니다** (아래 "Caddy 설정은 배포로 저절로 갈리지 않습니다") |
 | `.env.example` | **키 이름만** 담은 템플릿. 값은 절대 넣지 마세요 |
 | `.env` | 실제 값 — `.gitignore` 대상. 존재해도 커밋되지 않습니다 |
 
@@ -210,9 +210,46 @@ GPU가 아닙니다. 배포에서 조일 곳은 셋입니다.
 - 발급이 실패하면 `docker compose logs caddy` 에 즉시 드러납니다. 한도로 막히면 ADR-0016 의
   선택지 B(자체 서명)로 내려가고 그 ADR 을 갱신합니다.
 
+### Caddy 설정은 배포로 저절로 갈리지 않습니다 (2026-08-28, 이슈 #293)
+
+**`bash scripts/deploy-vm.sh` 를 돌려도 Caddy 는 옛 설정으로 계속 돌 수 있었습니다.** 실제로
+#115 헤더 하드닝이 배포 체크아웃에는 들어 있는데 도는 컨테이너에는 **나흘간** 없었고, 그동안
+배포는 매번 성공으로 끝났습니다. 두 가지가 겹칩니다.
+
+1. **파일 단위 bind mount 는 inode 를 붙듭니다.** `git merge` 는 파일을 제자리에서 고치지 않고
+   새 inode 로 갈아치우므로, 컨테이너는 기동 시점의 옛 파일을 계속 봅니다
+   (2026-08-26 실측: 호스트 inode 44887 / 컨테이너 29079).
+2. **compose 는 마운트된 파일의 내용을 config 해시에 넣지 않습니다.** `infra/` 가 바뀌지 않은
+   배포에서 caddy 는 `Running` 으로 남고 재생성되지 않습니다. `up -d --build` 를 몇 번 돌려도
+   같습니다.
+
+지금은 둘 다 막혀 있습니다 -- 마운트가 **디렉토리**(`./caddy:/etc/caddy:ro`)이고,
+`deploy-vm.sh` 가 `bring_up` 다음에 `caddy reload` 를 **매번** 부릅니다. 그리고 `verify` 가
+실제 응답에서 `nosniff` 를 확인하므로, 다시 어긋나면 배포가 그 자리에서 빨간불입니다.
+
+⚠️ **셋은 한 쌍입니다.** 마운트를 파일로 되돌리면 `caddy reload` 가 옛 내용을 다시 읽고,
+`verify` 의 헤더 확인을 지우면 어긋난 것을 아무도 못 봅니다. 하나만 되돌리지 마세요.
+
+직접 갈아 끼워야 할 때(스크립트를 못 쓰는 상황)는 이렇습니다. 인증서는 이름 있는 볼륨
+(`adgen-caddy-data`)에 있어 재발급되지 않습니다.
+
+```bash
+docker compose -f infra/docker-compose.yml --env-file infra/.env \
+  exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+
+# 그래도 옛 내용이면 컨테이너를 다시 만듭니다 (마운트 자체가 옛 inode 를 붙든 경우)
+docker compose -f infra/docker-compose.yml --env-file infra/.env \
+  up -d --force-recreate --no-deps --wait caddy
+```
+
+컨테이너가 무엇을 보고 있는지는 이렇게 확인합니다.
+
+```bash
+docker exec adgen-caddy-1 grep -c nosniff /etc/caddy/Caddyfile   # 0 이면 옛 설정입니다
+```
 ### 응답 헤더는 Caddyfile 한 곳에서만 정합니다 (2026-08-22, 이슈 #115)
 
-브라우저가 보는 출처가 프록시 하나뿐이므로 하드닝 헤더도 `infra/Caddyfile` 의 `header` 블록
+브라우저가 보는 출처가 프록시 하나뿐이므로 하드닝 헤더도 `infra/caddy/Caddyfile` 의 `header` 블록
 하나에만 둡니다. **`apps/frontend/nginx.conf` 에 같은 헤더를 또 넣지 마세요** -- 두 곳이 같은
 헤더를 쓰면 실제로 나가는 값이 어느 쪽인지 추적할 수 없습니다.
 

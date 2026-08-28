@@ -234,6 +234,16 @@ show_changes() {
   touched="$(git --no-pager diff --name-only "$prev..$now")"
   grep -q '^packages/contracts/' <<<"$touched" && warn "계약(openapi.yaml)이 바뀌었습니다 — 프론트가 같은 판을 보고 있는지 확인하세요."
   grep -q '^infra/\.env\.example$' <<<"$touched" && warn ".env.example 이 바뀌었습니다 — VM 의 infra/.env 에 새 키를 반영했는지 확인하세요."
+
+  # ⚠️ **이 `return 0` 을 지우지 마세요.** 위 두 줄은 `grep && warn` 이라, 일치가 없으면
+  #    AND 리스트가 1 을 반환하고 그 값이 **함수의 반환값**이 됩니다. `main` 은 이 함수를
+  #    단순 명령으로 부르므로 `set -e` 가 곧바로 배포를 죽입니다 — 그것도 `bring_up`
+  #    **직전에**, `update_checkout` 이 체크아웃만 새 커밋으로 옮겨 둔 채로. 즉 이 스크립트가
+  #    `--no-build` 와 `--ref` 조합을 거부하면서까지 지키려던 "HEAD 와 도는 이미지가 같다"
+  #    가 깨진 상태로 남고, 실패 메시지는 그 사실을 말해 주지 않습니다.
+  #    2026-08-26 에 실제로 났습니다 (`540cc9d` -> `a42e78c`, 범위에 infra/ 변경 없음).
+  #    두 `warn` 은 경고일 뿐 배포 가부와 무관하므로 반환값에 실려서는 안 됩니다 (#292).
+  return 0
 }
 
 bring_up() {
@@ -245,6 +255,35 @@ bring_up() {
   # ⚠️ `--wait` 는 헬스체크가 healthy 가 될 때까지 기다리고, 안 되면 0이 아닌 값으로 끝납니다.
   #    이것이 "배포됐는데 안 뜬 상태"를 성공으로 보고하지 않게 막는 유일한 장치입니다.
   compose up -d "${build_args[@]}" --wait
+}
+
+# ⚠️ **`up -d` 는 Caddy 설정을 다시 읽게 하지 않습니다.** compose 는 config 해시가 바뀔 때만
+#    컨테이너를 재생성하는데 Caddyfile 의 **내용**은 그 해시에 들어가지 않습니다. `infra/` 가
+#    바뀌지 않은 배포에서 caddy 는 계속 `Running` 으로 남고, 기동 시점에 읽은 설정을 그대로
+#    씁니다. 실제로 #115 헤더 하드닝이 나흘간 적용되지 않았습니다 (이슈 #293).
+#
+# ⚠️ **조건을 걸지 않고 매번 부릅니다.** "Caddyfile 이 바뀐 배포에서만" 으로 좁히려면
+#    `show_changes` 의 커밋 범위가 필요한데, 그 범위는 `prev == now` 인 배포(설정만 다시 읽는
+#    `--no-build`, 중단된 배포의 재실행)에서 비어 있습니다. 놓치는 자리가 하필 사람이 손으로
+#    복구하는 자리라, 싼 쪽을 매번 하는 편이 낫습니다.
+#
+# 실패하면 중단합니다. 실패는 곧 **새 설정이 유효하지 않다**는 뜻이고, 그때 도는 프록시는
+# 이전 설정 그대로입니다 - 배포된 커밋과 실제 동작이 갈린 채로 "완료" 를 찍으면 안 됩니다.
+reload_caddy() {
+  log "Caddy 설정 다시 읽기"
+  # `caddy reload` 는 먼저 설정을 검증하고, 통과했을 때만 무중단으로 갈아 끼웁니다.
+  # 검증에서 걸리면 도는 설정은 손대지 않습니다.
+  if compose exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    return 0
+  fi
+
+  # ⚠️ `die` 로 끝내지 않습니다. `die` 의 `exit` 는 ERR 트랩을 태우지 않아 `on_failure` 가
+  #    돌지 않고, 그러면 이 실패만 로그 40줄과 롤백 명령 없이 끝납니다 - `bring_up` 이나
+  #    `verify` 가 죽었을 때와 달라질 이유가 없습니다.
+  warn "Caddy 설정 재적용 실패 — 도는 프록시는 이전 설정 그대로입니다."
+  warn "새 설정이 유효하지 않다는 뜻입니다. infra/caddy/Caddyfile 을 확인하세요."
+  return 1
 }
 
 # HTTPS 확인에서 --resolve 를 실어야 하므로 배열로 받습니다. 비어 있을 때 set -u 에 걸리지
@@ -267,6 +306,28 @@ expect_code() {
     echo "    OK   $label ($got)"
   else
     echo "    실패 $label (기대 $want, 실제 $got)"
+    return 1
+  fi
+}
+
+# ⚠️ **헤더는 상태 코드로 드러나지 않습니다.** #115 하드닝이 배포 체크아웃에는 들어 있는데
+#    도는 컨테이너에는 나흘간 없었고, 그동안 아래 상태 코드 확인은 전부 초록이었습니다
+#    (이슈 #293). 사람이 브라우저로 봐도 알 수 없는 종류라, 한 줄이라도 실제 응답에서
+#    확인해야 `reload_caddy` 가 일을 했는지 알 수 있습니다.
+expect_header() {
+  local url=$1 name=$2 want=$3 label=$4 got
+  # ⚠️ `|| true` 가 필요합니다 - curl 이 연결에 실패하면 파이프라인이 0 이 아닌 값으로
+  #    끝나고, `set -e` 아래에서는 이 대입 자체가 배포를 중단시킵니다.
+  got=$(curl -s -o /dev/null -m 10 -D - ${CURL_RESOLVE[@]+"${CURL_RESOLVE[@]}"} "$url" 2>/dev/null \
+    | tr -d '\r' \
+    | awk -v want="$name" 'BEGIN{want = tolower(want) ":"}
+           tolower($1) == want {sub(/^[^:]*: */, ""); print}' \
+    | tail -1 || true)
+
+  if [[ "$got" == "$want" ]]; then
+    echo "    OK   $label"
+  else
+    echo "    실패 $label (기대 '$want', 실제 '${got:-없음}')"
     return 1
   fi
 }
@@ -343,6 +404,11 @@ verify() {
   expect_code "${base}/" 200 "화면 진입" || ok=1
   # 라우팅·인증·에러 계약이 셋 다 살아 있어야 401 이 나옵니다.
   expect_code "${base}/v1/sessions" 401 "프록시 /v1/sessions (미인증)" || ok=1
+  # 하드닝 헤더가 **도는 컨테이너에** 실제로 붙어 있는지. 셋 중 하나만 재는 것은 셋이
+  # 같은 `header` 블록에서 나오기 때문입니다 - 하나가 빠졌으면 블록째 안 붙은 것입니다.
+  # ⚠️ HTTPS 가 켜졌을 때 80 의 308 응답에는 이 헤더가 붙지 않습니다. 설계된 동작이므로
+  #    `${base}` 로 재고, 80 으로 재지 마세요 (infra/caddy/Caddyfile 의 같은 경고).
+  expect_header "${base}/" "X-Content-Type-Options" "nosniff" "하드닝 헤더 (nosniff)" || ok=1
 
   # HTTPS 인데 전부 `000` 이면 TLS 가 서지 않은 것이고, 그 원인은 대개 인증서 발급입니다.
   # 컨테이너는 healthy 로 남아 있어(80 은 살아 있으므로) 증상만 보고는 알기 어렵습니다.
@@ -390,6 +456,7 @@ main() {
   fi
 
   bring_up
+  reload_caddy
 
   if [[ "$DO_VERIFY" -eq 1 ]]; then
     verify

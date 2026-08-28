@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""실패 모드 4종을 **도는 스택**에 대고 잽니다 (05, e2e/README.md "아직 자동화하지 않은 것").
+
+단위 시험은 이 분기들을 이미 덮고 있습니다 (`apps/backend/tests/backend_core/test_render.py`
+등). 이 스크립트가 답하는 것은 다른 질문입니다 - **컨테이너가 실제로 죽거나 멎었을 때 같은
+일이 나는가.** 목이 아니라 진짜 스택이라, 배선이 바뀌면 여기서 걸립니다.
+
+    python3 scripts/check_failure_modes.py --dry-run     # 무엇을 할지만 찍습니다
+    python3 scripts/check_failure_modes.py
+
+⚠️ **e2e 하네스가 아니라 별도 스크립트인 이유가 있습니다.** `e2e/README.md` 가 "열화 경로
+자동화는 하네스가 docker 를 직접 다루게 되므로 그 결합을 감수할지가 먼저 정해져야 합니다" 를
+적어 두었고, 그것은 아직 정해지지 않았습니다. 여기서 docker 를 다루면 그 결정을 열지 않고,
+`종단 관통 테스트` 잡에도 영향이 없습니다. **정해지면 이 파일을 e2e 로 옮기는 것이 맞습니다.**
+
+⚠️ **시연 중에는 돌리지 마세요.** 도는 동안 시안 생성이 실제로 실패하고, B 검사는 60초 가까이
+멎어 있습니다. 공유 VM 이면 먼저 알리세요.
+
+## stop 과 pause 를 가르는 이유
+
+`backend_core/ai_client.py` 가 `httpx.TimeoutException` 을 `GenerationTimeoutError` 로,
+나머지 `HTTPError` 를 `AiEngineUnavailableError` 로 나누고, 라우트와 렌더 워커가 **둘을 다른
+응답으로 매핑**합니다 (504 / 503, 잡 error.code 도 갈립니다). 컨테이너를 `stop` 하면 커널이
+연결을 거부해 앞쪽만 지나고, **뒤쪽은 한 줄도 안 지나갑니다.**
+
+`pause` 는 cgroup freezer 로 프로세스만 얼립니다. 리스닝 소켓은 커널에 남아 연결은 되는데
+응답이 오지 않으므로, 그것이 타임아웃 갈래를 태우는 무해한 방법입니다.
+
+**네 기대값은 2026-08-28 에 로컬에서 실측했습니다.** A 는 `201 brief_filling degraded`,
+B 는 `504 GENERATION_TIMEOUT` 이 60.2초에 오고 세션이 `brief_ready` 로 돌아왔으며(ADR-0012),
+C 는 `200 failed UPSTREAM_UNAVAILABLE`, D 는 `done` + `image/webp` 였습니다.
+
+⚠️ **다만 B 는 `docker pause` 가 아니라 블랙홀 소켓으로 쟀습니다** - 연결은 받고 응답하지 않는
+포트를 8100 에 세웠습니다. **재는 조건(소켓은 살아 있고 응답이 없음)은 같지만, `docker pause`
+가 정말 그 조건을 만드는지는 이 스크립트를 처음 돌릴 때 확인됩니다.** B 가 504 가 아니라 503
+으로 나오면 그 전제가 틀린 것이며, **그 사실 자체가 보고할 값입니다.** 기대값을 고치기 전에
+왜 그런지부터 보세요.
+
+## 예외는 `brief:fill` 하나입니다
+
+그 이음매만 타임아웃과 다운을 안 가릅니다 - `ai_client.py` 가 "호출자의 답이 어느 쪽이든
+같아서" 라고 명시합니다 (ADR-0005 의 열화가 유일하게 허용된 자리). 그래서 A 는 `stop` 으로
+충분합니다.
+
+## 결과 처리
+
+이 스크립트는 CI 가 돌리지 않습니다. 출력은 사람이 `docs/역할_일정/05-백엔드_인프라.md` 진행
+기록에 붙이며, 2026-08-19 열화 실측과 같은 형식입니다 - **언제 무엇을 확인했는가**의 증빙입니다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import struct
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+import zlib
+from email.message import Message as EmailMessage
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parent.parent
+COMPOSE_FILE = ROOT / "infra" / "docker-compose.yml"
+ENV_FILE = ROOT / "infra" / ".env"
+
+# 이 스크립트가 만지는 서비스는 하나뿐입니다. 상수로 둔 것은 인자로 받지 않기 위해서입니다 -
+# 잘못 넘긴 이름 하나가 backend 나 caddy 를 멈추면 증상이 이 스크립트의 실패로 보이지 않습니다.
+SERVICE = "ai-engine"
+
+# 허용 동사. **`down` 과 `rm` 은 여기 없고, 넣지 마세요** - `adgen-state` 볼륨에 계정과 세션이
+# 들어 있고 되돌릴 방법은 백업뿐입니다 (AGENTS.md, infra/README.md).
+VERBS = ("stop", "start", "pause", "unpause", "up", "ps", "exec")
+
+# B 검사가 기다리는 상한. 서버측 `draft_timeout_s` 기본값이 60초이므로 그보다 넉넉해야
+# **클라이언트가 먼저 포기해 무엇을 쟀는지 알 수 없게 되는 일**을 막습니다.
+HTTP_TIMEOUT_S = 180
+
+# 잡 폴링 상한. 스텁 렌더는 초 단위이고 실패는 더 빠릅니다. e2e 의 240초보다 짧게 둔 것은
+# 이 스크립트가 실물 모드를 기본으로 거부하기 때문입니다.
+JOB_DEADLINE_S = 120
+
+# `api/routes/auth.py` 의 `SESSION_COOKIE_NAME` 과 같은 값입니다.
+SESSION_COOKIE = "session_token"
+
+BASE_URL_ENV = "E2E_BASE_URL"
+LOGIN_ID_ENV = "E2E_LOGIN_ID"
+PASSWORD_ENV = "E2E_PASSWORD"  # noqa: S105 - 환경변수 이름이지 값이 아닙니다
+
+
+# ── 출력 ────────────────────────────────────────────────────────────────────────
+
+
+def log(message: str) -> None:
+    print(f"==> {message}", flush=True)
+
+
+def warn(message: str) -> None:
+    print(f"  ! {message}", file=sys.stderr, flush=True)
+
+
+def mask(url: str) -> str:
+    """공개 호스트를 가립니다.
+
+    ⚠️ 배포의 `ADGEN_PUBLIC_HOST` 는 `<외부 IP>.sslip.io` 형태라 **그 문자열 자체가 외부
+    IP** 입니다. 저장소가 public 이고 이 출력은 진행 기록에 붙습니다
+    (GCP_VM_사용_가이드.md 2-b절). 로컬 주소는 가릴 것이 없으므로 그대로 둡니다.
+    """
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return url
+    return "<공개호스트>"
+
+
+# ── docker compose ──────────────────────────────────────────────────────────────
+
+
+class Compose:
+    """`docker compose` 호출. 동사와 대상을 좁혀 둡니다."""
+
+    def __init__(self, *, dry_run: bool) -> None:
+        self.dry_run = dry_run
+
+    def _run(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
+        if args[0] not in VERBS:
+            raise ValueError(f"허용되지 않은 동사입니다: {args[0]} (허용: {', '.join(VERBS)})")
+        command = [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE_FILE),
+            "--env-file",
+            str(ENV_FILE),
+            *args,
+        ]
+        if self.dry_run:
+            print(f"    [dry-run] {' '.join(command)}")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        # 인자는 위 VERBS 로 좁힌 상수와 서비스 이름 하나뿐이고, 셸을 거치지 않습니다.
+        return subprocess.run(command, capture_output=capture, text=True, check=False)
+
+    def stop(self) -> None:
+        log(f"{SERVICE} 정지")
+        self._run("stop", SERVICE)
+
+    def pause(self) -> None:
+        log(f"{SERVICE} 일시 정지 (freezer)")
+        self._run("pause", SERVICE)
+
+    def unpause(self) -> None:
+        self._run("unpause", SERVICE)
+
+    def up(self) -> bool:
+        """다시 띄우고 healthy 까지 기다립니다."""
+        return self._run("up", "-d", "--wait", "--no-deps", SERVICE).returncode == 0
+
+    def generation_mode(self) -> str:
+        done = self._run("exec", "-T", SERVICE, "printenv", "ADGEN_GENERATION_MODE", capture=True)
+        return (done.stdout or "").strip() or "미설정"
+
+    def state(self) -> str:
+        done = self._run("ps", "--format", "{{.Service}} {{.State}}", capture=True)
+        for line in (done.stdout or "").splitlines():
+            if line.startswith(f"{SERVICE} "):
+                return line.split(" ", 1)[1].strip()
+        return "없음"
+
+
+# ── HTTP ────────────────────────────────────────────────────────────────────────
+
+
+class Response:
+    def __init__(self, status: int, headers: EmailMessage, body: bytes) -> None:
+        self.status = status
+        self.body = body
+        # ⚠️ `Set-Cookie` 는 여러 줄로 올 수 있어 dict 로 접으면 하나만 남습니다. 그래서
+        #    조회용 dict 와 별도로 원본 목록을 들고 있습니다.
+        self.headers = {k.lower(): v for k, v in headers.items()}
+        self.set_cookies: list[str] = headers.get_all("Set-Cookie", [])
+
+    def json(self) -> Any:
+        try:
+            return json.loads(self.body)
+        except json.JSONDecodeError:
+            return {}
+
+    def code(self) -> str:
+        """계약 오류 본문의 `code`. 없으면 빈 문자열."""
+        body = self.json()
+        return body.get("code", "") if isinstance(body, dict) else ""
+
+
+class Http:
+    """세션을 들고 다니는 최소 클라이언트.
+
+    표준 라이브러리만 씁니다 - `scripts/observe.py` 와 같은 방침입니다. VM 에 새 의존을 만들지
+    않으려는 것이고, e2e venv(httpx, Pillow)가 없어도 이 스크립트가 돕니다.
+
+    ⚠️ **쿠키 병을 쓰지 않고 `Cookie` 헤더를 직접 답니다.** 세션 쿠키에는 `Secure` 가 붙어
+    있는데(ADR-0013), `http.cookiejar` 는 그런 쿠키를 평문 HTTP 로 **보내지 않습니다** -
+    브라우저와 달리 `localhost` 예외가 없습니다. 그대로 두면 로그인은 200 인데 다음 요청이
+    401 이고, **증상이 인증 결함처럼 보입니다.** `e2e/conftest.py` 의 `_sign_in` 이 같은
+    이유로 같은 우회를 씁니다 (2026-08-19 실측, 이 스크립트에서도 재현했습니다).
+    """
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.cookie: str | None = None
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> Response:
+        request = urllib.request.Request(  # noqa: S310 - 스킴은 아래에서 확인합니다
+            f"{self.base_url}{path}", data=body, method=method
+        )
+        if request.type not in {"http", "https"}:
+            raise ValueError(f"http/https 만 지원합니다: {request.type}")
+        if content_type:
+            request.add_header("Content-Type", content_type)
+        if self.cookie:
+            request.add_header("Cookie", self.cookie)
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as answer:  # noqa: S310
+                return Response(answer.status, answer.headers, answer.read())
+        except urllib.error.HTTPError as error:
+            # ⚠️ 4xx 와 5xx 도 **응답이지 예외가 아닙니다.** 이 스크립트가 재려는 것의 절반이
+            #    503, 504 라 여기서 던지면 잴 것이 사라집니다.
+            return Response(error.code, error.headers, error.read())
+
+    def hold_session(self, answer: Response) -> bool:
+        """로그인 응답의 `session_token` 을 뽑아 이후 요청에 답니다."""
+        for raw in answer.set_cookies:
+            name, _, rest = raw.partition("=")
+            if name.strip() == SESSION_COOKIE:
+                self.cookie = f"{SESSION_COOKIE}={rest.split(';', 1)[0]}"
+                return True
+        return False
+
+    def get(self, path: str) -> Response:
+        return self.request("GET", path)
+
+    def post_json(self, path: str, payload: dict[str, Any]) -> Response:
+        return self.request(
+            "POST", path, body=json.dumps(payload).encode(), content_type="application/json"
+        )
+
+    def post(self, path: str) -> Response:
+        return self.request("POST", path)
+
+    def post_form(self, path: str, fields: dict[str, str], image: bytes) -> Response:
+        body, content_type = _multipart(fields, image)
+        return self.request("POST", path, body=body, content_type=content_type)
+
+
+def _multipart(fields: dict[str, str], image: bytes) -> tuple[bytes, str]:
+    """계약 8.1절의 단일 multipart 요청을 손으로 만듭니다."""
+    boundary = f"----adgen{uuid.uuid4().hex}"
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{value}\r\n".encode()
+        )
+    parts.append(
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="productImage"; filename="product.png"\r\n'
+        "Content-Type: image/png\r\n\r\n".encode()
+    )
+    parts.append(image)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def product_image(size: int = 768) -> bytes:
+    """계약을 통과하는 제품 사진을 만듭니다 (PNG, 짧은 변 512px 이상).
+
+    Pillow 를 쓰지 않는 이유는 `scripts/` 에 새 의존을 들이지 않기 위해서입니다. e2e 의 같은
+    픽스처는 Pillow 를 쓰고, 그쪽은 이미 그 의존을 갖고 있습니다.
+
+    파일로 커밋하지 않는 이유는 e2e 와 같습니다 - 루트 `.gitignore` 가 화이트리스트 방식이라
+    새 바이너리가 조용히 빠집니다 (AGENTS.md).
+    """
+    row = b"\x00" + bytes((208, 190, 160)) * size
+    raw = row * size
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        payload = tag + data
+        return struct.pack(">I", len(data)) + payload + struct.pack(">I", zlib.crc32(payload))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+# ── 광고 경로 ───────────────────────────────────────────────────────────────────
+
+
+def create_session(http_client: Http, image: bytes, name: str) -> Response:
+    return http_client.post_form(
+        "/v1/sessions",
+        {
+            "outputType": "single_ad",
+            "productName": name,
+            "sellingPoint": "원두를 주문 후에 갈아 내려 산미가 살아 있습니다. 500g 한 봉지입니다.",
+            "note": "따뜻한 일상 분위기로 부탁합니다.",
+        },
+        image,
+    )
+
+
+def poll_job(http_client: Http, job_id: str) -> tuple[Response, dict[str, Any]]:
+    """잡이 끝날 때까지 봅니다.
+
+    ⚠️ **렌더가 실패해도 조회는 200 입니다.** 그것이 계약이며, 여기서 4xx/5xx 를 섞으면
+    "서버에 못 닿았다" 와 "그림을 못 만들었다" 가 구별되지 않습니다.
+    """
+    deadline = time.monotonic() + JOB_DEADLINE_S
+    while True:
+        answer = http_client.get(f"/v1/jobs/{job_id}")
+        job = answer.json()
+        if answer.status != 200 or job.get("status") in {"done", "failed"}:
+            return answer, job
+        if time.monotonic() >= deadline:
+            return answer, job
+        retry_after = answer.headers.get("retry-after", "")
+        time.sleep(max(int(retry_after), 1) if retry_after.isdigit() else 3)
+
+
+# ── 검사 ────────────────────────────────────────────────────────────────────────
+
+
+class Report:
+    def __init__(self) -> None:
+        self.rows: list[tuple[str, str, str, bool]] = []
+        self.sessions: list[str] = []
+
+    def check(self, label: str, expected: str, actual: str) -> bool:
+        ok = expected == actual
+        self.rows.append((label, expected, actual, ok))
+        mark = "OK" if ok else "실패"
+        print(f"  {label:<34} {actual:<38} {mark}", flush=True)
+        if not ok:
+            print(f"  {'':<34} 기대: {expected}", flush=True)
+        return ok
+
+    @property
+    def failures(self) -> int:
+        return sum(1 for *_, ok in self.rows if not ok)
+
+
+def check_a_degraded(http_client: Http, compose: Compose, report: Report, image: bytes) -> None:
+    """엔진이 죽어도 세션 생성은 지나갑니다 (ADR-0005).
+
+    이 프로젝트에 남은 열화는 이것 하나뿐이고, 나머지 이음매는 명시적으로 실패합니다.
+    """
+    log("A. 열화 - ai-engine 을 정지한 채 세션 생성")
+    compose.stop()
+    answer = create_session(http_client, image, "열화 확인 커피")
+    session = answer.json()
+    if session.get("sessionId"):
+        report.sessions.append(session["sessionId"])
+    report.check(
+        "A  열화 (stop)",
+        "201 brief_filling degraded",
+        f"{answer.status} {session.get('state', '?')} {session.get('messageMode', '?')}",
+    )
+
+
+def check_b_draft_timeout(
+    http_client: Http, compose: Compose, report: Report, image: bytes
+) -> None:
+    """멎은 엔진은 다운과 다른 갈래를 태웁니다 - 504 이고, 브리프 잠금이 풀립니다.
+
+    두 번째 확인이 본체입니다. ADR-0012 는 시안 생성이 실패하면 세션을 `brief_ready` 로
+    되돌리라고 정하는데, 그러지 않으면 사용자가 **브리프는 잠겼고 보여 줄 시안은 없는** 세션에
+    갇힙니다. 상태 코드만 보면 그 일이 안 났는지 알 수 없습니다.
+    """
+    log("B. 시안 타임아웃 - 엔진을 얼린 채 시안 생성 (서버측 상한만큼 걸립니다)")
+    answer = create_session(http_client, image, "타임아웃 확인 커피")
+    session = answer.json()
+    session_id = session.get("sessionId", "")
+    if session_id:
+        report.sessions.append(session_id)
+    if answer.status != 201 or session.get("state") != "brief_ready":
+        report.check(
+            "B  준비 (세션이 brief_ready)",
+            "201 brief_ready",
+            f"{answer.status} {session.get('state', '?')}",
+        )
+        return
+
+    compose.pause()
+    try:
+        drafted = http_client.post(f"/v1/sessions/{session_id}/draft")
+    finally:
+        compose.unpause()
+
+    report.check(
+        "B  시안 타임아웃 (pause)",
+        "504 GENERATION_TIMEOUT",
+        f"{drafted.status} {drafted.code() or '?'}",
+    )
+    after = http_client.get(f"/v1/sessions/{session_id}").json()
+    report.check("B  브리프 잠금 해제 (ADR-0012)", "brief_ready", str(after.get("state", "?")))
+
+
+def check_c_render_fails(http_client: Http, compose: Compose, report: Report, image: bytes) -> None:
+    """렌더에는 폴백이 없습니다. 잡이 명시적으로 실패해야 합니다 (ADR-0005).
+
+    ⚠️ 조회는 200 이고 잡이 `failed` 입니다. 그 둘이 같은 층이 아니라는 것이 계약입니다.
+    """
+    log("C. 렌더 실패 - 시안까지 간 뒤 엔진을 정지하고 확정")
+    answer = create_session(http_client, image, "렌더 실패 확인 커피")
+    session = answer.json()
+    session_id = session.get("sessionId", "")
+    if session_id:
+        report.sessions.append(session_id)
+    drafted = http_client.post(f"/v1/sessions/{session_id}/draft") if session_id else answer
+    if drafted.status != 200:
+        report.check("C  준비 (시안 생성)", "200 draft_ready", f"{drafted.status} ?")
+        return
+
+    compose.stop()
+    accepted = http_client.post(f"/v1/sessions/{session_id}/finalize")
+    if accepted.status != 202:
+        report.check("C  준비 (확정 접수)", "202", str(accepted.status))
+        return
+    polled, job = poll_job(http_client, accepted.json()["jobId"])
+    error_code = (job.get("error") or {}).get("code", "?")
+    report.check(
+        "C  렌더 실패 (stop)",
+        "200 failed UPSTREAM_UNAVAILABLE",
+        f"{polled.status} {job.get('status', '?')} {error_code}",
+    )
+
+
+def check_d_recovers(http_client: Http, compose: Compose, report: Report, image: bytes) -> None:
+    """대조군. 앞 셋이 스택을 망가뜨린 채 끝나지 않았다는 증명입니다.
+
+    이것이 없으면 A ~ C 가 전부 OK 인데 서비스는 죽어 있는 상태를 초록으로 보고할 수 있습니다.
+    """
+    log("D. 복구 - 엔진을 되살리고 전 구간")
+    if not compose.up():
+        report.check("D  복구 (엔진 기동)", "healthy", "기동 실패")
+        return
+
+    answer = create_session(http_client, image, "복구 확인 커피")
+    session = answer.json()
+    session_id = session.get("sessionId", "")
+    if session_id:
+        report.sessions.append(session_id)
+    if answer.status != 201 or session.get("state") != "brief_ready":
+        report.check(
+            "D  복구 (세션 생성)",
+            "201 brief_ready",
+            f"{answer.status} {session.get('state', '?')}",
+        )
+        return
+
+    drafted = http_client.post(f"/v1/sessions/{session_id}/draft")
+    accepted = http_client.post(f"/v1/sessions/{session_id}/finalize")
+    if drafted.status != 200 or accepted.status != 202:
+        report.check("D  복구 (시안과 확정)", "200 / 202", f"{drafted.status} / {accepted.status}")
+        return
+
+    _, job = poll_job(http_client, accepted.json()["jobId"])
+    image_type = "?"
+    if job.get("status") == "done":
+        image_type = http_client.get(job["result"]["imageUrl"]).headers.get("content-type", "?")
+    report.check("D  복구 (전 구간)", "done image/webp", f"{job.get('status', '?')} {image_type}")
+
+
+# ── main ────────────────────────────────────────────────────────────────────────
+
+
+def sign_in(http_client: Http, login_id: str, password: str) -> bool:
+    answer = http_client.post_json("/v1/auth/login", {"loginId": login_id, "password": password})
+    if answer.status != 200:
+        warn(f"로그인 실패: {answer.status} {answer.code()}")
+        return False
+    if not http_client.hold_session(answer):
+        warn(f"로그인 응답에 `{SESSION_COOKIE}` 쿠키가 없습니다.")
+        return False
+    return True
+
+
+def restore(compose: Compose) -> bool:
+    """무슨 일이 있어도 엔진을 되살리고 **확인까지** 합니다.
+
+    ⚠️ 이 스크립트에서 제일 위험한 자리입니다. 중간에 죽으면 배포된 서비스가 시안 생성 없이
+    남고, 증상이 이 스크립트와 무관해 보입니다. `unpause` 를 먼저 부르는 것은 얼어 있는
+    컨테이너에는 `up -d` 가 닿지 않기 때문입니다.
+    """
+    log("복구")
+    compose.unpause()
+    ok = compose.up()
+    state = compose.state()
+    if not ok or "running" not in state.lower():
+        warn(f"{SERVICE} 를 되살리지 못했습니다 (상태: {state}).")
+        warn(f"손으로 확인하세요: docker compose -f {COMPOSE_FILE} ps")
+        return False
+    print(f"  복구 확인: {SERVICE} {state}")
+    return True
+
+
+def print_plan() -> None:
+    """`--dry-run` 이 찍는 것.
+
+    ⚠️ **여기서 "통과" 를 찍지 않습니다.** dry-run 은 아무것도 재지 않았고, 재지 않은 것을
+    초록으로 보고하는 것이 이 저장소가 반복해서 당한 실패 모양입니다 (e2e 가 URL 없이 전부
+    skip 하고도 종료 코드 0 이던 건 - e2e/README.md).
+    """
+    print("  아무것도 만지지 않습니다. 실제 실행은 아래 순서로 돕니다.\n")
+    steps = (
+        ("A  열화", f"compose stop {SERVICE}", "POST /v1/sessions -> 201 brief_filling degraded"),
+        (
+            "B  시안 타임아웃",
+            f"compose pause {SERVICE}",
+            "POST .../draft -> 504 GENERATION_TIMEOUT",
+        ),
+        ("B  잠금 해제", f"compose unpause {SERVICE}", "GET /v1/sessions/{id} -> brief_ready"),
+        ("C  렌더 실패", f"compose stop {SERVICE}", "확정 후 폴링 -> failed UPSTREAM_UNAVAILABLE"),
+        ("D  복구", f"compose up -d --wait {SERVICE}", "전 구간 -> done image/webp"),
+        ("복구(finally)", f"compose unpause/up {SERVICE}", "compose ps 로 running 확인"),
+    )
+    for label, verb, expected in steps:
+        print(f"  {label:<18} {verb:<34} {expected}")
+    print("\n  걸리는 시간: 2 ~ 3분. B 만 서버측 상한(기본 60초)을 실제로 기다립니다.")
+    print("  아무것도 재지 않았습니다 - `--dry-run` 을 빼야 판정이 나옵니다.")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="무엇을 할지만 찍고 만지지 않습니다")
+    parser.add_argument(
+        "--allow-model",
+        action="store_true",
+        help="실물 모드에서도 돌립니다. D 검사가 실제 렌더를 사므로 요금이 나갑니다",
+    )
+    args = parser.parse_args()
+
+    base_url = os.environ.get(BASE_URL_ENV) or "http://localhost"
+    login_id = os.environ.get(LOGIN_ID_ENV)
+    password = os.environ.get(PASSWORD_ENV)
+
+    # ⚠️ 계정이 없으면 **skip 이 아니라 실패**입니다. 초록인데 아무것도 재지 않은 상태가
+    #    e2e/README.md 가 경고하는 실패 모양이고, 이 스크립트는 그것을 만들지 않습니다.
+    if not login_id or not password:
+        warn(f"{LOGIN_ID_ENV} / {PASSWORD_ENV} 가 필요합니다. 계정이 시드된 스택에서 돌리세요.")
+        return 1
+    if not COMPOSE_FILE.exists():
+        warn(f"{COMPOSE_FILE} 이 없습니다. 레포 루트에서 돌리세요.")
+        return 1
+
+    compose = Compose(dry_run=args.dry_run)
+    mode = "확인 안 함" if args.dry_run else compose.generation_mode()
+    # ⚠️ D 검사가 전 구간을 돌므로 실물 모드면 렌더 요금이 나갑니다. 기본은 거부이고,
+    #    넘기려면 사람이 명시해야 합니다 (2026-08-24 회의 안건 02 - 상한은 코드가 아니라
+    #    사람이 봅니다).
+    if not args.dry_run and mode != "stub" and not args.allow_model:
+        warn(f"생성 모드가 `{mode}` 입니다. D 검사가 실제 렌더를 삽니다.")
+        warn("정말 돌리려면 --allow-model 을 붙이세요.")
+        return 1
+
+    print(f"스택: {mask(base_url)} / 생성 모드 {mode}\n")
+    if args.dry_run:
+        print_plan()
+        return 0
+
+    http_client = Http(base_url)
+    if not sign_in(http_client, login_id, password):
+        return 1
+
+    image = product_image()
+    report = Report()
+    checks = (check_a_degraded, check_b_draft_timeout, check_c_render_fails, check_d_recovers)
+    try:
+        for check in checks:
+            check(http_client, compose, report, image)
+    except KeyboardInterrupt:
+        warn("중단되었습니다. 복구만 하고 끝냅니다.")
+        return 130 if restore(compose) else 1
+    finally:
+        print()
+        restored = restore(compose)
+        if report.sessions:
+            print(f"  남긴 세션: {len(report.sessions)}건 (보존 정리 배치가 치웁니다)")
+            print(f"    {', '.join(report.sessions)}")
+        if not restored:
+            # 복구 실패는 검사 결과보다 급합니다. 종료 코드에 실어야 스크립트를 묶어
+            # 쓰는 쪽에서도 걸립니다.
+            report.rows.append(("복구", "running", "실패", False))
+
+    print()
+    if report.failures:
+        print(f"실패 {report.failures}건. 기대값을 고치기 전에 왜 그런지부터 보세요.")
+    else:
+        print("4종 전부 통과. 결과를 05 진행 기록에 붙이세요 (언제 무엇을 확인했는가).")
+    return report.failures
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

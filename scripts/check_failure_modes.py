@@ -649,7 +649,7 @@ def print_plan() -> None:
     skip 하고도 종료 코드 0 이던 건 - e2e/README.md).
     """
     print("  아무것도 만지지 않습니다. 실제 실행은 아래 순서로 돕니다.\n")
-    up = f"compose unpause + up -d --wait {SERVICE}"
+    up = f"unpause + up -d {SERVICE} + health 폴링"
     # ⚠️ **검사마다 앞에 기동 확인이 붙습니다.** 앞 검사가 남긴 상태를 가정하지 않기 때문이고,
     #    가정했더니 A 가 엔진을 정지한 채 끝나 B 와 C 가 준비 단계에서만 실패했습니다.
     steps = (
@@ -664,7 +664,7 @@ def print_plan() -> None:
         ("C  기동 확인", up, "시안까지 가려면 엔진이 있어야 합니다"),
         ("C  렌더 실패", f"compose stop {SERVICE}", "확정 후 폴링 -> failed UPSTREAM_UNAVAILABLE"),
         ("D  복구", up, "전 구간 -> done image/webp"),
-        ("복구(finally)", up, "compose ps 로 running 확인"),
+        ("복구(finally)", up, "running 과 healthy 를 갈라 확인"),
     )
     for label, verb, expected in steps:
         print(f"  {label:<18} {verb:<44} {expected}")
@@ -740,6 +740,16 @@ def main() -> int:
         warn(f"{out_path} 가 체크아웃 안입니다. 배포 VM 이면 밖에 두세요 (예: ~/failure-modes.md).")
 
     base_url = os.environ.get(BASE_URL_ENV) or "http://localhost"
+
+    # ⚠️ **`--dry-run` 은 아무 전제도 요구하지 않습니다.** 계정도 `.env` 도 스택도 필요 없습니다 -
+    #    하는 일이 계획을 찍는 것뿐이기 때문입니다. 아래 검사들을 먼저 두었더니 새 체크아웃에서
+    #    `--dry-run` 이 `.env` 가 없다고 멈췄습니다. "아무것도 만지지 않습니다" 라면서 전제를
+    #    요구하면 읽는 사람이 둘 중 무엇을 믿어야 할지 알 수 없습니다.
+    if args.dry_run:
+        print(f"스택: {mask(base_url)} / 생성 모드 확인 안 함\n")
+        print_plan()
+        return 0
+
     login_id = os.environ.get(LOGIN_ID_ENV)
     password = os.environ.get(PASSWORD_ENV)
 
@@ -758,11 +768,7 @@ def main() -> int:
         warn(f"{ENV_FILE} 이 없습니다. `cp infra/.env.example infra/.env` 후 값을 채우세요.")
         return 1
 
-    compose = Compose(dry_run=args.dry_run)
-    if args.dry_run:
-        print(f"스택: {mask(base_url)} / 생성 모드 확인 안 함\n")
-        print_plan()
-        return 0
+    compose = Compose(dry_run=False)
 
     # ⚠️ 모드를 읽으려면 컨테이너가 떠 있어야 합니다. **앞선 회차가 정지한 채 끝났을 수
     #    있고**(중단, 복구 실패), 어차피 A 이전의 정상 상태가 "엔진이 떠 있음" 입니다.

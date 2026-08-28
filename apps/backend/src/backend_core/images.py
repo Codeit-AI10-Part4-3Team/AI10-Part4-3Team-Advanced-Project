@@ -48,6 +48,15 @@ MEDIA_TYPE = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 ⚠️ Read from the suffix we chose at write time, never from the name the user sent. `store`
 below sniffs the format out of the bytes and picks the suffix from that, so this mapping is
 looking at our own decision rather than at attacker-controlled text.
+
+⚠️ **One caller does not fit that sentence, and it is safe for a different reason.** The
+art-style static mount (`api/main.py`, `_ArtStyleFiles.file_response`) takes the suffix from
+the *request path*, not from a suffix we chose — it serves files a human dropped into the
+volume, not uploads. What holds there is `StaticFiles.lookup_path`: it refuses to leave the
+mounted directory and the file has to exist, so the only suffixes a request can reach are
+the ones already on disk. **Do not reuse this mapping where that narrowing is absent** —
+without it the key really is caller-supplied text, which is what the paragraph above forbids
+(PR #299 리뷰, 신호정).
 """
 
 

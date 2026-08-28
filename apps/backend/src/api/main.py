@@ -93,9 +93,16 @@ class _ArtStyleFiles(StaticFiles):
         #    고를 때 보는 표와 서빙이 보는 표가 갈리면 같은 그림이 경로마다 다른 타입으로
         #    나가고, 그 어긋남은 한쪽을 고칠 때 드러나지 않습니다.
         #
-        # 표에 없는 확장자는 건드리지 않고 `StaticFiles` 의 추측을 그대로 둡니다 - 여기
-        # 들어올 파일은 계약이 정한 세 형식뿐이고(`images` 의 `_SUFFIX`), 그 밖이 들어오면
-        # 타입을 지어내기보다 원래 동작이 보이는 편이 낫습니다.
+        # 표에 없는 확장자는 건드리지 않고 `StaticFiles` 의 추측을 그대로 둡니다. 여기 놓이는
+        # 것은 업로드가 아니라 **사람이 볼륨에 넣는 우리 자산**이라 계약이 형식을 정해 주지
+        # 않습니다 - 예상 밖의 확장자가 오면 타입을 지어내기보다 원래 동작이 보이는 편이
+        # 낫습니다. 그리고 `.jpeg` 처럼 표에 없더라도 내장 표가 아는 것은 그쪽이 답합니다.
+        #
+        # ⚠️ **`args[0]` 은 부모가 위치 인자로 부른다는 가정입니다** (`StaticFiles.file_response`
+        #    의 첫 인자가 `full_path`). `response.path` 로 받는 쪽이 그 가정을 피하지만, 그
+        #    이름이 사라지면 헤더를 조용히 안 붙이고 #294 로 되돌아갑니다. 이쪽은 어긋나는
+        #    순간 `IndexError` 로 터지고 위 시험 둘이 바로 잡습니다 - 조용한 실패보다 낫습니다.
+        #    starlette 은 `fastapi>=0.110.0` 만 핀이라 환경마다 판이 다릅니다 (PR #208 리뷰).
         media_type = MEDIA_TYPE.get(Path(str(args[0])).suffix.lower())
         if media_type is not None:
             response.headers["Content-Type"] = media_type

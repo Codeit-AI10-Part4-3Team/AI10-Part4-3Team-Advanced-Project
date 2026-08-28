@@ -152,13 +152,25 @@ def test_the_type_does_not_depend_on_the_operating_system_mime_table(
     `/etc/mime.types` 도 없습니다. 개발 기계에는 그 파일(윈도우는 레지스트리)이 있어 표가
     채워지므로, `guess_type` 에 맡기면 **배포에서만** `application/octet-stream` 이 나갑니다.
 
-    아래 한 줄이 그 컨테이너 조건을 그대로 만듭니다 - OS 표를 읽지 않은 내장 표만으로
-    `_db` 를 갈아 끼웁니다. 사설 이름을 쓰는 이유는 이것이 재현하려는 조건 자체가
-    "OS 표가 없다" 이고, 공개 API 로는 그 상태를 만들 수 없기 때문입니다.
+    아래가 그 컨테이너 조건을 그대로 만듭니다 - OS 표를 읽지 않은 내장 표로 `_db` 를 갈아
+    끼우고, 그 표에서 `.webp` 도 걷어냅니다. 사설 이름을 쓰는 이유는 이것이 재현하려는 조건
+    자체가 "OS 표가 없다" 이고, 공개 API 로는 그 상태를 만들 수 없기 때문입니다.
+
+    ⚠️ **확장자를 걷어내는 줄을 지우지 마세요.** 파이썬 3.13 부터 `.webp` 가 내장 표에
+    들어왔습니다. 그래서 "내장 표만 남긴다" 만으로는 조건이 만들어지지 않고, 3.13 이상
+    개발 기계에서 이 시험이 **전제 단언에서 먼저 죽습니다** (실측: 3.14.5). 두 앱의
+    `requires-python` 이 `>=3.12` 이므로 그 버전들도 규격 안입니다.
+
+    걷어내는 쪽을 고른 이유는, 버전으로 건너뛰면 **3.13 이상에서는 이 시험이 아무것도
+    재지 않게 되기** 때문입니다. 배포는 `python:3.12-slim` 이라 대상 코드
+    (`mimetypes.add_type`)는 그대로 필요합니다.
     """
-    monkeypatch.setattr(mimetypes, "_db", mimetypes.MimeTypes(filenames=()))
+    db = mimetypes.MimeTypes(filenames=())
+    for table in db.types_map:
+        table.pop(".webp", None)
+    monkeypatch.setattr(mimetypes, "_db", db)
     assert mimetypes.guess_type("style-01-traits.webp")[0] is None, (
-        "이 시험의 전제가 깨졌습니다 - 내장 표에 .webp 가 생겼다면 시험을 지워도 됩니다"
+        "이 시험이 재현하려는 조건은 'OS 표에도 내장 표에도 .webp 가 없다' 입니다"
     )
 
     styles = env / "art-styles"

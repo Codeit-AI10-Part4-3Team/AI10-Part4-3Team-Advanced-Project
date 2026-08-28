@@ -1,4 +1,9 @@
-# infra/Caddyfile -- HTTPS 종단 지점입니다 (ADR-0016).
+# infra/caddy/Caddyfile -- HTTPS 종단 지점입니다 (ADR-0016).
+#
+# ⚠️ **이 디렉토리에는 이 파일만 둡니다.** compose 가 `infra/caddy/` 를 통째로
+#    `/etc/caddy` 에 붙이기 때문입니다 (이슈 #293 - 파일 단위 bind mount 는 inode 를 붙들어
+#    배포로 바뀐 내용을 컨테이너가 보지 못했습니다). 여기 넣는 것은 무엇이든 프록시
+#    컨테이너 안에서 보입니다.
 #
 # 브라우저가 보는 유일한 출처가 이 프록시이고, 여기서 TLS 를 벗긴 평문 HTTP 가 frontend 로
 # 넘어갑니다. `/v1` 프록시와 SPA 폴백은 그대로 frontend 의 nginx 몫입니다

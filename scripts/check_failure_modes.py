@@ -7,6 +7,7 @@
 
     python3 scripts/check_failure_modes.py --dry-run     # 무엇을 할지만 찍습니다
     python3 scripts/check_failure_modes.py
+    python3 scripts/check_failure_modes.py --out ~/failure-modes.md   # 진행 기록용 기록
 
 ⚠️ **e2e 하네스가 아니라 별도 스크립트인 이유가 있습니다.** `e2e/README.md` 가 "열화 경로
 자동화는 하네스가 docker 를 직접 다루게 되므로 그 결합을 감수할지가 먼저 정해져야 합니다" 를
@@ -361,6 +362,45 @@ class Report:
     def failures(self) -> int:
         return sum(1 for *_, ok in self.rows if not ok)
 
+    def as_markdown(self, *, host: str, mode: str, restored: bool) -> str:
+        """진행 기록에 그대로 붙일 수 있는 형태로 씁니다.
+
+        목적지가 `docs/역할_일정/05-백엔드_인프라.md` 진행 기록이라 JSON 이 아니라 마크다운
+        입니다. 그 기록이 답하는 질문은 "언제 무엇을 확인했는가" 이고, 사람이 읽습니다.
+
+        ⚠️ **재지 않은 것을 함께 적습니다.** 결과만 적힌 기록은 다음 사람에게 실제보다 넓게
+        읽히고, 이 저장소가 반복해서 당한 실패가 정확히 그것입니다 (스텁 숫자를 지표로 읽는
+        것, skip 을 통과로 읽는 것). 아래 "이 회차가 답하지 않는 것" 은 지우지 마세요.
+        """
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S%z")
+        lines = [
+            f"#### 실패 모드 4종 확인 ({stamp})",
+            "",
+            f"`scripts/check_failure_modes.py`. 대상 {host}, 생성 모드 `{mode}`.",
+            "",
+            "| 검사 | 기대 | 실제 | 판정 |",
+            "|---|---|---|---|",
+        ]
+        for label, expected, actual, ok in self.rows:
+            lines.append(
+                f"| {label.strip()} | `{expected}` | `{actual}` | {'OK' if ok else '실패'} |"
+            )
+        lines += [
+            "",
+            f"복구: {'확인함' if restored else '**실패 - 손으로 확인하세요**'}."
+            f" 남긴 세션 {len(self.sessions)}건 (보존 정리 배치가 치웁니다).",
+            "",
+            "**이 회차가 답하지 않는 것**",
+            "",
+            "- 가드레일 거절(`CONTENT_POLICY_REJECTED`)은 스텁이 거절하지 않아 재현 조건이"
+            " 없습니다 (e2e/README.md).",
+            "- 만화형은 관통 대상이 아닙니다 (구현_범위 1절). 여기서 지나간 것은 단일 광고형"
+            " 하나입니다.",
+            "- 지연 값은 지표가 아닙니다. 스텁 구간의 숫자는 자기 자신과의 일치율입니다"
+            " (AGENTS.md 현재 상태).",
+        ]
+        return "\n".join(lines) + "\n"
+
 
 def check_a_degraded(http_client: Http, compose: Compose, report: Report, image: bytes) -> None:
     """엔진이 죽어도 세션 생성은 지나갑니다 (ADR-0005).
@@ -543,6 +583,31 @@ def print_plan() -> None:
     print("  아무것도 재지 않았습니다 - `--dry-run` 을 빼야 판정이 나옵니다.")
 
 
+def write_record(
+    path: Path,
+    report: Report,
+    host: str,
+    mode: str,
+    restored: bool,
+    interrupted: bool,
+) -> None:
+    """판정을 파일로 남깁니다. 실패해도 검사 결과를 잃지 않습니다."""
+    text = report.as_markdown(host=host, mode=mode, restored=restored)
+    if interrupted:
+        text = (
+            "> ⚠️ **중단된 회차입니다.** 아래는 멈추기 전까지 잰 것이고, 나머지 검사는\n"
+            "> 돌지 않았습니다. 완주한 회차로 읽지 마세요.\n\n"
+        ) + text
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError as error:
+        # 파일을 못 써도 판정은 이미 화면에 있습니다. 여기서 죽으면 그것까지 잃습니다.
+        warn(f"기록을 쓰지 못했습니다 ({path}): {error}")
+        return
+    print(f"  기록: {path}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="무엇을 할지만 찍고 만지지 않습니다")
@@ -551,7 +616,19 @@ def main() -> int:
         action="store_true",
         help="실물 모드에서도 돌립니다. D 검사가 실제 렌더를 사므로 요금이 나갑니다",
     )
+    parser.add_argument(
+        "--out",
+        metavar="경로",
+        help="판정을 마크다운으로 남깁니다. 05 진행 기록에 그대로 붙일 수 있는 형태입니다",
+    )
     args = parser.parse_args()
+
+    # ⚠️ 배포 체크아웃 안에 쓰면 다음 배포의 사전 점검이 "추적되지 않는 파일" 로 경고합니다
+    #    (e2e venv 를 체크아웃 밖에 만드는 것과 같은 이유 - e2e/README.md). 막지는 않습니다,
+    #    로컬 클론에서는 정상적인 자리이기 때문입니다.
+    out_path = Path(args.out).expanduser() if args.out else None
+    if out_path is not None and out_path.resolve().is_relative_to(ROOT):
+        warn(f"{out_path} 가 체크아웃 안입니다. 배포 VM 이면 밖에 두세요 (예: ~/failure-modes.md).")
 
     base_url = os.environ.get(BASE_URL_ENV) or "http://localhost"
     login_id = os.environ.get(LOGIN_ID_ENV)
@@ -588,12 +665,13 @@ def main() -> int:
     image = product_image()
     report = Report()
     checks = (check_a_degraded, check_b_draft_timeout, check_c_render_fails, check_d_recovers)
+    interrupted = False
     try:
         for check in checks:
             check(http_client, compose, report, image)
     except KeyboardInterrupt:
         warn("중단되었습니다. 복구만 하고 끝냅니다.")
-        return 130 if restore(compose) else 1
+        interrupted = True
     finally:
         print()
         restored = restore(compose)
@@ -604,6 +682,13 @@ def main() -> int:
             # 복구 실패는 검사 결과보다 급합니다. 종료 코드에 실어야 스크립트를 묶어
             # 쓰는 쪽에서도 걸립니다.
             report.rows.append(("복구", "running", "실패", False))
+        # ⚠️ 중단됐을 때도 씁니다. 그때까지 잰 것은 잰 것이고, 아래 머리말이 회차가 온전하지
+        #    않았다는 것을 함께 적습니다 - 파일만 보고 완주한 회차로 읽히면 안 됩니다.
+        if out_path is not None:
+            write_record(out_path, report, mask(base_url), mode, restored, interrupted)
+
+    if interrupted:
+        return 130 if restored else 1
 
     print()
     if report.failures:

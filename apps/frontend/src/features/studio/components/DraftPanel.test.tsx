@@ -10,10 +10,11 @@ import type { Job, Session, SessionState } from "../types";
  * 한 단계이고(기획서 9.3) 열화(`messageMode: degraded`)는 설계된 동작입니다(ADR-0005).
  * 둘을 오류로 보내면 사용자는 자기가 뭘 잘못했다고 읽고, 팀은 설계된 열화를 장애로 보고합니다.
  *
- * ⚠️ **만화형 게이트도 여기서 고정합니다.** 이 패널이 만화형이면 시안 생성 버튼을 내리는데,
- * 그 조건이 사라지면 기본 설정(`stub`)으로 도는 사람이 실장애와 구분 안 되는 오류를 봅니다
- * (미결정_대장 N22, 이슈 #271). **N22 가 닫혀 게이트를 걷을 때 이 시험이 함께 바뀌어야
- * 한다는 것이 표시입니다** - 조용히 지워지면 안 됩니다.
+ * ⚠️ **출력 유형이 버튼 유무를 가르지 않는다는 것을 여기서 고정합니다.** 2026-08-27 까지는
+ * 반대였습니다 - 만화형이면 버튼을 내렸고, 스텁 분기가 만화형을 거절해 그 실패가 503 으로
+ * 도착하는 것이 이유였습니다(미결정_대장 N22, 이슈 #271). 스텁이 여섯 칸을 채우게 되어
+ * (ADR-0020, PR #290) 전제가 사라졌고 게이트를 걷었습니다. **시험을 지우지 않고 방향을
+ * 뒤집은 것은, 유형별 분기가 다시 들어오는 것을 막는 자리가 필요하기 때문입니다.**
  */
 
 function session(over: Partial<Session> = {}): Session {
@@ -54,24 +55,24 @@ function setup(over: Partial<Session> = {}, extra: Partial<Parameters<typeof Dra
 const generateButton = () => screen.queryByRole("button", { name: /시안 만들기/ });
 const finalizeButton = () => screen.queryByRole("button", { name: /확정하고 이미지 만들기/ });
 
-describe("만화형 게이트", () => {
-  it("만화형에는 시안 만들기 버튼이 없다", () => {
-    // ⚠️ 스텁 분기가 만화형을 거절하므로(`ai_engine/draft.py`), 버튼을 두면 사용자가
-    // "엔진에 연결하지 못했습니다" 를 봅니다 - 없는 장애를 있다고 말하는 화면입니다.
-    setup({ outputType: "comic" });
-    expect(generateButton()).not.toBeInTheDocument();
-    expect(screen.getByText(/만화형은 아직 시안 생성이 열려 있지 않습니다/)).toBeInTheDocument();
-  });
-
-  it("단일 광고형에는 있다", () => {
-    setup({ outputType: "single_ad" });
+describe("출력 유형은 시안 만들기를 가르지 않는다", () => {
+  // ⚠️ 2026-08-27 이전에는 만화형에서 버튼을 내렸습니다. 스텁이 여섯 칸을 채우게 되어
+  // (ADR-0020) 그 이유가 사라졌고, 지금은 **두 유형이 같아야** 합니다.
+  it.each(["single_ad", "comic"] as const)("%s 에 시안 만들기 버튼이 있다", (outputType) => {
+    setup({ outputType });
     expect(generateButton()).toBeInTheDocument();
   });
 
-  it("게이트는 brief_ready 에서만 걸린다", () => {
-    // 시안이 이미 있으면 안내가 아니라 시안을 보여 줘야 합니다.
+  it("옛 게이트 안내가 어디에도 남아 있지 않다", () => {
+    // 문구가 남아 있으면 게이트가 부분적으로 되살아난 것입니다.
+    setup({ outputType: "comic" });
+    expect(screen.queryByText(/시안 생성이 열려 있지 않습니다/)).not.toBeInTheDocument();
+  });
+
+  it("만화형도 시안이 있으면 시안을 보여 준다", () => {
     setup({ outputType: "comic", state: "draft_ready" as SessionState });
-    expect(screen.queryByText(/아직 시안 생성이 열려 있지 않습니다/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/시안 생성이 열려 있지 않습니다/)).not.toBeInTheDocument();
+    expect(generateButton()).not.toBeInTheDocument();
   });
 });
 

@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import struct
 import subprocess
 import sys
@@ -86,6 +87,12 @@ HTTP_TIMEOUT_S = 180
 # 잡 폴링 상한. 스텁 렌더는 초 단위이고 실패는 더 빠릅니다. e2e 의 240초보다 짧게 둔 것은
 # 이 스크립트가 실물 모드를 기본으로 거부하기 때문입니다.
 JOB_DEADLINE_S = 120
+
+# healthy 를 기다리는 상한. `infra/docker-compose.yml` 의 ai-engine healthcheck 에서 옵니다 -
+# `interval` 10초 x (`retries` 5 + 1). **도커가 컨테이너를 unhealthy 로 확정하는 창과 같고,**
+# 그 안에 healthy 가 안 되면 기다림이 모자란 것이 아니라 정말 고장입니다. 실측 회복은 12초
+# (interval 10초 + probe 한 번, PR #304 리뷰).
+HEALTH_DEADLINE_S = 60
 
 # `api/routes/auth.py` 의 `SESSION_COOKIE_NAME` 과 같은 값입니다.
 SESSION_COOKIE = "session_token"
@@ -160,12 +167,33 @@ class Compose:
     def up(self) -> bool:
         """다시 띄우고 healthy 까지 기다립니다.
 
-        ⚠️ **`unpause` 를 먼저 부릅니다.** 얼어 있는 컨테이너는 compose 가 `running` 으로
-        보므로 `up -d` 가 할 일이 없다고 판단하고, `--wait` 는 healthcheck 가 돌지 않아
-        그대로 매답니다. 이미 돌고 있으면 `unpause` 는 실패하고 그 실패는 무해합니다.
+        ⚠️ **`unpause` 를 먼저 부릅니다.** 이미 돌고 있으면 그 `unpause` 는 실패하고 그 실패는
+        무해합니다.
+
+        ⚠️ **`--wait` 를 쓰지 않고 직접 폴링합니다.** 얼어 있는 동안 도커가 컨테이너를
+        `unhealthy` 로 표시하고, `unpause` 해도 **다음 probe 가 성공할 때까지 그대로 남습니다.**
+        `up --wait` 는 그 상태를 기다리지 않고 `container is unhealthy` 로 즉시 실패합니다 -
+        그러면 B 다음의 C, D, 복구 판정이 **엔진이 멀쩡한데도** 전부 거짓 실패로 찍힙니다
+        (PR #304 리뷰, 신호정. 같은 이미지와 healthcheck 값으로 재현, 회복까지 12초).
         """
         self._run("unpause", SERVICE)
-        return self._run("up", "-d", "--wait", "--no-deps", SERVICE).returncode == 0
+        self._run("up", "-d", "--no-deps", SERVICE)
+        return self.wait_healthy()
+
+    def wait_healthy(self) -> bool:
+        """`running` + `healthy` 가 될 때까지 기다립니다."""
+        if self.dry_run:
+            return True
+        deadline = time.monotonic() + HEALTH_DEADLINE_S
+        while True:
+            state, health = self.status()
+            # healthcheck 가 없는 서비스는 `Health` 가 빈 문자열입니다. 그때는 `running` 이
+            # 우리가 알 수 있는 전부입니다.
+            if state == "running" and health in {"healthy", ""}:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(2)
 
     def ready(self) -> bool:
         """검사가 자기 전제를 스스로 세웁니다.
@@ -192,12 +220,18 @@ class Compose:
             return None
         return (done.stdout or "").strip() or "미설정"
 
-    def state(self) -> str:
-        done = self._run("ps", "--format", "{{.Service}} {{.State}}", capture=True)
+    def status(self) -> tuple[str, str]:
+        """`(state, health)`. 컨테이너가 없으면 `("없음", "")`.
+
+        ⚠️ **둘을 갈라 받는 것이 요점입니다.** `running` 인데 아직 `unhealthy` 인 것과 정말
+        못 살린 것은 사람이 할 일이 다릅니다 - 앞은 기다리면 되고 뒤는 손으로 봐야 합니다.
+        """
+        done = self._run("ps", "--format", "{{.Service}} {{.State}} {{.Health}}", capture=True)
         for line in (done.stdout or "").splitlines():
             if line.startswith(f"{SERVICE} "):
-                return line.split(" ", 1)[1].strip()
-        return "없음"
+                parts = line.split()
+                return parts[1], parts[2] if len(parts) > 2 else ""
+        return "없음", ""
 
 
 # ── HTTP ────────────────────────────────────────────────────────────────────────
@@ -586,15 +620,25 @@ def restore(compose: Compose) -> bool:
     컨테이너에는 `up -d` 가 닿지 않기 때문입니다.
     """
     log("복구")
-    compose.unpause()
     ok = compose.up()
-    state = compose.state()
-    if not ok or "running" not in state.lower():
+    state, health = compose.status()
+    if ok:
+        print(f"  복구 확인: {SERVICE} {state} {health or '(healthcheck 없음)'}")
+        return True
+
+    # ⚠️ **두 경우를 가릅니다.** 앞은 기다리면 풀리고 뒤는 사람이 봐야 합니다. 하나로 접어
+    #    두면 멀쩡한 스택을 두고 없는 장애를 찾으러 들어갑니다 (PR #304 리뷰).
+    if state == "running":
+        warn(
+            f"{SERVICE} 는 running 인데 {HEALTH_DEADLINE_S}초 안에 healthy 가 되지 않았습니다"
+            f" (health={health or '없음'})."
+        )
+        warn("컨테이너는 살아 있습니다. 잠시 뒤 다시 보세요:")
+    else:
         warn(f"{SERVICE} 를 되살리지 못했습니다 (상태: {state}).")
-        warn(f"손으로 확인하세요: docker compose -f {COMPOSE_FILE} ps")
-        return False
-    print(f"  복구 확인: {SERVICE} {state}")
-    return True
+        warn("손으로 확인하세요:")
+    warn(f"  docker compose -f {COMPOSE_FILE} --env-file {ENV_FILE} ps")
+    return False
 
 
 def print_plan() -> None:
@@ -626,6 +670,26 @@ def print_plan() -> None:
         print(f"  {label:<18} {verb:<44} {expected}")
     print("\n  걸리는 시간: 2 ~ 3분. B 만 서버측 상한(기본 60초)을 실제로 기다립니다.")
     print("  아무것도 재지 않았습니다 - `--dry-run` 을 빼야 판정이 나옵니다.")
+
+
+def arm_signals() -> None:
+    """SIGTERM 과 SIGHUP 을 Ctrl-C 와 같은 경로로 보냅니다.
+
+    ⚠️ **SSH 가 끊기면 셸이 SIGHUP 을 보내고 파이썬은 기본 처분으로 즉시 죽습니다** -
+    `finally` 가 돌지 않아 공유 VM 에 ai-engine 이 정지 또는 얼어 있는 채로 남습니다. 증상은
+    "시안 생성만 안 됨" 이라 이 스크립트와 무관해 보입니다. B 검사가 60초 넘게 멈춰 있으므로
+    그 창이 실제로 넓습니다 (PR #304 리뷰, 신호정. SIGTERM 실측 exit 143, finally 출력 없음).
+
+    ⚠️ 그래도 `tmux` 나 `nohup` 안에서 돌리는 편이 낫습니다. 이 처리는 신호를 받을 수 있을
+    때만 돕니다 - `SIGKILL` 과 전원 차단에는 방법이 없습니다.
+    """
+
+    def interrupt(_signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt)
+    if hasattr(signal, "SIGHUP"):  # 윈도우에는 없습니다
+        signal.signal(signal.SIGHUP, interrupt)
 
 
 def write_record(
@@ -724,6 +788,10 @@ def main() -> int:
         return 1
 
     print(f"스택: {mask(base_url)} / 생성 모드 {mode}\n")
+
+    # ⚠️ 컨테이너를 만지기 **전에** 겁니다. 이 뒤로는 어떤 경로로 끝나든 `finally` 가 돌아야
+    #    합니다.
+    arm_signals()
 
     http_client = Http(base_url)
     if not sign_in(http_client, login_id, password):

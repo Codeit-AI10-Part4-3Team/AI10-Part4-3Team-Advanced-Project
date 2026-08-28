@@ -247,6 +247,7 @@ docker compose -f infra/docker-compose.yml --env-file infra/.env \
 ```bash
 docker exec adgen-caddy-1 grep -c nosniff /etc/caddy/Caddyfile   # 0 이면 옛 설정입니다
 ```
+
 ### 응답 헤더는 Caddyfile 한 곳에서만 정합니다 (2026-08-22, 이슈 #115)
 
 브라우저가 보는 출처가 프록시 하나뿐이므로 하드닝 헤더도 `infra/caddy/Caddyfile` 의 `header` 블록

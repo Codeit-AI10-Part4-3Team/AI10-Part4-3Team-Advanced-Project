@@ -13,10 +13,11 @@
 2회(1차 + 위반 시 재생성)까지 호출합니다. **이미지 생성 API는 부르지 않습니다** -
 `draft:generate`는 텍스트(카피/대사)만 만들고, 이미지는 `render`가 별도로 맡습니다.
 
-⚠️ **스텁 모드(기본값)에서는 comic 케이스가 전부 스킵됩니다.** `_generate_stub`이
-만화형을 안 채우기 때문입니다(구현_범위 1절, "the stub is comic-blind" - 여섯 칸을
-지어내면 만화 경로가 완성된 것처럼 보여서 일부러 비워 둔 자리입니다). 즉 스텁으로는
-이 골든셋 26건 중 comic 16건을 검증할 수 없고, 실행해보려면 실물 모드가 필요합니다.
+⚠️ **스텁 모드(기본값)에서도 comic 케이스가 돕니다**(2026-08-27, ADR-0020). 전에는
+`_generate_stub`이 만화형을 거절해 comic 16건이 전부 스킵됐습니다. 지금은 여섯 칸이
+표시 붙은 고정 문구로 채워져 하네스가 끝까지 지나가지만, **그 회차의 위반 건수는
+지표가 아닙니다** - 스텁 문구는 소구점을 그대로 옮긴 것이라 언제나 통과합니다.
+가드레일 on/off 대조에 쓸 수 있는 회차는 여전히 실물 모드뿐입니다.
 
     python eval/run_collect_ad_copy.py --dry-run             # 호출 없이 계획만 출력
     python eval/run_collect_ad_copy.py --yes                 # 실행 (스텁이면 요금 0)
@@ -92,7 +93,9 @@ def run_one(case: dict[str, Any], arm: Arm, settings: Settings, run_id: str) -> 
     try:
         response = draft.generate_draft(request, settings)
     except NotImplementedError as exc:
-        # 스텁 + comic. 구현_범위 1절이 의도한 결손이지 이 스크립트의 버그가 아닙니다.
+        # 미구현 분기. 스텁 + comic 이 여기로 오던 경로는 ADR-0020 으로 사라졌고, 지금 이 갈래를
+        # 타는 케이스는 없습니다. 남겨 두는 이유는 다음 미구현 분기가 생겼을 때 이 하네스가
+        # 중간에 죽는 대신 그 회차만 건너뛰게 하기 위해서입니다.
         record["skipped"] = str(exc)
         return record
     except draft.DraftFailedError as exc:

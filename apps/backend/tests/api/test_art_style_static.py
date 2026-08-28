@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -140,3 +141,31 @@ def test_a_sibling_directory_under_the_same_volume_is_fine(env: Path) -> None:
     assert Path(settings.log_dir).parent == env
 
     _check_art_style_dir(settings)
+
+
+def test_the_type_does_not_depend_on_the_operating_system_mime_table(
+    client: TestClient, env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """⚠️ **같은 코드가 로컬에서는 맞고 컨테이너에서만 틀렸습니다** (이슈 #294).
+
+    `.webp` 는 파이썬 3.12 의 내장 mimetypes 표에 없고, `python:3.12-slim` 에는
+    `/etc/mime.types` 도 없습니다. 개발 기계에는 그 파일(윈도우는 레지스트리)이 있어 표가
+    채워지므로, `guess_type` 에 맡기면 **배포에서만** `application/octet-stream` 이 나갑니다.
+
+    아래 한 줄이 그 컨테이너 조건을 그대로 만듭니다 - OS 표를 읽지 않은 내장 표만으로
+    `_db` 를 갈아 끼웁니다. 사설 이름을 쓰는 이유는 이것이 재현하려는 조건 자체가
+    "OS 표가 없다" 이고, 공개 API 로는 그 상태를 만들 수 없기 때문입니다.
+    """
+    monkeypatch.setattr(mimetypes, "_db", mimetypes.MimeTypes(filenames=()))
+    assert mimetypes.guess_type("style-01-traits.webp")[0] is None, (
+        "이 시험의 전제가 깨졌습니다 - 내장 표에 .webp 가 생겼다면 시험을 지워도 됩니다"
+    )
+
+    styles = env / "art-styles"
+    styles.mkdir()
+    (styles / "style-01-traits.webp").write_bytes(WEBP)
+
+    answer = client.get("/static/art-styles/style-01-traits.webp")
+
+    assert answer.status_code == 200
+    assert answer.headers["content-type"] == "image/webp"

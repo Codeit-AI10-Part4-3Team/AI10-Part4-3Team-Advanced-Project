@@ -25,6 +25,7 @@ from api.routes import auth, catalog, jobs, sessions
 from backend_core.accounts import count as account_count
 from backend_core.accounts import seed
 from backend_core.config import Settings
+from backend_core.images import MEDIA_TYPE
 from backend_core.observability import install_file_log
 from backend_core.storage import connect, init_schema
 from backend_core.tokens import require_secret
@@ -80,6 +81,32 @@ class _ArtStyleFiles(StaticFiles):
     def file_response(self, *args: Any, **kwargs: Any) -> Response:
         response = super().file_response(*args, **kwargs)
         response.headers["Cache-Control"] = ART_STYLE_CACHE_CONTROL
+
+        # ⚠️ **`Content-Type` 을 `mimetypes` 에 맡기지 않습니다** (이슈 #294). `.webp` 는
+        #    파이썬 3.12 의 내장 표에 없고 `python:3.12-slim` 에는 `/etc/mime.types` 도
+        #    없어서, 개발 기계에서는 맞고 **배포에서만** `application/octet-stream` 이
+        #    나갔습니다. 프로세스 전역 표를 고치는 쪽(`mimetypes.add_type`)은 같은 증상을
+        #    없애지만, 그 수정이 지워졌을 때 시험이 도는 기계에서는 여전히 통과합니다 -
+        #    OS 표가 대신 답하기 때문입니다. 여기서 정하면 어디서 돌든 같은 값입니다.
+        #
+        # ⚠️ 표를 새로 쓰지 않고 `images.MEDIA_TYPE` 을 그대로 씁니다. 업로드 저장이 확장자를
+        #    고를 때 보는 표와 서빙이 보는 표가 갈리면 같은 그림이 경로마다 다른 타입으로
+        #    나가고, 그 어긋남은 한쪽을 고칠 때 드러나지 않습니다.
+        #
+        # 표에 없는 확장자는 건드리지 않고 `StaticFiles` 의 추측을 그대로 둡니다. 여기 놓이는
+        # 것은 업로드가 아니라 **사람이 볼륨에 넣는 우리 자산**이라 계약이 형식을 정해 주지
+        # 않습니다 - 예상 밖의 확장자가 오면 타입을 지어내기보다 원래 동작이 보이는 편이
+        # 낫습니다. 그리고 `.jpeg` 처럼 표에 없더라도 내장 표가 아는 것은 그쪽이 답합니다.
+        #
+        # ⚠️ **`args[0]` 은 부모가 위치 인자로 부른다는 가정입니다** (`StaticFiles.file_response`
+        #    의 첫 인자가 `full_path`). `response.path` 로 받는 쪽이 그 가정을 피하지만, 그
+        #    이름이 사라지면 헤더를 조용히 안 붙이고 #294 로 되돌아갑니다. 이쪽은 어긋나는
+        #    순간 `IndexError` 로 터지고 위 시험 둘이 바로 잡습니다 - 조용한 실패보다 낫습니다.
+        #    starlette 은 `fastapi>=0.110.0` 만 핀이라 환경마다 판이 다릅니다 (PR #208 리뷰).
+        media_type = MEDIA_TYPE.get(Path(str(args[0])).suffix.lower())
+        if media_type is not None:
+            response.headers["Content-Type"] = media_type
+
         return response
 
 

@@ -179,8 +179,17 @@ class Compose:
         log(f"{SERVICE} 기동 확인")
         return self.up()
 
-    def generation_mode(self) -> str:
+    def generation_mode(self) -> str | None:
+        """`None` 은 **읽지 못했다**는 뜻이고 "미설정" 과 다릅니다.
+
+        ⚠️ 둘을 같은 값으로 접었더니 앞선 회차가 엔진을 정지한 채 끝난 상태에서 "생성 모드가
+        `미설정` 입니다. 정말 돌리려면 --allow-model 을 붙이세요" 가 나왔습니다. **그 말을
+        따르면 모드를 모르는 채로 전 구간을 돌게 되고, 배포가 실물이었다면 요금이 나갑니다** -
+        이 가드가 막으려던 바로 그것입니다 (2026-08-28 자체 리뷰에서 재현).
+        """
         done = self._run("exec", "-T", SERVICE, "printenv", "ADGEN_GENERATION_MODE", capture=True)
+        if done.returncode != 0:
+            return None
         return (done.stdout or "").strip() or "미설정"
 
     def state(self) -> str:
@@ -678,21 +687,43 @@ def main() -> int:
     if not COMPOSE_FILE.exists():
         warn(f"{COMPOSE_FILE} 이 없습니다. 레포 루트에서 돌리세요.")
         return 1
+    # ⚠️ compose 가 `--env-file` 을 못 찾으면 경고만 하고 계속 가므로, 증상이 "엔진을 띄우지
+    #    못했습니다" 로만 보입니다. 없는 것은 `.env` 라고 여기서 말합니다 (커밋 대상이 아니라
+    #    새 체크아웃에는 없는 것이 정상입니다 - infra/README.md).
+    if not ENV_FILE.exists():
+        warn(f"{ENV_FILE} 이 없습니다. `cp infra/.env.example infra/.env` 후 값을 채우세요.")
+        return 1
 
     compose = Compose(dry_run=args.dry_run)
-    mode = "확인 안 함" if args.dry_run else compose.generation_mode()
+    if args.dry_run:
+        print(f"스택: {mask(base_url)} / 생성 모드 확인 안 함\n")
+        print_plan()
+        return 0
+
+    # ⚠️ 모드를 읽으려면 컨테이너가 떠 있어야 합니다. **앞선 회차가 정지한 채 끝났을 수
+    #    있고**(중단, 복구 실패), 어차피 A 이전의 정상 상태가 "엔진이 떠 있음" 입니다.
+    if not compose.ready():
+        warn(f"{SERVICE} 를 띄우지 못했습니다. 스택 상태부터 확인하세요.")
+        warn(f"  docker compose -f {COMPOSE_FILE} ps")
+        return 1
+
+    mode = compose.generation_mode()
+    # ⚠️ **읽지 못한 것을 실물 모드처럼 다루지 않습니다.** `--allow-model` 로 넘기라고 하면
+    #    모드를 모르는 채로 전 구간을 돌게 되고, 배포가 실물이었다면 요금이 나갑니다.
+    if mode is None:
+        warn(f"{SERVICE} 에서 ADGEN_GENERATION_MODE 를 읽지 못했습니다.")
+        warn("--allow-model 로 넘기지 마세요 - 모드를 모르는 채로 렌더를 사게 됩니다.")
+        return 1
+
     # ⚠️ D 검사가 전 구간을 돌므로 실물 모드면 렌더 요금이 나갑니다. 기본은 거부이고,
     #    넘기려면 사람이 명시해야 합니다 (2026-08-24 회의 안건 02 - 상한은 코드가 아니라
     #    사람이 봅니다).
-    if not args.dry_run and mode != "stub" and not args.allow_model:
+    if mode != "stub" and not args.allow_model:
         warn(f"생성 모드가 `{mode}` 입니다. D 검사가 실제 렌더를 삽니다.")
         warn("정말 돌리려면 --allow-model 을 붙이세요.")
         return 1
 
     print(f"스택: {mask(base_url)} / 생성 모드 {mode}\n")
-    if args.dry_run:
-        print_plan()
-        return 0
 
     http_client = Http(base_url)
     if not sign_in(http_client, login_id, password):

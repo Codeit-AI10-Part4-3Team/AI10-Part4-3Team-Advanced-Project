@@ -69,32 +69,28 @@ export function DraftPanel({
         </div>
       )}
 
-      {state === "brief_ready" &&
-        (session.outputType === "comic" ? (
-          // ⚠️ 관통 경로는 **단일 광고형 하나**입니다 (구현_범위 1절). 만화형은 분기 지점만
-          // 두고 스텁이며, 지금 시안 생성을 부르면 엔진이 503 으로 거절합니다 - 그리고 그
-          // 503 은 화면에 "엔진에 연결하지 못했습니다"로 도착합니다. 없는 장애를 있다고
-          // 말하는 것이라, 부를 수 없는 이유를 여기서 먼저 말하고 버튼을 내립니다.
-          <p className="notice notice-degraded">
-            만화형은 아직 시안 생성이 열려 있지 않습니다. 분기만 만들어 둔 상태이며(구현_범위
-            1절), 지금 관통하는 것은 단일 광고형입니다.
+      {/* ⚠️ **출력 유형으로 가르지 않습니다** (ADR-0020, 미결정_대장 N22, 2026-08-27 확정).
+          만화형에도 같은 버튼이 섭니다. 여기 게이트가 있었던 이유는 스텁 분기가 만화형을
+          거절하고 그 거절이 503 으로 도착해 **실장애와 구분되지 않았기** 때문인데, 스텁이
+          여섯 칸을 채우게 되어(#290) 그 전제가 사라졌습니다. 유형별 분기를 다시 넣지
+          마세요 - 화면은 지금 어느 생성 모드로 도는지 알 수 없고(계약에 필드가 없습니다),
+          알 필요도 없어졌습니다. */}
+      {state === "brief_ready" && (
+        <div className="stage-action">
+          {/* 되돌릴 수 없는 마지막 지점이라는 사실을 화면이 말해야 합니다 (INV-7). */}
+          <p className="contract-note">
+            시안을 만들면 브리프가 잠깁니다. 생성에 실패하면 잠금은 다시 풀립니다.
           </p>
-        ) : (
-          <div className="stage-action">
-            {/* 되돌릴 수 없는 마지막 지점이라는 사실을 화면이 말해야 합니다 (INV-7). */}
-            <p className="contract-note">
-              시안을 만들면 브리프가 잠깁니다. 생성에 실패하면 잠금은 다시 풀립니다.
-            </p>
-            <button
-              className="submit-button"
-              type="button"
-              onClick={onGenerate}
-              disabled={pending !== null}
-            >
-              {pending === "draft" ? "시안을 만드는 중..." : "시안 만들기"}
-            </button>
-          </div>
-        ))}
+          <button
+            className="submit-button"
+            type="button"
+            onClick={onGenerate}
+            disabled={pending !== null}
+          >
+            {pending === "draft" ? "시안을 만드는 중..." : "시안 만들기"}
+          </button>
+        </div>
+      )}
 
       {state === "draft_generating" && (
         <div className="empty-state" aria-live="polite">

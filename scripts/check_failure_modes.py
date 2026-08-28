@@ -158,8 +158,26 @@ class Compose:
         self._run("unpause", SERVICE)
 
     def up(self) -> bool:
-        """다시 띄우고 healthy 까지 기다립니다."""
+        """다시 띄우고 healthy 까지 기다립니다.
+
+        ⚠️ **`unpause` 를 먼저 부릅니다.** 얼어 있는 컨테이너는 compose 가 `running` 으로
+        보므로 `up -d` 가 할 일이 없다고 판단하고, `--wait` 는 healthcheck 가 돌지 않아
+        그대로 매답니다. 이미 돌고 있으면 `unpause` 는 실패하고 그 실패는 무해합니다.
+        """
+        self._run("unpause", SERVICE)
         return self._run("up", "-d", "--wait", "--no-deps", SERVICE).returncode == 0
+
+    def ready(self) -> bool:
+        """검사가 자기 전제를 스스로 세웁니다.
+
+        ⚠️ **각 검사는 앞 검사가 무엇을 해 놓았는지 가정하지 않습니다.** 가정했더니 A 가
+        엔진을 정지한 채 끝나고 B 와 C 가 준비 단계에서만 실패했습니다 - `pause` 는 한 번도
+        불리지 않았고, **이 스크립트가 존재하는 이유인 타임아웃 갈래를 한 줄도 지나지
+        않았습니다** (2026-08-28 실측). 검사 순서를 바꾸거나 하나만 골라 돌려도 서게 하려면
+        전제를 여기서 세워야 합니다.
+        """
+        log(f"{SERVICE} 기동 확인")
+        return self.up()
 
     def generation_mode(self) -> str:
         done = self._run("exec", "-T", SERVICE, "printenv", "ADGEN_GENERATION_MODE", capture=True)
@@ -238,6 +256,13 @@ class Http:
             # ⚠️ 4xx 와 5xx 도 **응답이지 예외가 아닙니다.** 이 스크립트가 재려는 것의 절반이
             #    503, 504 라 여기서 던지면 잴 것이 사라집니다.
             return Response(error.code, error.headers, error.read())
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            # ⚠️ 응답이 아예 오지 않은 경우입니다 - backend 자체가 안 떴거나, 서버측 상한이
+            #    `HTTP_TIMEOUT_S` 보다 커서 우리가 먼저 포기했거나. 트레이스백으로 죽으면
+            #    `finally` 의 복구는 돌지만 **무엇을 재다 죽었는지가 판정 표에 안 남습니다.**
+            #    `000` 은 curl 이 같은 상황에 쓰는 값이고 `deploy-vm.sh` 도 그렇게 씁니다.
+            warn(f"{method} {path}: 응답 없음 ({error})")
+            return Response(0, EmailMessage(), b"")
 
     def hold_session(self, answer: Response) -> bool:
         """로그인 응답의 `session_token` 을 뽑아 이후 요청에 답니다."""
@@ -430,6 +455,9 @@ def check_b_draft_timeout(
     갇힙니다. 상태 코드만 보면 그 일이 안 났는지 알 수 없습니다.
     """
     log("B. 시안 타임아웃 - 엔진을 얼린 채 시안 생성 (서버측 상한만큼 걸립니다)")
+    if not compose.ready():
+        report.check("B  준비 (엔진 기동)", "healthy", "기동 실패")
+        return
     answer = create_session(http_client, image, "타임아웃 확인 커피")
     session = answer.json()
     session_id = session.get("sessionId", "")
@@ -464,6 +492,9 @@ def check_c_render_fails(http_client: Http, compose: Compose, report: Report, im
     ⚠️ 조회는 200 이고 잡이 `failed` 입니다. 그 둘이 같은 층이 아니라는 것이 계약입니다.
     """
     log("C. 렌더 실패 - 시안까지 간 뒤 엔진을 정지하고 확정")
+    if not compose.ready():
+        report.check("C  준비 (엔진 기동)", "healthy", "기동 실패")
+        return
     answer = create_session(http_client, image, "렌더 실패 확인 커피")
     session = answer.json()
     session_id = session.get("sessionId", "")
@@ -494,7 +525,7 @@ def check_d_recovers(http_client: Http, compose: Compose, report: Report, image:
     이것이 없으면 A ~ C 가 전부 OK 인데 서비스는 죽어 있는 상태를 초록으로 보고할 수 있습니다.
     """
     log("D. 복구 - 엔진을 되살리고 전 구간")
-    if not compose.up():
+    if not compose.ready():
         report.check("D  복구 (엔진 기동)", "healthy", "기동 실패")
         return
 
@@ -565,20 +596,25 @@ def print_plan() -> None:
     skip 하고도 종료 코드 0 이던 건 - e2e/README.md).
     """
     print("  아무것도 만지지 않습니다. 실제 실행은 아래 순서로 돕니다.\n")
+    up = f"compose unpause + up -d --wait {SERVICE}"
+    # ⚠️ **검사마다 앞에 기동 확인이 붙습니다.** 앞 검사가 남긴 상태를 가정하지 않기 때문이고,
+    #    가정했더니 A 가 엔진을 정지한 채 끝나 B 와 C 가 준비 단계에서만 실패했습니다.
     steps = (
         ("A  열화", f"compose stop {SERVICE}", "POST /v1/sessions -> 201 brief_filling degraded"),
+        ("B  기동 확인", up, "앞 검사가 정지시켜 두었습니다"),
         (
             "B  시안 타임아웃",
             f"compose pause {SERVICE}",
             "POST .../draft -> 504 GENERATION_TIMEOUT",
         ),
         ("B  잠금 해제", f"compose unpause {SERVICE}", "GET /v1/sessions/{id} -> brief_ready"),
+        ("C  기동 확인", up, "시안까지 가려면 엔진이 있어야 합니다"),
         ("C  렌더 실패", f"compose stop {SERVICE}", "확정 후 폴링 -> failed UPSTREAM_UNAVAILABLE"),
-        ("D  복구", f"compose up -d --wait {SERVICE}", "전 구간 -> done image/webp"),
-        ("복구(finally)", f"compose unpause/up {SERVICE}", "compose ps 로 running 확인"),
+        ("D  복구", up, "전 구간 -> done image/webp"),
+        ("복구(finally)", up, "compose ps 로 running 확인"),
     )
     for label, verb, expected in steps:
-        print(f"  {label:<18} {verb:<34} {expected}")
+        print(f"  {label:<18} {verb:<44} {expected}")
     print("\n  걸리는 시간: 2 ~ 3분. B 만 서버측 상한(기본 60초)을 실제로 기다립니다.")
     print("  아무것도 재지 않았습니다 - `--dry-run` 을 빼야 판정이 나옵니다.")
 

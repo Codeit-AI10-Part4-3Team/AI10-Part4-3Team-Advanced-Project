@@ -234,6 +234,16 @@ show_changes() {
   touched="$(git --no-pager diff --name-only "$prev..$now")"
   grep -q '^packages/contracts/' <<<"$touched" && warn "계약(openapi.yaml)이 바뀌었습니다 — 프론트가 같은 판을 보고 있는지 확인하세요."
   grep -q '^infra/\.env\.example$' <<<"$touched" && warn ".env.example 이 바뀌었습니다 — VM 의 infra/.env 에 새 키를 반영했는지 확인하세요."
+
+  # ⚠️ **이 `return 0` 을 지우지 마세요.** 위 두 줄은 `grep && warn` 이라, 일치가 없으면
+  #    AND 리스트가 1 을 반환하고 그 값이 **함수의 반환값**이 됩니다. `main` 은 이 함수를
+  #    단순 명령으로 부르므로 `set -e` 가 곧바로 배포를 죽입니다 — 그것도 `bring_up`
+  #    **직전에**, `update_checkout` 이 체크아웃만 새 커밋으로 옮겨 둔 채로. 즉 이 스크립트가
+  #    `--no-build` 와 `--ref` 조합을 거부하면서까지 지키려던 "HEAD 와 도는 이미지가 같다"
+  #    가 깨진 상태로 남고, 실패 메시지는 그 사실을 말해 주지 않습니다.
+  #    2026-08-26 에 실제로 났습니다 (`540cc9d` -> `a42e78c`, 범위에 infra/ 변경 없음).
+  #    두 `warn` 은 경고일 뿐 배포 가부와 무관하므로 반환값에 실려서는 안 됩니다 (#292).
+  return 0
 }
 
 bring_up() {

@@ -8,9 +8,11 @@ Two rules this module must not "simplify":
 - **No fallback.** Copy differs per product, so a pre-approved response does not exist.
   When the model call fails this path fails explicitly (ADR-0005). Assembling copy from
   rules instead is exactly how claims the input never made get published.
-- **The stub is comic-blind.** Only the single-ad branch is filled, because the walking
-  skeleton's single pass-through path is single-ad; the comic branch exists as structure
-  and raises (구현_범위 1절). Faking six panels would make the comic path look finished.
+- **The stub fills both output types, and marks everything it writes.** 스켈레톤 시절 만화형
+  갈래를 비워 둔 이유는 "여섯 칸을 채우면 만화 경로가 끝난 것처럼 보인다" 였는데, 실물 분기가
+  2026-08-20 부터 실제로 여섯 칸을 쓰므로 그 전제가 사라졌습니다 (ADR-0020, 미결정_대장 N22).
+  칸 수와 역할은 계약과 기획서 7.3 이 정해 스텁이 새로 정하는 값도 없습니다. 지어내면 안 되는
+  것은 여전히 **입력에 없는 주장**이고, 그것은 `stub_marker` 와 근거 문구만으로 지킵니다.
 """
 
 import json
@@ -69,21 +71,24 @@ def generate_draft(request: DraftGenerateRequest, settings: Settings) -> DraftGe
 
 
 def _generate_stub(request: DraftGenerateRequest, settings: Settings) -> DraftGenerateResponse:
-    """Fixed single-ad draft, visibly marked.
+    """Fixed draft for either output type, visibly marked.
 
     ⚠️ The copy is built **only** from `sellingPoint`, part of the guardrail's evidence
     (`sellingPoint` + `note` + product name, see `_evidence`). Even a stub must not put a
     number or a claim on the wire that the input did not carry — the skeleton is where that
     habit is set.
-    """
-    if request.output_type == "comic":
-        raise NotImplementedError(
-            "comic output is a structural branch only in the walking skeleton "
-            "(구현_범위 1절); the stub fills the single-ad path"
-        )
 
+    ⚠️ **만화형도 채웁니다** (ADR-0020). 화면이 기본 설정(`stub`)에서 만화형을 열 수 있어야
+    하는데, 여기서 거절하면 그 실패가 라우트에서 503 이 되어 실장애와 구분되지 않습니다
+    (미결정_대장 N22).
+    """
     marker = settings.stub_marker
     brief = request.brief
+    if request.output_type == "comic":
+        return DraftGenerateResponse(
+            draft=_stub_comic(brief, marker),
+            guardrail_applied=request.guardrail_applied,
+        )
     return DraftGenerateResponse(
         draft=SingleAdDraft(
             ad_plan=f"[{marker}] {brief.product_name} 광고 기획안. 근거: {brief.selling_point}",
@@ -91,6 +96,30 @@ def _generate_stub(request: DraftGenerateRequest, settings: Settings) -> DraftGe
             visual_plan=f"[{marker}] {brief.art_style} 화풍의 제품 단독 컷",
         ),
         guardrail_applied=request.guardrail_applied,
+    )
+
+
+def _stub_comic(brief: Brief, marker: str) -> ComicDraft:
+    """여섯 칸을 고정 문구로 채웁니다. 칸마다 표시가 붙습니다.
+
+    ⚠️ **여섯 칸의 대사가 같습니다.** 칸마다 다른 문장을 쓰려면 소구점에 없는 말을 지어내야
+    하고, 그 순간 스텁이 결과물처럼 보입니다. 반복 자체가 스텁이라는 표시입니다.
+
+    ⚠️ **숫자를 넣지 않습니다.** 칸 번호를 문구에 적으면 근거에 없는 수치가 되어, 가드레일을
+    스텁 회차에 돌렸을 때 위반으로 잡힙니다 (ADR-0019). 역할 이름은 `PANEL_ROLES` 가 정한
+    구조값이라 우리가 만든 주장이 아니고, `scene` 에만 들어갑니다 (INV-5).
+    """
+    return ComicDraft(
+        ad_plan=f"[{marker}] {brief.product_name} 만화형 광고 기획안. 근거: {brief.selling_point}",
+        panels=[
+            Panel(
+                index=index,
+                role=role,
+                scene=f"[{marker}] {role} 칸 자리표시자",
+                dialogue=f"[{marker}] {brief.selling_point}",
+            )
+            for index, role in enumerate(PANEL_ROLES, start=1)
+        ],
     )
 
 
@@ -145,17 +174,16 @@ def _patch_stub(request: DraftPatchEngineRequest, settings: Settings) -> DraftGe
     do with it is put it where it belongs — inventing replacement copy here would put claims
     on the wire that neither the input nor the user supplied (ADR-0005, INV-6).
 
-    ⚠️ Comic-blind, like `_generate_stub`. The skeleton's pass-through path is single-ad and
-    the comic branch exists as structure only (구현_범위 1절); patching six panels here would
-    make the comic path look finished.
+    ⚠️ 만화형도 채웁니다, `_generate_stub` 과 같은 이유입니다 (ADR-0020). 화면이 만화형을
+    열어 두는 이상 부분 교체만 503 으로 죽으면 문제가 절반만 옮겨 갑니다.
     """
-    if request.output_type == "comic":
-        raise NotImplementedError(
-            "comic output is a structural branch only in the walking skeleton "
-            "(구현_범위 1절); the stub patches the single-ad path"
+    marker = settings.stub_marker
+    if isinstance(request.draft, ComicDraft):
+        return DraftGenerateResponse(
+            draft=_patched_stub_comic(request, request.draft, marker),
+            guardrail_applied=request.guardrail_applied,
         )
 
-    marker = settings.stub_marker
     # `exclude_unset` and not `exclude_none`: in this family an omitted key and `""` are
     # opposite instructions — "leave it alone" against "empty it" (models/patch.py).
     # ⚠️ `exclude={"panels"}` is now unreachable — `check_patch_matches_output_type` rejects
@@ -171,6 +199,37 @@ def _patch_stub(request: DraftPatchEngineRequest, settings: Settings) -> DraftGe
         draft=request.draft.model_copy(update=changes),
         guardrail_applied=request.guardrail_applied,
     )
+
+
+def _patched_stub_comic(
+    request: DraftPatchEngineRequest, draft: ComicDraft, marker: str
+) -> ComicDraft:
+    """패치가 지목한 칸만 갈아 끼운 사본. 표시는 바뀐 자리에만 붙습니다.
+
+    ⚠️ 패치에 없는 칸은 손대지 않고, 패치에 있는 칸이라도 이름 없는 부분은 그대로 둡니다 -
+    `_patched_comic` 이 실물에서 지키는 성질과 같습니다. 스텁이 통째로 다시 쓰면 부분 교체가
+    되는지를 화면이 확인할 수 없습니다.
+
+    ⚠️ `panels` 가 없는 만화형 패치는 여기까지 오지 않습니다. 만화형이 이름 붙일 수 있는
+    필드가 `panels` 뿐이고(`check_patch_matches_output_type`) 빈 패치는 `AtLeastOneField` 가
+    막습니다. 그래도 확인하는 이유는 `model_copy` 가 검증하지 않기 때문이며, `_patched_comic`
+    도 같은 자리에서 같은 확인을 합니다.
+    """
+    if request.patch.panels is None:
+        raise DraftFailedError("만화형 패치인데 panels 가 없습니다.")
+
+    panels = list(draft.panels)
+    for key, cell_patch in request.patch.panels.root.items():
+        # ⚠️ `dict[str, str]` 을 명시하는 이유는 `_patched_comic` 과 같습니다 - `Mapping` 은
+        # 키에 불변이라 추론된 리터럴 키 타입을 `model_copy(update=...)` 가 받지 않습니다.
+        changes: dict[str, str] = {
+            name: f"[{marker}] {value}"
+            for name, value in cell_patch.model_dump(exclude_unset=True).items()
+        }
+        position = int(key) - 1
+        panels[position] = panels[position].model_copy(update=changes)
+
+    return draft.model_copy(update={"panels": panels})
 
 
 def _patch_with_model(

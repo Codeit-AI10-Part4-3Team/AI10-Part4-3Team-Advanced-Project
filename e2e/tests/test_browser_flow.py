@@ -48,7 +48,7 @@ def test_browser_walks_from_input_to_download(
     #    때마다 여기가 함께 깨집니다. 접근성 이름은 부분 일치라 이 값으로도 각각 하나에만
     #    붙는 것을 확인했습니다 (PR #266 리뷰, 신호정).
     page.get_by_label("제품명").fill(PRODUCT_NAME)
-    page.get_by_label("제품 장점").fill(
+    page.get_by_label("제품 특징").fill(
         "원두를 주문 후에 갈아 내려 산미가 살아 있습니다. 500g 한 봉지 기준입니다."
     )
     page.get_by_role("button", name="광고 만들기 시작").click()

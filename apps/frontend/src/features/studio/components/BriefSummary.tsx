@@ -261,7 +261,10 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
 
           {isEditable(briefMeta.sellingPoint) && (
             <label className="field">
-              <span>핵심 소구점</span>
+              {/* ⚠️ 입력 화면과 같은 문구여야 합니다 (`BriefForm.tsx`). 계약의 필드는
+                  `sellingPoint` 그대로이고 바꾼 것은 화면 문구뿐입니다 - "소구점" 은 업계
+                  용어라 처음 쓰는 사람이 무엇을 적어야 할지 모릅니다. */}
+              <span>제품 장점</span>
               <textarea
                 value={form.sellingPoint}
                 maxLength={200}
@@ -390,7 +393,7 @@ export function BriefSummary({ session, editable, onSave }: BriefSummaryProps) {
           </div>
           <div className="wide">
             <dt>
-              핵심 소구점 <FilledMark meta={briefMeta.sellingPoint} />
+              제품 장점 <FilledMark meta={briefMeta.sellingPoint} />
             </dt>
             <dd>{brief.sellingPoint}</dd>
           </div>

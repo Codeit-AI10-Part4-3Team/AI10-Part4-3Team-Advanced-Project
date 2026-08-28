@@ -95,7 +95,7 @@ export function BriefForm({ onSubmit, pending, guide }: BriefFormProps) {
   const missing = [
     image === null ? "제품 이미지" : null,
     fields.productName.trim() === "" ? "제품명" : null,
-    fields.sellingPoint.trim() === "" ? "제품 장점" : null,
+    fields.sellingPoint.trim() === "" ? "제품 특징" : null,
   ].filter((name): name is string => name !== null);
 
   const ready = missing.length === 0 && imageError === null;
@@ -166,9 +166,19 @@ export function BriefForm({ onSubmit, pending, guide }: BriefFormProps) {
 
         <label className="field">
           {/* ⚠️ 계약의 필드 이름은 `sellingPoint` 그대로입니다. 바꾼 것은 **화면 문구**뿐이고,
-              "소구점" 이 업계 용어라 처음 쓰는 사람이 무엇을 적어야 할지 모릅니다. */}
+              "소구점" 이 업계 용어라 처음 쓰는 사람이 무엇을 적어야 할지 모릅니다.
+
+              ⚠️ **"장점" 이 아니라 "특징" 입니다** (2026-08-28, PR #302 리뷰에서 01 이 정했습니다).
+              이 칸은 자랑거리를 적는 자리가 아니라 **생성물이 넘을 수 없는 울타리**입니다 -
+              계약이 `sellingPoint` 를 "가드레일의 근거 원문. 여기에 없는 수치와 효능은 생성물에
+              등장할 수 없습니다" 로 정의합니다(`openapi.yaml`). "장점" 은 "좋은 점만 적어야
+              하나" 로 읽혀 근거가 좁아집니다.
+
+              ⚠️ **아래 안내 문구와 같은 말을 써야 합니다.** 한동안 라벨만 "장점" 이고 안내와
+              placeholder 는 "특징" 쪽이었습니다. 어긋나면 사용자가 무엇을 적을지 두 번
+              판단하게 됩니다. 시험이 둘의 일치를 겁니다. */}
           <span>
-            제품 장점 <em className="required">(필수)</em>
+            제품 특징 <em className="required">(필수)</em>
           </span>
           <textarea
             value={fields.sellingPoint}

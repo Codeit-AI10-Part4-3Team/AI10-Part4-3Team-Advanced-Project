@@ -65,7 +65,7 @@ describe("필수 항목 표시", () => {
     // ⚠️ 라벨을 **문구가 아니라 폼 컨트롤로** 찾습니다. 비활성 안내가 같은 단어를 쓰기
     // 때문에(`아직 비어 있습니다: 제품명, ...`) 텍스트로 찾으면 둘 다 걸립니다.
     setup();
-    for (const label of ["제품 이미지", "제품명", "제품 장점"]) {
+    for (const label of ["제품 이미지", "제품명", "제품 특징"]) {
       const field = screen.getByLabelText(new RegExp(label)).closest("label");
       expect(within(field as HTMLElement).getByText("(필수)")).toBeInTheDocument();
     }
@@ -77,11 +77,21 @@ describe("필수 항목 표시", () => {
     expect(within(optional as HTMLElement).queryByText("(필수)")).not.toBeInTheDocument();
   });
 
+  it("라벨과 안내 문구가 같은 말을 쓴다", () => {
+    // ⚠️ 라벨만 "장점" 이고 안내는 "특징" 이던 때가 있었습니다 (PR #302 리뷰). 이 칸은
+    // 가드레일의 근거 원문이라 "특징" 이 맞고, 둘이 어긋나면 무엇을 적을지 두 번 판단하게
+    // 됩니다. 한쪽만 고치는 것을 막습니다.
+    setup();
+    expect(screen.getByLabelText(/제품 특징/)).toBeInTheDocument();
+    expect(screen.getByText(/광고가 근거로 쓸 제품의 실제 특징을 적어주세요/)).toBeInTheDocument();
+    expect(screen.queryByText(/장점/)).not.toBeInTheDocument();
+  });
+
   it("어려운 말을 쓰지 않는다", () => {
     // "소구점" 은 업계 용어라 처음 쓰는 사람이 무엇을 적어야 할지 모릅니다. 계약의 필드
     // 이름(`sellingPoint`)은 그대로이고 바뀐 것은 화면 문구뿐입니다.
     setup();
-    expect(screen.getByLabelText(/제품 장점/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/제품 특징/)).toBeInTheDocument();
     expect(screen.queryByText(/소구점/)).not.toBeInTheDocument();
   });
 });
@@ -95,7 +105,7 @@ describe("시작 버튼", () => {
     // ⚠️ **어느 칸이 비었는지 이름을 댑니다.** 버튼을 잠그면 브라우저의 `required` 안내가
     // 도달하지 못해(비활성 버튼은 클릭도 Enter 도 아무 일을 하지 않습니다), 필수 셋 중
     // 무엇이 남았는지 화면이 말하지 않으면 사용자가 스스로 찾아야 합니다.
-    expect(screen.getByText(/아직 비어 있습니다: 제품 이미지, 제품명, 제품 장점/)).toBeInTheDocument();
+    expect(screen.getByText(/아직 비어 있습니다: 제품 이미지, 제품명, 제품 특징/)).toBeInTheDocument();
   });
 
   it("안내가 스크린 리더에 전달된다", () => {
@@ -113,7 +123,7 @@ describe("시작 버튼", () => {
     });
     const hint = screen.getByText(/아직 비어 있습니다/);
     expect(hint).toHaveTextContent("제품 이미지");
-    expect(hint).toHaveTextContent("제품 장점");
+    expect(hint).toHaveTextContent("제품 특징");
     expect(hint).not.toHaveTextContent("제품명,");
   });
 

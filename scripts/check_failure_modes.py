@@ -130,10 +130,13 @@ def mask(url: str) -> str:
 
 
 class Compose:
-    """`docker compose` 호출. 동사와 대상을 좁혀 둡니다."""
+    """`docker compose` 호출. 동사와 대상을 좁혀 둡니다.
 
-    def __init__(self, *, dry_run: bool) -> None:
-        self.dry_run = dry_run
+    ⚠️ **`--dry-run` 은 이 클래스를 거치지 않습니다.** `print_plan()` 이 계획을 찍고 끝나므로,
+    여기 "안 만지는" 모드를 두면 닿지 않는 갈래가 됩니다 - 다음 사람이 그 갈래를 보고
+    dry-run 이 여기로 온다고 읽습니다 (PR #304 리뷰). **이 객체가 만들어졌다면 진짜로
+    만집니다.**
+    """
 
     def _run(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
         if args[0] not in VERBS:
@@ -147,9 +150,6 @@ class Compose:
             str(ENV_FILE),
             *args,
         ]
-        if self.dry_run:
-            print(f"    [dry-run] {' '.join(command)}")
-            return subprocess.CompletedProcess(command, 0, "", "")
         # 인자는 위 VERBS 로 좁힌 상수와 서비스 이름 하나뿐이고, 셸을 거치지 않습니다.
         return subprocess.run(command, capture_output=capture, text=True, check=False)
 
@@ -192,13 +192,17 @@ class Compose:
 
     def wait_healthy(self) -> bool:
         """`running` + `healthy` 가 될 때까지 기다립니다."""
-        if self.dry_run:
-            return True
         deadline = time.monotonic() + HEALTH_DEADLINE_S
         while True:
             state, health = self.status()
             # healthcheck 가 없는 서비스는 `Health` 가 빈 문자열입니다. 그때는 `running` 이
             # 우리가 알 수 있는 전부입니다.
+            #
+            # ⚠️ **빈 문자열이 그것만 뜻하지는 않습니다. 얼어 있는 컨테이너도 빈 문자열입니다**
+            #    (`compose ps` 기준. 같은 순간 `docker inspect` 는 `unhealthy` 라고 답합니다).
+            #    그래서 `state == "running"` 가드가 **장식이 아닙니다** - 지우면 얼어 있는
+            #    엔진이 healthy 로 통과하고, B 검사가 재려던 것이 그 자리에서 사라집니다
+            #    (PR #304 리뷰). 기동 중에는 `starting` 이라 이 갈래에 걸리지 않습니다.
             if state == "running" and health in {"healthy", ""}:
                 return True
             if time.monotonic() >= deadline:
@@ -728,7 +732,16 @@ def write_record(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    # ⚠️ **`RawDescriptionHelpFormatter` 가 없으면 argparse 가 줄바꿈을 전부 지웁니다** -
+    #    이 파일의 머리말에는 표와 목록이 있어 한 덩어리 문단으로 뭉개집니다.
+    #    `## ` 앞까지만 싣는 것은 나머지가 "왜 이렇게 만들었나" 라서 `--help` 가 아니라 파일을
+    #    열어 읽을 내용이기 때문입니다. 잘라 쓰되 **복사하지 않아 두 곳이 어긋날 일이 없습니다.**
+    summary = (__doc__ or "").split("\n## ", 1)[0].strip()
+    parser = argparse.ArgumentParser(
+        description=summary,
+        epilog="나머지 배경(stop 과 pause 를 가르는 이유, 실측값)은 이 파일 머리말에 있습니다.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--dry-run", action="store_true", help="무엇을 할지만 찍고 만지지 않습니다")
     parser.add_argument(
         "--allow-model",
@@ -778,7 +791,7 @@ def main() -> int:
         warn(f"{ENV_FILE} 이 없습니다. `cp infra/.env.example infra/.env` 후 값을 채우세요.")
         return 1
 
-    compose = Compose(dry_run=False)
+    compose = Compose()
 
     # ⚠️ 모드를 읽으려면 컨테이너가 떠 있어야 합니다. **앞선 회차가 정지한 채 끝났을 수
     #    있고**(중단, 복구 실패), 어차피 A 이전의 정상 상태가 "엔진이 떠 있음" 입니다.

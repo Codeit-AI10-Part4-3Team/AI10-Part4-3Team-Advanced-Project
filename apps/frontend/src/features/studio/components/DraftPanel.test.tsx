@@ -69,10 +69,32 @@ describe("출력 유형은 시안 만들기를 가르지 않는다", () => {
     expect(screen.queryByText(/시안 생성이 열려 있지 않습니다/)).not.toBeInTheDocument();
   });
 
-  it("만화형도 시안이 있으면 시안을 보여 준다", () => {
+  it("draft_ready 에서는 옛 안내도 시안 만들기도 없다", () => {
+    // ⚠️ 이름을 정확히 둡니다. 이 시험은 **시안이 그려지는 것을 재지 않습니다** -
+    // 픽스처에 `draft` 가 없어 `DraftPanel` 이 `DraftView` 를 그리지 않습니다.
+    // 여섯 칸 렌더는 아래 "만화형 시안 여섯 칸" 이 봅니다.
     setup({ outputType: "comic", state: "draft_ready" as SessionState });
     expect(screen.queryByText(/시안 생성이 열려 있지 않습니다/)).not.toBeInTheDocument();
     expect(generateButton()).not.toBeInTheDocument();
+  });
+
+  it("만화형 시안은 여섯 칸이 역할과 함께 그려진다", () => {
+    // ⚠️ **이 PR 이 여는 화면을 재는 유일한 자리입니다.** 게이트를 걷어 사용자가 만화형
+    // 시안을 실제로 보게 되는데, 버튼이 선다는 것만 재면 `DraftView` 의 만화형 갈래가
+    // 통째로 사라져도 CI 가 초록입니다 (실측: 그 갈래를 죽여도 89건 전량 통과했습니다).
+    setup({
+      outputType: "comic",
+      state: "draft_ready" as SessionState,
+      draft: {
+        adPlan: "핸드드립 하루",
+        panels: (["hook", "setup", "problem", "solution", "proof", "cta"] as const).map(
+          (role, i) => ({ index: i + 1, role, scene: `장면 ${i + 1}`, dialogue: `대사 ${i + 1}` }),
+        ),
+      },
+    } as Partial<Session>);
+    expect(screen.getByText(/1\.\s*후킹/)).toBeInTheDocument();
+    expect(screen.getByText(/6\.\s*행동 유도/)).toBeInTheDocument();
+    expect(screen.getAllByText(/^대사 /)).toHaveLength(6);
   });
 });
 

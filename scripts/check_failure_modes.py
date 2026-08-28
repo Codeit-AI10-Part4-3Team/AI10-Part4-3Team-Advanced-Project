@@ -90,8 +90,8 @@ JOB_DEADLINE_S = 120
 
 # healthy 를 기다리는 상한. `infra/docker-compose.yml` 의 ai-engine healthcheck 에서 옵니다 -
 # `interval` 10초 x (`retries` 5 + 1). **도커가 컨테이너를 unhealthy 로 확정하는 창과 같고,**
-# 그 안에 healthy 가 안 되면 기다림이 모자란 것이 아니라 정말 고장입니다. 실측 회복은 12초
-# (interval 10초 + probe 한 번, PR #304 리뷰).
+# 그 안에 healthy 가 안 되면 기다림이 모자란 것이 아니라 정말 고장입니다. 실측 회복은 9초
+# (probe 한 번, 2026-08-28) - 상한이 여섯 배 넉넉한 것은 부하가 걸린 VM 을 위해서입니다.
 HEALTH_DEADLINE_S = 60
 
 # `api/routes/auth.py` 의 `SESSION_COOKIE_NAME` 과 같은 값입니다.
@@ -170,11 +170,21 @@ class Compose:
         ⚠️ **`unpause` 를 먼저 부릅니다.** 이미 돌고 있으면 그 `unpause` 는 실패하고 그 실패는
         무해합니다.
 
-        ⚠️ **`--wait` 를 쓰지 않고 직접 폴링합니다.** 얼어 있는 동안 도커가 컨테이너를
-        `unhealthy` 로 표시하고, `unpause` 해도 **다음 probe 가 성공할 때까지 그대로 남습니다.**
-        `up --wait` 는 그 상태를 기다리지 않고 `container is unhealthy` 로 즉시 실패합니다 -
+        ⚠️ **`--wait` 를 쓰지 않고 직접 폴링합니다.** `unpause` 직후 컨테이너는 `running` 인데
+        **`unhealthy` 이고, 다음 probe 가 성공할 때까지 그대로 남습니다.** `up --wait` 는 그
+        상태를 기다리지 않고 `container is unhealthy` 로 **1초 만에 종료 코드 1** 을 냅니다 -
         그러면 B 다음의 C, D, 복구 판정이 **엔진이 멀쩡한데도** 전부 거짓 실패로 찍힙니다
-        (PR #304 리뷰, 신호정. 같은 이미지와 healthcheck 값으로 재현, 회복까지 12초).
+        (PR #304 리뷰가 잡았습니다).
+
+        `로컬에서 확인함` (2026-08-28, 같은 healthcheck 값으로 격리 프로젝트를 세워 실측):
+
+            pause 직후            paused  (health 는 빈 문자열)
+            unpause 직후          running unhealthy
+            up -d --wait          "is unhealthy", 1초, rc=1
+            healthy 로 회복        9초
+            이 함수의 폴링          11.1초 만에 True
+
+        회복이 `interval`(10초) 언저리인 것은 probe 한 번을 기다리기 때문입니다.
         """
         self._run("unpause", SERVICE)
         self._run("up", "-d", "--no-deps", SERVICE)

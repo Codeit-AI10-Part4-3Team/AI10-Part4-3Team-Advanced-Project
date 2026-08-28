@@ -152,13 +152,24 @@ def test_the_type_does_not_depend_on_the_operating_system_mime_table(
     `/etc/mime.types` 도 없습니다. 개발 기계에는 그 파일(윈도우는 레지스트리)이 있어 표가
     채워지므로, `guess_type` 에 맡기면 **배포에서만** `application/octet-stream` 이 나갑니다.
 
-    아래 한 줄이 그 컨테이너 조건을 그대로 만듭니다 - OS 표를 읽지 않은 내장 표만으로
-    `_db` 를 갈아 끼웁니다. 사설 이름을 쓰는 이유는 이것이 재현하려는 조건 자체가
-    "OS 표가 없다" 이고, 공개 API 로는 그 상태를 만들 수 없기 때문입니다.
+    아래 네 줄이 그 컨테이너 조건을 그대로 만듭니다 - OS 표를 읽지 않은 내장 표로 `_db` 를
+    갈아 끼우고, 거기서 `.webp` 를 뺍니다. 사설 이름을 쓰는 이유는 이것이 재현하려는 조건
+    자체가 "표가 이 확장자를 모른다" 이고, 공개 API 로는 그 상태를 만들 수 없기 때문입니다.
+
+    ⚠️ **빼는 줄을 "내장 표에 없다" 는 단언으로 대신하지 마세요.** 원래 그 형태였는데
+    파이썬 3.13 이 `.webp` 를 내장 표에 넣어 3.13 이상에서 단언이 깨졌습니다 (#299 를 쓴
+    시점에는 참이었습니다). CI 는 3.12 라 초록인 채로, `requires-python = ">=3.12"` 를
+    지키는 개발 기계에서만 push 가 막혔습니다. **skip 으로 넘기는 것도 답이 아닙니다** -
+    배포는 3.12 라 결함은 그대로인데, 3.13 이상을 쓰는 사람은 이 축을 아무도 재지 않게
+    됩니다. 조건을 단언하지 않고 만들면 어느 판에서든 같은 것을 잽니다.
     """
-    monkeypatch.setattr(mimetypes, "_db", mimetypes.MimeTypes(filenames=()))
+    ambient = mimetypes.MimeTypes(filenames=())
+    for strict in (True, False):
+        ambient.types_map[strict].pop(".webp", None)
+    ambient.types_map_inv[True].pop("image/webp", None)
+    monkeypatch.setattr(mimetypes, "_db", ambient)
     assert mimetypes.guess_type("style-01-traits.webp")[0] is None, (
-        "이 시험의 전제가 깨졌습니다 - 내장 표에 .webp 가 생겼다면 시험을 지워도 됩니다"
+        "주변 표가 아직 .webp 를 압니다 - 이 시험이 재려는 조건이 만들어지지 않았습니다"
     )
 
     styles = env / "art-styles"

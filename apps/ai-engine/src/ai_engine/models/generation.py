@@ -132,6 +132,18 @@ class ImageRenderRequest(Base):
     draft: Draft
     spec: ImageSpec
     quality: ImageQuality
+    product_image: Omittable[str] = None
+    """The uploaded photo's bytes, base64 (ADR-0022). Absent when the photo is gone.
+
+    ⚠️ **Not `brief.productImageUrl`.** That one is a reference the browser resolves behind
+    auth; this service cannot call it without importing the caller's routes, which the
+    architecture forbids. Without these bytes the model has never seen the product and draws
+    a generic package from the product name — that is exactly what 2026-08-29 observed.
+
+    ⚠️ Optional on purpose: the photo has 24-hour retention while a session lives seven days
+    (세션_보관_정책 2절), so a render that runs later legitimately has none. Absence means the
+    old behaviour, not an error.
+    """
 
     @model_validator(mode="after")
     def _check_pairing(self) -> "ImageRenderRequest":

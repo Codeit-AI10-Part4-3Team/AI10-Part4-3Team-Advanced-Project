@@ -10,13 +10,15 @@ starting a server or waiting on a poll interval.
 
 from __future__ import annotations
 
+import base64
 import sqlite3
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest
-from conftest import RENDERED_WEBP, FakeAiEngine, draft_for
+from conftest import RENDERED_WEBP, VALID_PNG, FakeAiEngine, draft_for
 
 from backend_core import images, jobs, render, session_flow, sessions
 from backend_core.ai_client import AiEngineUnavailableError, GenerationTimeoutError
@@ -283,6 +285,45 @@ def test_the_render_request_carries_the_quality_tier_the_output_type_demands(
     render.run_one(connection, engine, tmp_path)
 
     assert engine.renders_requested[0].quality == render.COMIC_QUALITY == "medium"
+
+
+def test_the_uploaded_photo_rides_along_with_the_render_request(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """⚠️ ADR-0022. The engine cannot resolve `brief.productImageUrl` — that path is behind
+    this app's auth and calling back would invert the dependency the repo is built to keep.
+    So the bytes travel in the request; without them the model has never seen the product
+    and draws a generic package from the product name (2026-08-29 실측).
+    """
+    session_id, _ = _finalized(connection)
+    photo = VALID_PNG
+    images.store(tmp_path, UUID(session_id), photo)
+    engine = FakeAiEngine()
+
+    render.run_one(connection, engine, tmp_path)
+
+    sent = engine.renders_requested[0].product_image
+    assert sent is not None
+    assert base64.b64decode(sent) == photo
+
+
+def test_a_render_without_a_photo_omits_the_key(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """⚠️ An expired photo is normal, not an error: photos live 24 hours and sessions seven
+    days (세션_보관_정책 2절). The render then draws as it did before 2026-08-29 — failing
+    here would strand the user, since a render happens once per session (INV-3).
+
+    The key is **absent**, not `null`: the contract has no nulls (계약 3절).
+    """
+    _finalized(connection)
+    engine = FakeAiEngine()
+
+    render.run_one(connection, engine, tmp_path)
+
+    request = engine.renders_requested[0]
+    assert request.product_image is None
+    assert "productImage" not in request.model_dump(by_alias=True, exclude_none=True)
 
 
 def test_the_single_ad_render_stays_on_the_cheap_tier(

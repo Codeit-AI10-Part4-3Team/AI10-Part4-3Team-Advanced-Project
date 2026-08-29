@@ -1426,6 +1426,17 @@ components:
             - $ref: "#/components/schemas/SingleAdDraft"
         spec: { $ref: "#/components/schemas/ImageSpec" }
         quality: { $ref: "#/components/schemas/ImageQuality" }
+        productImage:
+          type: string
+          format: byte
+          description: |
+            업로드 사진의 원본 바이트(base64). **선택 항목이며 없으면 키를 생략합니다** --
+            사진 보존은 24시간이라(세션_보관_정책 2절) 그 뒤에 도는 렌더에는 사진이 없습니다.
+
+            `brief.productImageUrl` 과 역할이 다릅니다. 저쪽은 화면이 사진을 보여 주기 위한
+            참조이고 인증 뒤에 있어 ai-engine 이 부를 수 없습니다(호출하면 의존 방향 위반).
+            그림에 실물을 반영하려면 바이트가 요청에 실려야 합니다 -- 근거는
+            [ADR-0022](../../docs/adr/0022-제품_사진을_1번_칸의_레퍼런스로_보낸다.md).
       required: [outputType, brief, draft, spec, quality]
 
     ImageSpec:

@@ -43,9 +43,12 @@ BRIEF_FIELDS = {
 }
 
 
-def single_ad_request(**brief_overrides: object) -> ImageRenderRequest:
+def single_ad_request(*, photo: str | None = None, **brief_overrides: object) -> ImageRenderRequest:
     return ImageRenderRequest(
         output_type="single_ad",
+        # ⚠️ 키를 생략합니다. 계약이 `null` 을 금지하므로(계약 3절) `None` 을 그대로 넣으면
+        # 사진 없는 요청이 만들어지는 대신 422 가 납니다.
+        **({"product_image": photo} if photo else {}),
         brief=Brief.model_validate({**BRIEF_FIELDS, **brief_overrides}),
         draft=SingleAdDraft(
             ad_plan="기획안 문장",
@@ -57,13 +60,16 @@ def single_ad_request(**brief_overrides: object) -> ImageRenderRequest:
     )
 
 
-def comic_request(width: int = 3456, height: int = 2304) -> ImageRenderRequest:
+def comic_request(
+    width: int = 3456, height: int = 2304, *, photo: str | None = None
+) -> ImageRenderRequest:
     """⚠️ 기본값이 운영 규격입니다. 합성까지 도는 테스트는 **작은 캔버스**를 쓰세요 -
     3456 x 2304 는 약 8MP 라 칸 6장을 실제로 붙이면 테스트가 느려집니다. 격자 산술은 캔버스
     크기와 무관하므로 96 x 64 로 재도 같은 것을 잽니다."""
     roles = ["hook", "setup", "problem", "solution", "proof", "cta"]
     return ImageRenderRequest(
         output_type="comic",
+        **({"product_image": photo} if photo else {}),
         brief=Brief.model_validate(
             {**BRIEF_FIELDS, "character": {"appearance": "단발", "outfit": "니트"}}
         ),
@@ -97,7 +103,7 @@ def png_bytes(width: int = 32, height: int = 32) -> bytes:
 
 
 class FakeImages:
-    """`client.images.generate` 하나만 흉내냅니다."""
+    """단일 광고형 1회 호출을 흉내냅니다. 사진이 있으면 `edit`, 없으면 `generate` 입니다."""
 
     def __init__(
         self,
@@ -109,6 +115,12 @@ class FakeImages:
         self.error = error
         self.block_until = block_until
         self.calls: list[dict[str, Any]] = []
+        self.edits: list[dict[str, Any]] = []
+
+    def edit(self, **kwargs: Any) -> Any:
+        """사진을 레퍼런스로 보내는 경로 (ADR-0022). 응답 모양은 `generate` 와 같습니다."""
+        self.edits.append(kwargs)
+        return self.generate(**kwargs)
 
     def generate(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
@@ -213,9 +225,9 @@ def test_the_grounding_sentence_is_always_in_the_prompt() -> None:
     """
     assert render_prompt.GROUNDING in render_prompt.build(single_ad_request())
     for index in range(1, 7):
-        for with_reference in (False, True):
+        for reference in ("none", "panel"):
             prompt = render_prompt.build_panel(
-                comic_request(), comic_panel(index), with_reference=with_reference
+                comic_request(), comic_panel(index), reference=reference
             )
             assert render_prompt.GROUNDING in prompt
 
@@ -233,7 +245,7 @@ def test_the_ad_plan_is_not_sent_to_the_image_model() -> None:
     이미지 안에 써 넣습니다."""
     assert "기획안 문장" not in render_prompt.build(single_ad_request())
     assert "기획안 문장" not in render_prompt.build_panel(
-        comic_request(), comic_panel(), with_reference=False
+        comic_request(), comic_panel(), reference="none"
     )
 
 
@@ -249,7 +261,7 @@ def test_a_panel_prompt_asks_for_one_scene_and_only_its_own_line() -> None:
     그리고 **자기 대사만** 들어가야 합니다. 여섯 대사를 다 보내면 모델이 한 칸에 다른 칸의
     문구까지 써 넣습니다 - 한 장 방식에서는 그것이 정상 지시였으므로 옮겨 오기 쉬운 실수입니다.
     """
-    prompt = render_prompt.build_panel(comic_request(), comic_panel(3), with_reference=False)
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(3), reference="none")
 
     assert render_prompt.SINGLE_PANEL in prompt
     assert "3 x 2" not in prompt
@@ -264,10 +276,10 @@ def test_only_the_later_panels_are_told_to_keep_the_reference() -> None:
     request = comic_request()
 
     assert render_prompt.KEEP_REFERENCE not in render_prompt.build_panel(
-        request, comic_panel(1), with_reference=False
+        request, comic_panel(1), reference="none"
     )
     assert render_prompt.KEEP_REFERENCE in render_prompt.build_panel(
-        request, comic_panel(2), with_reference=True
+        request, comic_panel(2), reference="panel"
     )
 
 
@@ -278,7 +290,9 @@ def test_the_panel_role_reaches_the_image_prompt() -> None:
     request = comic_request()
 
     for index in range(1, 7):
-        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=index > 1)
+        prompt = render_prompt.build_panel(
+            request, comic_panel(index), reference="panel" if index > 1 else "none"
+        )
 
         assert ROLE_BEATS[PANEL_ROLES[index - 1]] in prompt
 
@@ -291,7 +305,7 @@ def test_the_first_panel_must_draw_the_product_and_the_main_background() -> None
     후킹이라는 역할은 그대로입니다. 이 시험이 고정하는 것은 그 장면 안에 제품과 배경이 함께
     있어야 한다는 것뿐입니다.
     """
-    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), with_reference=False)
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), reference="none")
 
     assert render_prompt.PRODUCT_ON_STAGE in prompt
     assert render_prompt.PRODUCT_STAYS_PLACED not in prompt
@@ -307,14 +321,14 @@ def test_the_product_stays_placed_and_unused_before_the_solution_panel() -> None
     request = comic_request()
 
     for index in (2, 3):
-        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=True)
+        prompt = render_prompt.build_panel(request, comic_panel(index), reference="panel")
 
         assert render_prompt.PRODUCT_STAYS_PLACED in prompt
         assert BRIEF_FIELDS["productName"] in prompt
         assert render_prompt.GROUNDING in prompt
 
     for index in (4, 5, 6):
-        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=True)
+        prompt = render_prompt.build_panel(request, comic_panel(index), reference="panel")
 
         assert render_prompt.PRODUCT_STAYS_PLACED not in prompt
 
@@ -328,11 +342,13 @@ def test_the_solution_panel_highlights_a_product_that_is_already_there() -> None
     request = comic_request()
 
     assert render_prompt.PRODUCT_ALREADY_PLACED in render_prompt.build_panel(
-        request, comic_panel(4), with_reference=True
+        request, comic_panel(4), reference="panel"
     )
 
     for index in (1, 2, 3, 5, 6):
-        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=index > 1)
+        prompt = render_prompt.build_panel(
+            request, comic_panel(index), reference="panel" if index > 1 else "none"
+        )
 
         assert render_prompt.PRODUCT_ALREADY_PLACED not in prompt
 
@@ -349,10 +365,57 @@ def test_the_reference_keeps_the_product_that_the_first_panel_drew() -> None:
     assert "배경" in render_prompt.KEEP_REFERENCE
 
 
+def test_the_product_photo_replaces_the_reference_sentence_on_the_first_panel() -> None:
+    """⚠️ 제품 사진에는 인물도 배경도 없습니다 (ADR-0022). `KEEP_REFERENCE` 를 그대로 붙이면
+    "배경을 그대로 유지한다" 가 사진의 흰 배경을 가리키게 됩니다.
+
+    1번 칸의 제품 배치 지시(`PRODUCT_ON_STAGE`)는 그대로 남습니다 - 사진은 제품이 어떻게
+    생겼는지를 말하고, 그 문장은 제품을 어디에 놓을지를 말합니다.
+    """
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), reference="product_photo")
+
+    assert render_prompt.KEEP_PRODUCT_PHOTO in prompt
+    assert render_prompt.KEEP_REFERENCE not in prompt
+    assert render_prompt.PRODUCT_ON_STAGE in prompt
+
+
+def test_the_later_panels_never_get_the_photo_sentence() -> None:
+    """2 ~ 6번 칸이 보는 것은 사진이 아니라 1번 칸입니다 (ADR-0017 의 레퍼런스 방향).
+    여기에 사진 문장이 붙으면 다섯 칸이 서로 다른 장면을 사진 배경 위에 그립니다."""
+    for index in (2, 3, 4, 5, 6):
+        prompt = render_prompt.build_panel(comic_request(), comic_panel(index), reference="panel")
+
+        assert render_prompt.KEEP_PRODUCT_PHOTO not in prompt
+        assert render_prompt.KEEP_REFERENCE in prompt
+
+
+def test_the_single_ad_takes_the_photo_and_refuses_a_panel_reference() -> None:
+    """단일 광고형에도 사진이 갑니다. 이어 그릴 앞 칸은 없습니다."""
+    assert render_prompt.KEEP_PRODUCT_PHOTO in render_prompt.build(
+        single_ad_request(), reference="product_photo"
+    )
+    assert render_prompt.KEEP_PRODUCT_PHOTO not in render_prompt.build(single_ad_request())
+
+    with pytest.raises(ValueError, match="앞 칸"):
+        render_prompt.build(single_ad_request(), reference="panel")
+
+
+def test_the_single_ad_bans_text_it_did_not_ask_for() -> None:
+    """⚠️ 만화형에는 처음부터 있던 문장이 단일 광고형에는 없었습니다 (2026-08-29 실측).
+    없는 동안 모델이 제품명과 브랜드 로고를 워드마크처럼 얹었고, 근거 안의 글자라 가드레일에
+    걸리지도 않았습니다. 막는 대상은 그 글자가 아니라 **지시하지 않은 글자가 들어오는 경로**
+    이며, 그 경로는 라벨의 인증 마크와 뿌리가 같습니다.
+    """
+    prompt = render_prompt.build(single_ad_request())
+
+    assert render_prompt.NO_EXTRA_TEXT in prompt
+    assert prompt.index('"한 장이면 충분해"') < prompt.index(render_prompt.NO_EXTRA_TEXT)
+
+
 def test_the_character_reaches_the_panel_that_has_no_reference() -> None:
     """⚠️ 1번 칸에 인물을 알려 줄 통로는 `brief.character` 뿐입니다. 나머지 칸은 1번 칸 그림을
     보고 그리지만 1번 칸은 볼 것이 없어서, 여기서 빠지면 세트마다 다른 사람이 나옵니다."""
-    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), with_reference=False)
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), reference="none")
 
     assert "단발" in prompt
     assert "니트" in prompt
@@ -414,6 +477,86 @@ def test_a_canvas_that_cannot_be_tiled_fails_before_any_call(
 
     with pytest.raises(render.RenderFailedError, match=expected):
         render._panel_size(spec)
+
+
+def test_the_photo_goes_to_the_first_panel_and_the_first_panel_goes_to_the_rest(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ ADR-0022. 사진이 있으면 1번 칸은 `generate` 가 아니라 `edit` 로 갑니다 - 그 한 장이
+    없으면 모델은 제품을 본 적이 없고 제품명만 보고 포장을 지어냅니다 (2026-08-29 실측).
+
+    ⚠️ **사진은 1번 칸에서 멈춥니다.** 나머지 다섯 칸의 입력은 우리가 만든 1번 칸이며, 여기서
+    사진을 계속 보내면 다섯 칸이 서로 다른 장면을 사진 위에 그립니다.
+    """
+    panels = FakePanels()
+    install(monkeypatch, panels)
+    photo = base64.b64encode(png_bytes()).decode()
+
+    render.render_image(comic_request(96, 64, photo=photo), model_settings)
+
+    assert len(panels.edits) == 6, "사진이 있으면 1번 칸도 edit 경로입니다"
+    first = next(call for call in panels.calls if "1번 칸이다" in call["prompt"])
+    assert render_prompt.KEEP_PRODUCT_PHOTO in first["prompt"]
+    for call in panels.calls:
+        if "1번 칸이다" not in call["prompt"]:
+            assert render_prompt.KEEP_PRODUCT_PHOTO not in call["prompt"]
+
+
+def test_without_a_photo_the_first_panel_is_drawn_as_before(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """사진은 **선택 항목**입니다 (보존 24시간, 세션은 7일). 없으면 08-29 이전 경로 그대로이고
+    실패가 아닙니다 - 렌더는 세션당 1회라(INV-3) 여기서 던지면 되돌릴 길이 없습니다."""
+    panels = FakePanels()
+    install(monkeypatch, panels)
+
+    render.render_image(comic_request(96, 64), model_settings)
+
+    assert len(panels.edits) == 5, "1번 칸은 레퍼런스 없이 generate 로 갑니다"
+
+
+def test_a_photo_that_is_not_base64_is_dropped_not_raised(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """⚠️ 사진 한 장 때문에 렌더 전체가 죽으면 사용자에게 되돌릴 방법이 없습니다 (INV-3).
+    못 읽는 사진은 **없는 것으로** 치고 그립니다."""
+    panels = FakePanels()
+    install(monkeypatch, panels)
+
+    render.render_image(comic_request(96, 64, photo="not base64!!"), model_settings)
+
+    assert len(panels.edits) == 5
+
+
+def test_the_single_ad_sends_the_photo_too(
+    monkeypatch: pytest.MonkeyPatch, model_settings: Settings
+) -> None:
+    """단일 광고형도 같은 이음매입니다. 19세션 중 11건이 이 유형이었습니다 (08-29 회차)."""
+    images = FakeImages(payload=png_bytes())
+    install(monkeypatch, images)
+    photo = base64.b64encode(png_bytes()).decode()
+
+    render.render_image(single_ad_request(photo=photo), model_settings)
+
+    assert render_prompt.KEEP_PRODUCT_PHOTO in images.calls[0]["prompt"]
+
+
+@pytest.mark.parametrize(
+    ("image_format", "expected"),
+    [("PNG", "image/png"), ("JPEG", "image/jpeg"), ("WEBP", "image/webp")],
+)
+def test_the_reference_declares_the_format_it_actually_is(image_format: str, expected: str) -> None:
+    """⚠️ 1번 칸을 넘길 때는 우리가 만든 PNG 지만 제품 사진은 사용자가 올린 것이라 JPEG 와
+    WebP 도 옵니다 (`backend_core/images.py` 가 셋을 받습니다). 이름과 MIME 을 png 로 고정해
+    보내면 벤더가 내용과 다른 형식을 통보받고, 실패가 원인을 가리키지 않습니다."""
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), (1, 2, 3)).save(buffer, format=image_format)
+
+    name, payload, mime = render._reference_part(buffer.getvalue())
+
+    assert mime == expected
+    assert name.endswith(expected.removeprefix("image/"))
+    assert payload == buffer.getvalue()
 
 
 def test_the_request_decides_the_quality_tier(

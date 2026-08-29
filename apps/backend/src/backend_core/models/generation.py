@@ -123,6 +123,16 @@ class ImageRenderRequest(Base):
     draft: Draft
     spec: ImageSpec
     quality: ImageQuality
+    product_image: Omittable[str] = None
+    """The uploaded photo's bytes, base64 (ADR-0022). This app fills it; the engine draws it.
+
+    ⚠️ **Not `brief.productImageUrl`.** That reference is served behind auth and the engine
+    must not call this app to resolve it. Sending the bytes is the only route that stays
+    inside the architecture.
+
+    ⚠️ Absent is normal: the photo expires after 24 hours while the session lives seven days
+    (세션_보관_정책 2절). A render without it falls back to the pre-2026-08-29 behaviour.
+    """
 
     @model_validator(mode="after")
     def _check_pairing(self) -> "ImageRenderRequest":

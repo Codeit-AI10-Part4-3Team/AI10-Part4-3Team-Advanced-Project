@@ -111,10 +111,16 @@ class Settings(BaseSettings):
     ai_engine_timeout_s: float = 8.0
 
     # `brief:fill` is the one seam with a fallback behind it (ADR-0005): past this we stop
-    # waiting, proceed on the user's own input and say `degraded`. 15s because the user is
-    # sitting in front of the request — a longer wait buys an inferred `category` at the
-    # price of the screen looking frozen.
-    brief_fill_timeout_s: float = 15.0
+    # waiting, proceed on the user's own input and say `degraded`. The user is sitting in
+    # front of this request, so the wait is a cost — but giving up too early costs more,
+    # because a slow call becomes a `degraded` session rather than a filled one.
+    #
+    # ⚠️ **Raised from 15 on 2026-08-29, measured.** At 12s/15s this seam degraded on almost
+    # every call: 9,170ms for a success, 12,018ms for the one that hit the engine's budget,
+    # and 22,463ms for the call that reached `needsInput` once the budget was raised. The
+    # engine's own budget must stay below this one (`ADGEN_BRIEF_FILL_MODEL_TIMEOUT_S`, 25s)
+    # so that whichever side knows why it failed is the side that gives up first.
+    brief_fill_timeout_s: float = 30.0
 
     # The contract promises draft generation inside 60s and `GENERATION_TIMEOUT` past it
     # (API_계약.md 2절). There is no fallback here, so this number *is* the promise.

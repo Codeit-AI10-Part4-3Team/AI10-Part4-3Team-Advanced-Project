@@ -1,8 +1,10 @@
 # AI10-Part4-3Team-Advanced-Project
 
 [![CI (lint + test)](https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](apps/backend/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
-**글과 이미지를 넣으면 브랜드 스타일의 광고 소재를 만들어 주는 AI 서비스.**
+**HAPPY 3팀** — 글과 이미지를 넣으면 브랜드 스타일의 광고 소재를 만들어 주는 AI 서비스.
 이미지 생성은 외부 API로 하고, GCP VM에 배포해 실제로 운영하는 것까지가 범위입니다.
 파인튜닝(LoRA)은 이번 범위가 아닙니다 ([ADR-0003](docs/adr/0003-이미지_생성_경로.md),
 [ADR-0004](docs/adr/0004-파인튜닝_보류.md)).
@@ -16,6 +18,13 @@
 > 일치율입니다.** 교체는 옆에 새로 만들지 말고 **이음매에서** 합니다.
 > 남은 작업: [docs/공통_가이드/착수_체크리스트.md](docs/공통_가이드/착수_체크리스트.md) ·
 > 아직 안 정해진 것: [docs/기술문서/미결정_대장.md](docs/기술문서/미결정_대장.md)
+
+[빠른 시작](#빠른-시작) ·
+[실행](#실행) ·
+[품질 게이트](#품질-게이트-커밋pr-전-필수--ci와-동일) ·
+[구조](#구조) ·
+[문서](#문서) ·
+[라이선스](#라이선스)
 
 ## 빠른 시작
 
@@ -67,6 +76,23 @@ docs/              # 기획서·기술문서·ADR·회의록·공통 가이드·
 
 `training/`은 `apps/`와 **파일로만** 만납니다(어댑터 가중치 + `adapter_card.json`).
 양방향 import 금지이며, 그래서 학습이 깨져도 서비스는 base 모델로 뜹니다.
+
+```mermaid
+flowchart LR
+    FE["apps/frontend"] -->|HTTP| BE["apps/backend<br/>api + backend_core"]
+    BE -->|"HTTP 계약만<br/>packages/contracts"| AE["apps/ai-engine<br/>카피 · 이미지 생성 · 가드레일"]
+    AE -.->|외부 API 호출| IMG[["이미지 생성 API<br/>gpt-image-2"]]
+    TR["training/<br/>LoRA 학습 - 이번 범위 아님, ADR-0004"] -.->|"파일만<br/>adapter_card.json"| AE
+
+    BE -. "import 금지" .-> AE
+    AE -. "import 금지" .-> BE
+
+    linkStyle 4,5 stroke:#c0392b,stroke-width:2px
+```
+
+두 앱을 잇는 결합은 `packages/contracts`의 HTTP 계약뿐이고, 파이썬 import로 넘는 것은
+둘 다 금지입니다(빨간 점선). 전체 배포 그림과 이음매별 상세는
+[docs/공통_가이드/아키텍처.md](docs/공통_가이드/아키텍처.md) 1·4·5절이 정본입니다.
 
 ## 문서
 

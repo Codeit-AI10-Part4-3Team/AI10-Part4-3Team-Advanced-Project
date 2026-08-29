@@ -237,6 +237,19 @@ def test_the_comic_prompt_carries_the_six_beats_in_order() -> None:
     assert "단발" in prompt, "만화형 브리프의 인물이 프롬프트에 실려야 합니다"
 
 
+def test_the_comic_prompt_stages_the_product_from_the_first_panel() -> None:
+    """⚠️ 2026-08-29 실물 회차. 장면(`scene`)이 1번 칸을 제품 없는 후킹으로 쓰면, 그 칸을
+    레퍼런스로 보는 나머지 다섯 칸에서 제품과 장소가 칸마다 달라집니다.
+
+    ⚠️ 렌더 쪽 지시(`render_prompt`)와 **한 쌍입니다.** 여기서 "가방에서 꺼낸다" 는 장면이
+    나오면 그림 쪽 규칙과 정면으로 부딪힙니다.
+    """
+    prompt = draft_prompt.build_generate(generate_request("comic"))
+
+    assert draft_prompt.PRODUCT_STAGING in prompt
+    assert f"{draft_prompt.PRODUCT_USED_AT_INDEX}번 칸" in prompt
+
+
 def test_the_comic_prompt_states_the_dialogue_length_hint() -> None:
     """N18 (2026-08-21 회의 확정). 상한은 **프롬프트 지침으로만** 존재합니다.
 

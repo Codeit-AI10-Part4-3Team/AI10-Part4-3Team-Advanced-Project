@@ -44,7 +44,7 @@ class BriefFillResponse(Base):
     `target` are then empty strings and the session waits in `brief_filling`.
 
     **The absence of this response is the degraded path**, not a field in it. When the call
-    fails or overruns 15s the caller skips auto-fill and proceeds with `messageMode:
+    fails or overruns 30s the caller skips auto-fill and proceeds with `messageMode:
     degraded`, still in `brief_filling` — moving straight to `brief_ready` would let draft
     generation start with two empty fields (ADR-0005).
     """

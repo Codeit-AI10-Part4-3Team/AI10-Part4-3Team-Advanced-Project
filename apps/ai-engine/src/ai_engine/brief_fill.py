@@ -6,7 +6,7 @@ of the real work; the caller and the contract do not move. Building the real pat
 this one would let the skeleton's guarantees (fallback, guardrail, contract) quietly lapse.
 
 This is the **only** seam with a fallback, and the fallback lives in the caller rather than
-here: if this call fails or overruns 15s, apps/backend skips auto-fill and proceeds with
+here: if this call fails or overruns 30s, apps/backend skips auto-fill and proceeds with
 `messageMode: degraded` (ADR-0005). So this module never invents a value to stay alive —
 failing loudly is what lets the caller degrade honestly.
 """
@@ -138,8 +138,8 @@ def _infer_with_model(request: BriefFillRequest, settings: Settings) -> BriefFil
             "openai 패키지가 없습니다. pip install -e './apps/ai-engine[model]' 로 설치하세요."
         ) from exc
 
-    # ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 12초가 **시도당** 상한이 되고,
-    # 최악 36초가 호출자의 15초를 넘깁니다 (이슈 #180). 그때 증상은 "엔진이 죽었다" 로 보이는
+    # ⚠️ `max_retries` 를 넘기지 않으면 SDK 기본값 2 가 붙어 25초가 **시도당** 상한이 되고,
+    # 최악 75초가 호출자의 30초를 넘깁니다 (이슈 #180). 그때 증상은 "엔진이 죽었다" 로 보이는
     # 열화인데 실제로는 살아 있고 느렸을 뿐이라, `messageMode: degraded` 비율이 부풀립니다.
     client = OpenAI(
         api_key=settings.model_api_key,
@@ -147,8 +147,8 @@ def _infer_with_model(request: BriefFillRequest, settings: Settings) -> BriefFil
         max_retries=MODEL_MAX_RETRIES,
     )
     # ⚠️ **`timeout=` 은 벽시계가 아니라 벽시계는 우리가 잽니다** (이슈 #180). httpx 는
-    # connect/read/write 를 각각 재므로, SDK 재시도를 껐어도 한 번의 시도가 12초를 넘을 수
-    # 있습니다. 그러면 호출자(15초)가 먼저 끊고 이 이음매는 열화로 빠지는데, 엔진은 죽은 것이
+    # connect/read/write 를 각각 재므로, SDK 재시도를 껐어도 한 번의 시도가 25초를 넘을 수
+    # 있습니다. 그러면 호출자(30초)가 먼저 끊고 이 이음매는 열화로 빠지는데, 엔진은 죽은 것이
     # 아니라 느렸을 뿐이라 `messageMode: degraded` 비율이 그만큼 부풀립니다 - 그 값은 보고
     # 지표입니다. 이 설정이 "시도당 상한"이 아니라 **호출자보다 먼저 포기하는 시점**이라는
     # 것은 `brief_fill_model_timeout_s` 의 docstring 이 이미 말하고 있었고, 이제 코드가

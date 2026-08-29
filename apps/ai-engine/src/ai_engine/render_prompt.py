@@ -11,6 +11,8 @@
 않는 문장이 됩니다. 실험 조건을 고칠 때 이 파일도 함께 보세요.
 """
 
+from typing import Literal
+
 from ai_engine.draft_prompt import PRODUCT_USED_AT, PRODUCT_USED_AT_INDEX, ROLE_BEATS
 from ai_engine.models import (
     PANEL_ROLES,
@@ -30,8 +32,46 @@ GROUNDING = "이 정보에 없는 효능, 수치, 성분, 수상 이력, 타사 
 지표라 우회하면 측정이 무효가 됩니다.
 """
 
+ReferenceKind = Literal["none", "product_photo", "panel"]
+"""이 호출에 딸려 가는 입력 이미지가 무엇인가 (2026-08-29, ADR-0022).
 
-def build(request: ImageRenderRequest) -> str:
+⚠️ **참/거짓으로 되돌리지 마세요.** 셋이 서로 다른 문장을 부릅니다. 제품 사진에는 인물도
+배경도 없으므로 `KEEP_REFERENCE`("인물과 제품과 배경을 그대로 유지한다")를 그대로 붙이면
+모델이 사진의 흰 배경을 장면의 배경으로 삼습니다.
+"""
+
+KEEP_PRODUCT_PHOTO = (
+    "입력으로 준 사진에 나온 제품을 그린다. 제품의 색, 형태, 로고와 라벨의 배치가 사진과 "
+    "같아야 한다. 사진을 그대로 붙여 넣지 말고 아래 화풍으로 다시 그린다. 라벨 안의 인증 "
+    "마크, 성분표, 작은 글자는 그리지 않는다."
+)
+"""제품 사진이 레퍼런스로 갈 때의 지시 (2026-08-29 실측, ADR-0022).
+
+세 요구가 한 문장에 있고 **서로 당깁니다** - 사진과 같게(1), 그러나 화풍으로(2), 그러나 라벨
+글자는 빼고(3). 2026-08-29 탐색 2회에서 셋 다 지켜졌습니다
+([보고서](../../../../docs/보고서/제품사진_레퍼런스_탐색_보고서.md), 표본은 조건당 1회).
+
+⚠️ **3번은 미관 문제가 아닙니다.** 근거(`sellingPoint` + `note` + 제품명)에 없는 인증 마크가
+그림에 들어가면 우리가 카피에서 막은 주장(INV-6)이 이미지로 새어 나가고, `check_claims` 는
+이미지 안의 글자를 보지 못합니다. 실제 원두 사진에는 HACCP 마크와 성분표가 있었고 결과에는
+없었습니다.
+
+⚠️ **사진은 소품까지 끌고 옵니다.** 같은 회차에서 사진에 있던 원두 더미와 유리잔이 장면에
+따라 들어왔습니다. 장면 지시와 부딪히는 사진(배경이 복잡한 제품컷)에서 어느 쪽이 이기는지는
+재지 않았습니다.
+"""
+
+NO_EXTRA_TEXT = "그 밖의 문구는 이미지에 넣지 않는다."
+"""지정한 글자 말고는 쓰지 말라는 지시.
+
+⚠️ **만화형에는 처음부터 있었고 단일 광고형에는 없었습니다** (2026-08-29 에 맞췄습니다). 없는
+동안 모델이 제품명과 브랜드 로고를 워드마크처럼 얹었고, 근거 안의 글자라 가드레일에 걸리지도
+않았습니다. 문제는 그 글자가 아니라 **지시하지 않은 글자가 들어오는 경로가 열려 있다**는 것이고,
+그 경로는 `KEEP_PRODUCT_PHOTO` 가 막는 인증 마크와 뿌리가 같습니다.
+"""
+
+
+def build(request: ImageRenderRequest, *, reference: ReferenceKind = "none") -> str:
     """단일 광고형 1장의 지시문.
 
     브리프와 시안 **양쪽**을 씁니다. 시안은 사용자가 이미 승인한 문장이므로 그림의 내용을
@@ -42,13 +82,19 @@ def build(request: ImageRenderRequest) -> str:
     폐기한 방식이라 되살릴 자리를 남겨 두지 않았습니다 - 3456 / 3 = 1152 는 경계선과 바깥
     여백이 정확히 0 일 때만 성립하는데, 경계선을 그리라고 지시한 이상 칸은 반드시 1152px
     보다 작아집니다. 만화형은 `build_panel` 로 칸을 하나씩 만들어 합성합니다.
+
+    ⚠️ `reference` 로 올 수 있는 값은 `none` 과 `product_photo` 뿐입니다. 단일 광고형에는
+    이어 그릴 앞 칸이 없습니다.
     """
     if isinstance(request.draft, ComicDraft):
         raise TypeError(
             "만화형은 build() 로 한 장을 통째로 그리지 않습니다 (ADR-0017). "
             "칸마다 build_panel() 을 쓰고 ai_engine.render 가 3x2 로 합성합니다."
         )
-    return _single_ad(request, request.draft)
+    if reference == "panel":
+        raise ValueError("단일 광고형에는 이어 그릴 앞 칸이 없습니다.")
+    head = f"{KEEP_PRODUCT_PHOTO}\n" if reference == "product_photo" else ""
+    return f"{head}{_single_ad(request, request.draft)}"
 
 
 def _common_head(request: ImageRenderRequest) -> str:
@@ -76,7 +122,8 @@ def _single_ad(request: ImageRenderRequest, draft: SingleAdDraft) -> str:
         f"{request.spec.width} x {request.spec.height} 픽셀의 광고 이미지 1장을 그린다.\n"
         f"화면 구성: {draft.visual_plan}\n"
         f"이미지 안에 아래 문구를 오탈자 없이 정확히 그대로 표기한다. 글자를 임의로 바꾸거나 "
-        f'줄이지 않는다.\n"{draft.ad_copy}"'
+        f'줄이지 않는다.\n"{draft.ad_copy}"\n'
+        f"{NO_EXTRA_TEXT}"
     )
 
 
@@ -186,7 +233,7 @@ def _product_staging(role: PanelRole) -> str | None:
     return None
 
 
-def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bool) -> str:
+def build_panel(request: ImageRenderRequest, panel: Panel, *, reference: ReferenceKind) -> str:
     """만화형 **한 칸**의 지시문. 칸마다 한 번씩 호출되고 결과를 우리가 3x2 로 붙입니다.
 
     ⚠️ 칸 크기를 지시문에 쓰지 않습니다. 크기는 API 요청의 `size` 가 정하고 그 값은
@@ -207,14 +254,21 @@ def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bo
     ⚠️ **제품을 어떻게 놓는지는 칸마다 다릅니다** (`_product_staging`, 2026-08-29). 1번 칸은
     제품과 주배경을 반드시 그리고, 2 · 3번 칸은 놓인 채로 두고, 4번 칸은 꺼내 오지 않고
     강조합니다. 세 문장이 한 규칙이므로 하나만 떼어 고치지 마세요.
+
+    ⚠️ **`reference` 는 셋입니다** (ADR-0022). 1번 칸은 사진이 있으면 `product_photo`,
+    없으면 `none` 이고, 2 ~ 6번 칸은 언제나 `panel` 입니다 - 그 칸들이 보는 것은 사진이 아니라
+    우리가 만든 1번 칸입니다. 1번 칸에 `panel` 을 주면 있지도 않은 앞 칸을 따르라는 지시가
+    되고, 사진에 `KEEP_REFERENCE` 를 붙이면 사진의 흰 배경이 장면의 배경이 됩니다.
     """
     lines = [
         SINGLE_PANEL,
         f"전체 6칸 중 {panel.index}번 칸이다.",
         f"이 칸의 역할은 {ROLE_BEATS[panel.role]}.",
     ]
-    if with_reference:
+    if reference == "panel":
         lines.append(KEEP_REFERENCE)
+    elif reference == "product_photo":
+        lines.append(KEEP_PRODUCT_PHOTO)
     lines.append(_common_head(request))
     staging = _product_staging(panel.role)
     if staging is not None:

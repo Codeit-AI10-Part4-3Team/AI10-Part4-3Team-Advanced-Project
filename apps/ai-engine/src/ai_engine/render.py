@@ -116,9 +116,29 @@ def _render_with_model(request: ImageRenderRequest, settings: Settings) -> bytes
 
     client = _client(settings)
     quality = _quality(request, settings)
+    photo = _product_photo(request)
     if isinstance(request.draft, ComicDraft):
-        return _render_panels(request, request.draft, settings, client, quality)
-    return _to_lossless_webp(_render_one_shot(request, settings, client, quality))
+        return _render_panels(request, request.draft, settings, client, quality, photo)
+    return _to_lossless_webp(_render_one_shot(request, settings, client, quality, photo))
+
+
+def _product_photo(request: ImageRenderRequest) -> bytes | None:
+    """업로드 사진의 바이트. 없으면 `None` 이고 그것은 정상입니다 (ADR-0022).
+
+    ⚠️ **없다고 실패시키지 않습니다.** 사진 보존은 24시간이고 세션은 7일이라(세션_보관_정책
+    2절), 뒤늦게 도는 렌더에는 사진이 없는 것이 계약대로입니다. 그 경우 08-29 이전과 같은
+    그림이 나옵니다 - 제품이 실물과 다를 뿐 실패는 아닙니다.
+
+    ⚠️ 망가진 base64 도 같습니다. 여기서 예외를 던지면 사진 하나 때문에 렌더 전체가 죽고,
+    사용자에게는 되돌릴 방법이 없습니다 (INV-3 으로 렌더는 세션당 1회입니다).
+    """
+    if not request.product_image:
+        return None
+    try:
+        return base64.b64decode(request.product_image, validate=True)
+    except (ValueError, TypeError):
+        logger.warning("productImage 를 디코딩하지 못해 사진 없이 그립니다.")
+        return None
 
 
 def _client(settings: Settings) -> Any:
@@ -163,7 +183,11 @@ def _await_within_budget(future: Future[bytes], deadline: float, message: str) -
 
 
 def _render_one_shot(
-    request: ImageRenderRequest, settings: Settings, client: Any, quality: str
+    request: ImageRenderRequest,
+    settings: Settings,
+    client: Any,
+    quality: str,
+    photo: bytes | None = None,
 ) -> bytes:
     """단일 광고형 1장. 칸이 하나뿐이라 합성 단계를 지나지 않습니다 (생성_파이프라인 6절).
 
@@ -183,10 +207,10 @@ def _render_one_shot(
             lambda: _generate(
                 client,
                 settings,
-                prompt=render_prompt.build(request),
+                prompt=render_prompt.build(request, reference="product_photo" if photo else "none"),
                 size=f"{request.spec.width}x{request.spec.height}",
                 quality=quality,
-                reference=None,
+                reference=photo,
             ),
         )
     except budget.BudgetExceededError as exc:
@@ -202,6 +226,7 @@ def _render_panels(
     settings: Settings,
     client: Any,
     quality: str,
+    photo: bytes | None = None,
 ) -> bytes:
     """만화형: 칸을 따로 만들어 3x2 로 붙입니다 (ADR-0017).
 
@@ -225,11 +250,11 @@ def _render_panels(
     panels = sorted(draft.panels, key=lambda panel: panel.index)
     logger.info("만화형 컷별 생성: %d칸 %s (1번 뒤 %d건 동시)", len(panels), size, len(panels) - 1)
 
-    def draw(panel: Panel, reference: bytes | None) -> bytes:
+    def draw(panel: Panel, reference: bytes | None, kind: render_prompt.ReferenceKind) -> bytes:
         return _generate(
             client,
             settings,
-            prompt=render_prompt.build_panel(request, panel, with_reference=reference is not None),
+            prompt=render_prompt.build_panel(request, panel, reference=kind),
             size=size,
             quality=quality,
             reference=reference,
@@ -255,9 +280,11 @@ def _render_panels(
         # ⚠️ 1번 칸의 크기는 **부채꼴로 퍼지기 전에** 봅니다. 이 칸은 나머지 다섯의 레퍼런스라,
         # 어긋난 채로 넘어가면 잘못된 크기가 다섯 호출의 입력이 되고 그 요금이 다 나간 뒤에야
         # 합성 단계에서 걸립니다.
+        # ⚠️ 1번 칸의 레퍼런스는 **제품 사진**입니다 (ADR-0022). 없으면 예전처럼 레퍼런스
+        # 없이 그리고, 그때 제품은 모델이 제품명만 보고 지어낸 물건이 됩니다.
         first = _as_png(
             _await_within_budget(
-                pool.submit(draw, head, None),
+                pool.submit(draw, head, photo, "product_photo" if photo else "none"),
                 deadline,
                 f"{settings.render_budget_s:.0f}초 예산 안에 1번 칸이 오지 않았습니다. "
                 "나머지 칸은 부르지 않습니다.",
@@ -272,7 +299,9 @@ def _render_panels(
                 "나머지 칸은 부르지 않습니다."
             )
 
-        pending = [(panel, pool.submit(draw, panel, first)) for panel in rest]
+        # 2 ~ 6번 칸이 보는 것은 사진이 아니라 **1번 칸**입니다. 사진을 여기까지 보내면 다섯
+        # 칸이 서로 다른 장면을 사진 배경 위에 그립니다 (ADR-0017 의 레퍼런스 방향).
+        pending = [(panel, pool.submit(draw, panel, first, "panel")) for panel in rest]
         tiles = [first]
         for panel, future in pending:
             try:
@@ -353,7 +382,7 @@ def _generate(
             # ⚠️ 스레드마다 **새 튜플**을 만듭니다. 열린 파일 객체 하나를 다섯 스레드가 함께
             # 읽으면 읽기 위치가 섞여 본문이 깨집니다 - 실험 하네스는 순차라 이 함정이
             # 드러나지 않았습니다. 바이트를 그대로 넘기면 SDK 가 각자 감쌉니다.
-            response = client.images.edit(image=[("panel.png", reference, "image/png")], **kwargs)
+            response = client.images.edit(image=[_reference_part(reference)], **kwargs)
     except Exception as exc:
         # 벤더 예외 계층에 의존하지 않습니다.
         # 인증 실패도 쿼터 초과도 타임아웃도 호출자에게는 같은 답입니다: 쓸 수 없음.
@@ -361,6 +390,28 @@ def _generate(
         raise RenderFailedError(f"{type(exc).__name__}: {exc}") from exc
 
     return _inline_bytes(response)
+
+
+_MIME_BY_FORMAT = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+
+
+def _reference_part(reference: bytes) -> tuple[str, bytes, str]:
+    """레퍼런스 한 장을 SDK 가 받는 모양으로. 형식은 **바이트에서 읽습니다**.
+
+    ⚠️ 1번 칸을 넘길 때는 우리가 만든 PNG 지만, 제품 사진은 사용자가 올린 것이라 JPEG 와
+    WebP 도 옵니다 (`backend_core/images.py` 가 셋을 받습니다, ADR-0022). 이름과 MIME 을
+    `png` 로 고정해 보내면 벤더가 내용과 다른 형식을 통보받고, 그 실패는 "이미지가
+    잘못됐다" 로만 돌아와 원인을 가리키지 않습니다.
+
+    읽지 못하면 PNG 로 둡니다 - 여기서 예외를 던지면 사진 하나 때문에 렌더 전체가 죽습니다.
+    """
+    try:
+        with Image.open(io.BytesIO(reference)) as image:
+            image_format = image.format or "PNG"
+    except OSError:
+        image_format = "PNG"
+    mime = _MIME_BY_FORMAT.get(image_format, "image/png")
+    return f"reference.{mime.removeprefix('image/')}", reference, mime
 
 
 def _as_png(payload: bytes, panel_size: tuple[int, int]) -> bytes:

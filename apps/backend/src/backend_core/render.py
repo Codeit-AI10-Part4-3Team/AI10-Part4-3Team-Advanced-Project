@@ -16,10 +16,12 @@ there is one GPU — a second concurrent render is not slower, it is two OOMs
 
 from __future__ import annotations
 
+import base64
 import logging
 import sqlite3
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 from backend_core import images, jobs, observability, session_flow, sessions
 from backend_core.ai_client import AiEngineClient, AiEngineUnavailableError, GenerationTimeoutError
@@ -163,6 +165,10 @@ def _render(
                 draft=session.draft,
                 spec=spec,
                 quality=quality,
+                # ⚠️ The key is omitted, never `null` — the contract has no nulls (계약 3절),
+                # so passing `None` through would be a validation error rather than "no
+                # photo".
+                **_photo_field(image_dir, session_id),
             )
         )
     except GenerationTimeoutError as exc:
@@ -185,6 +191,38 @@ def _render(
     )
     sessions.save(connection, user_id, session_flow.complete(session, at), was)
     return job_id
+
+
+def _photo_field(image_dir: str | Path, session_id: str) -> dict[str, str]:
+    """`{"product_image": ...}` or `{}` — the key is absent when there is no photo."""
+    photo = _product_image(image_dir, session_id)
+    return {"product_image": photo} if photo else {}
+
+
+def _product_image(image_dir: str | Path, session_id: str) -> str | None:
+    """The uploaded photo as base64, or `None` when there is none (ADR-0022).
+
+    ⚠️ **Bytes, not the URL.** `brief.productImageUrl` is served behind this app's auth and
+    the engine must not call back here to resolve it — that import direction is what the
+    repo's structure exists to prevent. Without the bytes the engine has never seen the
+    product and draws a generic package from the product name.
+
+    ⚠️ **A missing photo is not a failure.** Photos expire after 24 hours while sessions
+    live seven days (세션_보관_정책 2절), so a render queued late legitimately has none. The
+    engine then renders as it did before 2026-08-29 rather than raising — a render is once
+    per session (INV-3), so failing here would leave the user with no way back.
+
+    ⚠️ Read errors are swallowed for the same reason. A photo that cannot be read is worth a
+    worse picture, never a dead job.
+    """
+    found = images.find(image_dir, UUID(session_id))
+    if found is None:
+        return None
+    try:
+        return base64.b64encode(found.read_bytes()).decode("ascii")
+    except OSError:
+        logger.warning("session %s: photo unreadable, rendering without it", session_id)
+        return None
 
 
 def _fail(

@@ -1,8 +1,10 @@
 # AI10-Part4-3Team-Advanced-Project
 
 [![CI (lint + test)](https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/Codeit-AI10-Part4-3Team/AI10-Part4-3Team-Advanced-Project/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](apps/backend/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
-**글과 이미지를 넣으면 브랜드 스타일의 광고 소재를 만들어 주는 AI 서비스.**
+**HAPPY 3팀** — 글과 이미지를 넣으면 브랜드 스타일의 광고 소재를 만들어 주는 AI 서비스.
 이미지 생성은 외부 API로 하고, GCP VM에 배포해 실제로 운영하는 것까지가 범위입니다.
 파인튜닝(LoRA)은 이번 범위가 아닙니다 ([ADR-0003](docs/adr/0003-이미지_생성_경로.md),
 [ADR-0004](docs/adr/0004-파인튜닝_보류.md)).
@@ -16,6 +18,13 @@
 > 일치율입니다.** 교체는 옆에 새로 만들지 말고 **이음매에서** 합니다.
 > 남은 작업: [docs/공통_가이드/착수_체크리스트.md](docs/공통_가이드/착수_체크리스트.md) ·
 > 아직 안 정해진 것: [docs/기술문서/미결정_대장.md](docs/기술문서/미결정_대장.md)
+
+[빠른 시작](#빠른-시작) ·
+[실행](#실행) ·
+[품질 게이트](#품질-게이트-커밋pr-전-필수--ci와-동일) ·
+[구조](#구조) ·
+[문서](#문서) ·
+[라이선스](#라이선스)
 
 ## 빠른 시작
 

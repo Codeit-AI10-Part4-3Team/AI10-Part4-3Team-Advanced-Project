@@ -106,7 +106,7 @@ def fill_brief(
 
     ⚠️ 503 belongs here even though this is the seam the caller degrades around. The two are
     different things: **degrading** is what the caller does when no response arrives at all
-    (outage, 15s timeout), while a 503 is this service saying it cannot serve. The contract
+    (outage, 30s timeout), while a 503 is this service saying it cannot serve. The contract
     lists both, so leaving the 503 out would let an unhandled error escape as a 500 and give
     the caller a status it has no branch for.
     """

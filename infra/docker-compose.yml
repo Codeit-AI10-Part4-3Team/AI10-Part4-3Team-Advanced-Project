@@ -69,7 +69,7 @@ services:
       #    실물로 처음 돌리기 전에 이 값이 벤더에 실재하는 모델인지부터 확인하세요.
       ADGEN_TEXT_MODEL: ${ADGEN_TEXT_MODEL:-gpt-5}
       # 엔진이 벤더를 기다리는 상한입니다. **backend 의 동명 설정과 뜻이 다릅니다** - 저쪽은
-      # "얼마나 기다려 주는가"(15초 / 60초)이고 이쪽은 "그 안에 포기하는가"입니다. 그래서
+      # "얼마나 기다려 주는가"(30초 / 60초)이고 이쪽은 "그 안에 포기하는가"입니다. 그래서
       # 이름을 나눴고, 값도 저쪽보다 작아야 누가 먼저 끊었는지가 로그에 남습니다.
       ADGEN_BRIEF_FILL_MODEL_TIMEOUT_S: ${ADGEN_BRIEF_FILL_MODEL_TIMEOUT_S:-25.0}
       ADGEN_DRAFT_MODEL_TIMEOUT_S: ${ADGEN_DRAFT_MODEL_TIMEOUT_S:-50.0}

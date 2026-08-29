@@ -394,8 +394,8 @@ def test_the_sdk_is_told_not_to_retry_behind_our_budget(
 ) -> None:
     """⚠️ **세 이음매 중 이 자리가 가장 급합니다** (이슈 #180).
 
-    `openai` 는 타임아웃도 재시도하므로 (`DEFAULT_MAX_RETRIES == 2`), 넘기지 않으면 12초가
-    **시도당** 상한이 되고 최악 36초가 호출자의 15초를 넘깁니다. 그러면 호출자가 먼저 끊고
+    `openai` 는 타임아웃도 재시도하므로 (`DEFAULT_MAX_RETRIES == 2`), 넘기지 않으면 25초가
+    **시도당** 상한이 되고 최악 75초가 호출자의 30초를 넘깁니다. 그러면 호출자가 먼저 끊고
     이 이음매는 열화로 빠지는데(ADR-0005), 엔진은 죽지 않았고 느렸을 뿐입니다 - 사용자에게는
     같은 증상이지만 `messageMode: degraded` 비율은 벤더가 느렸던 날의 숫자가 되고, **그 값은
     보고 지표입니다.**
@@ -411,7 +411,7 @@ def test_the_sdk_is_told_not_to_retry_behind_our_budget(
 def test_the_engine_gives_up_before_the_caller_does(env_example: dict[str, str]) -> None:
     """확정된 것은 값이 아니라 **순서**입니다 (2026-08-21 회의록 04절).
 
-    호출자의 `ADGEN_BRIEF_FILL_TIMEOUT_S`(15초)와 같은 이름을 쓰지 않는 이유도 여기 있습니다 -
+    호출자의 `ADGEN_BRIEF_FILL_TIMEOUT_S`(30초)와 같은 이름을 쓰지 않는 이유도 여기 있습니다 -
     `infra/.env` 한 줄이 양쪽을 함께 움직이면 이 부등호가 조용히 등호가 됩니다.
 
     ⚠️ **두 값을 다 `infra/.env.example` 에서 읽습니다.** 호출자 쪽을 상수로 적으면 그 값이
@@ -434,7 +434,7 @@ def test_a_hanging_call_is_cut_at_the_budget(
     """벽시계는 우리가 잽니다 (이슈 #180 리뷰).
 
     `timeout=` 은 httpx 값이라 connect/read/write 를 **각각** 잽니다. SDK 재시도를 껐어도 한
-    번의 시도가 12초를 넘을 수 있고, 그러면 호출자(15초)가 먼저 끊습니다. 이 이음매는 그때
+    번의 시도가 25초를 넘을 수 있고, 그러면 호출자(30초)가 먼저 끊습니다. 이 이음매는 그때
     열화로 빠지므로 - 죽은 것이 아니라 느렸을 뿐인데 - `messageMode: degraded` 비율이
     부풀립니다. **그 값이 보고 지표라 서비스 동작만이 아니라 측정이 틀어집니다.**
     """

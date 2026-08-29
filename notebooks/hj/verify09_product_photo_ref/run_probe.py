@@ -239,7 +239,7 @@ COMIC_PANELS: tuple[tuple[str, str], ...] = (
 """
 
 
-def _comic_request(photo: str, style_index: int) -> ImageRenderRequest:
+def _comic_request(photo: str, style_index: int, quality: str = "medium") -> ImageRenderRequest:
     """만화형. 티어와 크기가 단일 광고형과 다릅니다 (medium, 칸당 1152).
 
     ⚠️ **여섯 칸을 다 그립니다** (약 0.43 USD). 1번 칸만 보고 싶으면 `--matrix` 쪽 티어로
@@ -263,7 +263,7 @@ def _comic_request(photo: str, style_index: int) -> ImageRenderRequest:
             ],
         ),
         spec=ImageSpec(width=3456, height=2304),
-        quality="medium",
+        quality=quality,  # type: ignore[arg-type]
         product_image=_encoded(photo),
     )
 
@@ -296,9 +296,11 @@ def _prompt_preview(request: ImageRenderRequest) -> str:
     return render_prompt.build(request, reference="product_photo")
 
 
-def _run(photo: str, style_index: int, *, comic: bool, settings: Settings) -> Path:
+def _run(photo: str, style_index: int, *, comic: bool, quality: str, settings: Settings) -> Path:
     """한 조합을 실제로 그립니다. **구현 경로를 그대로 지납니다.**"""
-    request = _comic_request(photo, style_index) if comic else _request(photo, style_index)
+    request = (
+        _comic_request(photo, style_index, quality) if comic else _request(photo, style_index)
+    )
     started = datetime.now()
     payload = render.render_image(request, settings)
     elapsed = (datetime.now() - started).total_seconds()
@@ -336,7 +338,10 @@ def _run(photo: str, style_index: int, *, comic: bool, settings: Settings) -> Pa
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--yes", action="store_true", help="실제로 호출합니다 (요금 발생)")
-    parser.add_argument("--comic", action="store_true", help="만화형 6칸 (약 0.43 USD)")
+    parser.add_argument("--comic", action="store_true", help="만화형 6칸 (medium 약 0.43 USD)")
+    parser.add_argument(
+        "--quality", default="medium", choices=("low", "medium"), help="만화형 티어"
+    )
     parser.add_argument("--matrix", action="store_true", help="남은 사진 6장 x 남은 화풍 6종")
     parser.add_argument("--photo", help="무작위 대신 이 사진으로")
     parser.add_argument("--style", type=int, help="무작위 대신 이 화풍 번호로")
@@ -354,13 +359,18 @@ def main() -> int:
         if not (PHOTO_DIR / photo).is_file():
             return _fail(f"사진이 없습니다: {PHOTO_DIR / photo}")
 
-    print(f"[조건] SEED={SEED} / 조합 {len(pairs)}건 / 유형={'만화형' if args.comic else '단일 광고형'}")
+    tier = args.quality if args.comic else "low"
+    print(
+        f"[조건] SEED={SEED} / 조합 {len(pairs)}건 / "
+        f"유형={'만화형 6칸' if args.comic else '단일 광고형'} / 티어={tier}"
+    )
     for photo, style_index in pairs:
         print(f"  - {photo}  x  화풍 {style_index} {ART_STYLES[style_index]}")
 
     if not args.yes:
         print("-" * 78)
-        print(_prompt_preview(_request(*pairs[0]) if not args.comic else _comic_request(*pairs[0])))
+        preview = _comic_request(*pairs[0], args.quality) if args.comic else _request(*pairs[0])
+        print(_prompt_preview(preview))
         print("-" * 78)
         print("[중단] --yes 가 없어 호출하지 않았습니다. 요금 0.")
         return 0
@@ -374,7 +384,7 @@ def main() -> int:
     for photo, style_index in pairs:
         print(f"[생성] {photo} / 화풍 {style_index}")
         try:
-            _run(photo, style_index, comic=args.comic, settings=settings)
+            _run(photo, style_index, comic=args.comic, quality=args.quality, settings=settings)
         except render.RenderFailedError as exc:
             failures += 1
             print(f"  실패: {exc}", file=sys.stderr)

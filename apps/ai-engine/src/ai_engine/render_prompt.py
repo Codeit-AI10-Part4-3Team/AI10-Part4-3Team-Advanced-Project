@@ -11,7 +11,7 @@
 않는 문장이 됩니다. 실험 조건을 고칠 때 이 파일도 함께 보세요.
 """
 
-from ai_engine.draft_prompt import ROLE_BEATS
+from ai_engine.draft_prompt import PRODUCT_USED_AT, PRODUCT_USED_AT_INDEX, ROLE_BEATS
 from ai_engine.models import (
     PANEL_ROLES,
     ComicDraft,
@@ -86,8 +86,8 @@ SINGLE_PANEL = "정사각형 만화 한 칸. 격자나 여러 칸으로 나누�
 문장입니다 (`notebooks/hj/verify01_korean_text_rendering/run_panels.py`)."""
 
 KEEP_REFERENCE = (
-    "입력으로 준 이미지에 나온 인물을 그대로 유지한다. 얼굴, 머리 모양, 복장이 같아야 한다. "
-    "장면과 동작만 아래 지시대로 바꾼다."
+    "입력으로 준 이미지에 나온 인물과 제품과 배경을 그대로 유지한다. 얼굴, 머리 모양, 복장이 "
+    "같아야 하고 제품의 포장 모양과 장소도 같아야 한다. 장면과 동작만 아래 지시대로 바꾼다."
 )
 """2 ~ 6번 칸에만 붙습니다. 1번 칸은 레퍼런스가 될 그림 자체라 붙일 대상이 없습니다.
 
@@ -97,52 +97,93 @@ KEEP_REFERENCE = (
 여기에 상태 관련 지시를 덧붙이지 마세요. 검증 3순위 판정 시트가 이 축을 묻도록 고치는 것이
 먼저입니다.
 
-⚠️ **"제품을 유지한다" 는 2026-08-26 에 빠졌습니다** (이슈 #272). 1번 칸은 후킹이라 제품이
-없고, 레퍼런스에 없는 것을 유지하라고 하면 모델이 제품을 지어내 1 ~ 3번 칸에 그립니다 -
-대사는 문제 제기인데 그림은 이미 해결 중인 세트가 그렇게 나왔습니다. **대신 4 ~ 6번 칸의
-포장 모양이 서로 고정되지 않습니다** - 다섯 칸 모두 1번 칸 하나를 레퍼런스로 보기 때문이고
-(ADR-0017 의 동시 호출), 이 축을 고정하려면 제품 사진을 두 번째 레퍼런스로 보내야 합니다
-(`brief.product_image_url` 이 URL 이라 받아 오는 경로가 따로 필요합니다).
+⚠️ **"제품과 배경을 유지한다" 는 2026-08-29 에 돌아왔습니다.** 2026-08-26 에 뺐던 이유는
+1번 칸이 후킹이라 제품이 없었기 때문이고(이슈 #272), 레퍼런스에 없는 것을 유지하라고 하면
+모델이 제품을 지어냈습니다. 지금은 1번 칸이 제품과 주배경을 반드시 그리므로
+(`PRODUCT_ON_STAGE`) 유지할 대상이 실제로 레퍼런스 안에 있습니다. **전제가 한 쌍입니다** -
+1번 칸에서 제품을 빼는 변경을 하면 이 문장부터 다시 빼야 하고, 그러지 않으면 08-26 에
+관측한 "지어낸 제품" 이 그대로 돌아옵니다.
 """
 
-PRODUCT_ENTERS_AT: PanelRole = "solution"
-"""제품이 그림에 처음 등장하는 칸의 역할 (기획서 7.3 의 4번 "제품 등장 및 해결").
+PRODUCT_ON_STAGE_AT: PanelRole = "hook"
+"""제품과 주배경을 반드시 그리는 칸의 역할 (1번 칸, 레퍼런스가 되는 유일한 칸).
 
-칸 번호가 아니라 역할로 적습니다. 번호는 역할에서 나오고(INV-5) 순서를 정하는 것은
-`PANEL_ROLES` 이므로, 여기에 `4` 를 박으면 같은 사실이 두 곳에 생깁니다.
+칸 번호가 아니라 역할로 적는 이유는 `PRODUCT_USED_AT` 과 같습니다 (INV-5).
 """
 
-PRODUCT_ENTERS_AT_INDEX = PANEL_ROLES.index(PRODUCT_ENTERS_AT) + 1
-"""제품이 처음 등장하는 칸 번호. 프롬프트 문장이 사람에게 읽히는 번호로 말해야 해서 씁니다."""
-
-PRODUCT_NOT_YET = (
-    "제품과 포장은 이 칸에 그리지 않는다. 제품을 꺼내거나 쓰고 있는 장면도 그리지 않는다 - "
-    f"포장에서 꺼낸 낱개도 제품이다. 제품은 {PRODUCT_ENTERS_AT_INDEX}번 칸에서 처음 등장한다. "
-    "이 칸에는 인물과 상황만 그린다."
+PRODUCT_ON_STAGE = (
+    "제품과 주배경을 이 칸에 반드시 그린다. 제품은 주배경 안에 놓여 있고 포장 전체가 보이며, "
+    "인물이 들거나 쓰고 있지 않다. 나머지 다섯 칸이 이 그림을 보고 그리므로, 제품과 배경이 "
+    "이 칸에 없으면 칸마다 다른 제품과 다른 장소가 나온다."
 )
-"""`PRODUCT_ENTERS_AT` 앞 칸들(후킹, 상황 제시, 문제와 고민)에 붙습니다.
+"""1번 칸에만 붙습니다 (2026-08-29 실물 회차).
 
-⚠️ **제품명과 소구점은 그대로 보냅니다.** 여기서 막는 것은 "그리지 마라" 하나이고, 근거를
-빼면 `GROUNDING` 이 검사할 대상이 사라집니다 (`_common_head` 의 이유와 같습니다).
+⚠️ **기획서 7.3 의 "후킹" 을 바꾸는 것이 아닙니다.** 역할 문구(`ROLE_BEATS`)는 그대로이고,
+여기서 정하는 것은 그 후킹 장면 **안에** 제품과 주배경이 함께 있어야 한다는 것뿐입니다.
 
-⚠️ **"쓰고 있는 장면" 이 2026-08-26 확인 회차에서 덧붙었습니다.** 포장만 막았을 때 1 · 2번
-칸은 통과했는데 3번 칸(문제와 고민)에서 낱장을 들고 이미 닦고 있었습니다.
+이유는 ADR-0017 의 구조입니다 - 2 ~ 6번 칸은 서로가 아니라 전부 1번 칸 하나만 레퍼런스로
+봅니다. 그래서 1번 칸에 없는 것은 어느 칸에서도 고정되지 않고, 실제로 여섯 칸의 제품 포장과
+장소가 칸마다 달라졌습니다.
+"""
 
-⚠️ **그 잔존은 이 문장이 아니라 `note` 때문이었습니다** (같은 날 3회차, `note` 만 비운
-대조). `note` 가 "자국을 닦는 장면" 이었고 `_common_head` 를 타고 여섯 칸 전부에 들어갑니다.
-비우자 3번 칸이 바로 통과했고 여섯 칸이 전부 역할대로 나왔습니다. **사용자가 친 문장이 앞
-칸의 금지를 이깁니다** - 이 지침을 더 조여서 해결되는 종류가 아니고, `note` 를 앞 칸에서
-빼는 것은 사용자 요청을 우리가 지우는 일이라 회의 사안입니다. 표본은 조건당 1회입니다.
+PRODUCT_STAYS_PLACED = (
+    "제품은 1번 칸에서 놓인 자리에 그대로 있다. 인물이 제품을 들거나 꺼내거나 쓰는 장면은 "
+    "그리지 않는다 - 포장에서 꺼낸 낱개도 제품이다. 인물이 제품을 쓰기 시작하는 것은 "
+    f"{PRODUCT_USED_AT_INDEX}번 칸이다."
+)
+"""1번 칸과 `PRODUCT_USED_AT` 사이의 칸들(상황 제시, 문제와 고민)에 붙습니다.
+
+⚠️ **화면에서 빼라는 지시가 아닙니다** (2026-08-29 에 뜻이 바뀌었습니다). 앞 칸에서 제품을
+지우면 레퍼런스와 어긋나 배경까지 흔들립니다. 막는 것은 인물이 쓰는 장면 하나뿐이며, 그것을
+막는 이유는 대사가 문제 제기인데 그림이 이미 해결 중인 세트를 08-26 에 관측했기 때문입니다
+(이슈 #272).
+
+⚠️ **제품명과 소구점은 그대로 보냅니다.** 근거를 빼면 `GROUNDING` 이 검사할 대상이 사라집니다
+(`_common_head` 의 이유와 같습니다).
+
+⚠️ **`note` 는 이 지시를 이깁니다** (2026-08-26 대조, 미결정_대장 N26 이 현행 유지 확정).
+`note` 가 "자국을 닦는 장면" 이면 `_common_head` 를 타고 여섯 칸 전부에 들어가 3번 칸이
+이미 닦고 있게 됩니다. 지침을 더 조여서 해결되는 종류가 아닙니다. 표본은 조건당 1회입니다.
+"""
+
+PRODUCT_ALREADY_PLACED = (
+    "제품은 앞 칸부터 이미 이 자리에 놓여 있다. 가방, 주머니, 서랍 등 어딘가에서 꺼내 오는 "
+    "장면으로 그리지 않는다. 놓여 있는 제품을 화면에서 크고 또렷하게 강조하고, 인물이 그것을 "
+    "알아보는 순간으로 그린다."
+)
+"""`PRODUCT_USED_AT` 칸("제품 등장과 해결")에 붙습니다 (2026-08-29 실물 회차).
+
+꺼내 오는 연출이면 제품이 그 칸에서 처음 생긴 물건이 되어, 1 ~ 3번 칸에 놓여 있던 같은 제품과
+이어지지 않습니다. 레퍼런스가 고정하는 것은 **화면에 있는** 제품의 모양이므로, 이 칸이 제품을
+새로 들여오는 순간 앞 칸에서 쌓은 일관성이 그 자리에서 끊깁니다.
 """
 
 
-def shows_product(role: PanelRole) -> bool:
-    """이 역할의 칸이 제품을 그리는가. `PRODUCT_ENTERS_AT` 부터 참입니다 (기획서 7.3).
+def uses_product(role: PanelRole) -> bool:
+    """이 역할의 칸에서 인물이 제품을 쓰는가. `PRODUCT_USED_AT` 부터 참입니다 (기획서 7.3).
 
-    역할 이름이 아니라 **순서**로 봅니다 - 뒤 칸(성능과 효과, 만족과 CTA)은 제품이 이미
-    등장한 뒤라 함께 참이어야 하고, 목록에 역할이 하나 늘면 그 자리도 순서가 정합니다.
+    ⚠️ **"제품이 화면에 있는가" 가 아닙니다** (2026-08-29). 제품은 1번 칸부터 여섯 칸 모두에
+    있고, 이 함수가 가르는 것은 인물이 그것을 쓰기 시작했는지 하나입니다.
+
+    역할 이름이 아니라 **순서**로 봅니다 - 뒤 칸(성능과 효과, 만족과 CTA)은 제품을 쓰기
+    시작한 뒤라 함께 참이어야 하고, 목록에 역할이 하나 늘면 그 자리도 순서가 정합니다.
     """
-    return PANEL_ROLES.index(role) >= PANEL_ROLES.index(PRODUCT_ENTERS_AT)
+    return PANEL_ROLES.index(role) >= PANEL_ROLES.index(PRODUCT_USED_AT)
+
+
+def _product_staging(role: PanelRole) -> str | None:
+    """이 칸에서 제품을 어떻게 놓는가. 칸마다 많아야 하나입니다.
+
+    5 · 6번 칸(성능과 효과, 만족과 CTA)에는 붙지 않습니다 - 제품을 쓰는 장면이 이미 시작됐고,
+    무엇을 유지할지는 `KEEP_REFERENCE` 와 `panel.scene` 이 말합니다.
+    """
+    if role == PRODUCT_ON_STAGE_AT:
+        return PRODUCT_ON_STAGE
+    if not uses_product(role):
+        return PRODUCT_STAYS_PLACED
+    if role == PRODUCT_USED_AT:
+        return PRODUCT_ALREADY_PLACED
+    return None
 
 
 def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bool) -> str:
@@ -159,9 +200,13 @@ def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bo
 
     ⚠️ **역할이 빠지면 대사와 그림이 어긋납니다** (이슈 #272, 2026-08-26 실물 회차). 카피
     쪽은 `draft_prompt` 가 역할을 알려 주고 받아 오므로 `scene` 과 `dialogue` 는 기획서 7.3
-    을 따르는데, 그림 쪽에는 통로가 없어 1 ~ 3번 칸(문제 제기)에 제품이 이미 놓이고 주인공이
-    이미 쓰고 있는 세트가 나왔습니다. 역할은 `panel.index` 가 정하므로 여기서 새로 고를 값이
-    없습니다 (INV-5).
+    을 따르는데, 그림 쪽에는 통로가 없어 1 ~ 3번 칸(문제 제기)에서 주인공이 제품을 이미 쓰고
+    있는 세트가 나왔습니다. 역할은 `panel.index` 가 정하므로 여기서 새로 고를 값이 없습니다
+    (INV-5).
+
+    ⚠️ **제품을 어떻게 놓는지는 칸마다 다릅니다** (`_product_staging`, 2026-08-29). 1번 칸은
+    제품과 주배경을 반드시 그리고, 2 · 3번 칸은 놓인 채로 두고, 4번 칸은 꺼내 오지 않고
+    강조합니다. 세 문장이 한 규칙이므로 하나만 떼어 고치지 마세요.
     """
     lines = [
         SINGLE_PANEL,
@@ -171,8 +216,9 @@ def build_panel(request: ImageRenderRequest, panel: Panel, *, with_reference: bo
     if with_reference:
         lines.append(KEEP_REFERENCE)
     lines.append(_common_head(request))
-    if not shows_product(panel.role):
-        lines.append(PRODUCT_NOT_YET)
+    staging = _product_staging(panel.role)
+    if staging is not None:
+        lines.append(staging)
     if request.brief.character is not None:
         character = request.brief.character
         lines.append(f"등장인물의 외모는 {character.appearance}, 복장은 {character.outfit}.")

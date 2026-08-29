@@ -283,38 +283,70 @@ def test_the_panel_role_reaches_the_image_prompt() -> None:
         assert ROLE_BEATS[PANEL_ROLES[index - 1]] in prompt
 
 
-def test_the_product_is_not_drawn_before_the_solution_panel() -> None:
-    """기획서 7.3 이 제품 등장을 4번 칸("제품 등장 및 해결")에 두었습니다. 1 ~ 3번은 후킹,
-    상황 제시, 문제와 고민이라 그림에 제품이 있으면 문제에서 해결로 넘어가는 구조가 그림만
-    보면 성립하지 않습니다.
+def test_the_first_panel_must_draw_the_product_and_the_main_background() -> None:
+    """⚠️ 2026-08-29 실물 회차. 1번 칸에 제품과 주배경이 없으면 나머지 다섯 칸에서 제품 포장과
+    장소가 칸마다 달라집니다 - 다섯 칸 모두 1번 칸 하나만 레퍼런스로 보기 때문입니다
+    (ADR-0017 의 동시 호출).
 
-    ⚠️ **제품명과 소구점은 앞 칸에도 그대로 갑니다.** 막는 것은 "그리지 마라" 하나이고,
-    근거를 빼면 `GROUNDING` 이 검사할 대상이 사라집니다.
+    후킹이라는 역할은 그대로입니다. 이 시험이 고정하는 것은 그 장면 안에 제품과 배경이 함께
+    있어야 한다는 것뿐입니다.
+    """
+    prompt = render_prompt.build_panel(comic_request(), comic_panel(1), with_reference=False)
+
+    assert render_prompt.PRODUCT_ON_STAGE in prompt
+    assert render_prompt.PRODUCT_STAYS_PLACED not in prompt
+
+
+def test_the_product_stays_placed_and_unused_before_the_solution_panel() -> None:
+    """2 · 3번 칸(상황 제시, 문제와 고민)에서 막는 것은 **쓰는 장면**이지 제품 자체가
+    아닙니다. 화면에서 빼면 레퍼런스와 어긋나 배경까지 흔들립니다 (2026-08-29).
+
+    ⚠️ **제품명과 소구점은 앞 칸에도 그대로 갑니다.** 근거를 빼면 `GROUNDING` 이 검사할
+    대상이 사라집니다.
     """
     request = comic_request()
 
-    for index in (1, 2, 3):
-        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=index > 1)
+    for index in (2, 3):
+        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=True)
 
-        assert render_prompt.PRODUCT_NOT_YET in prompt
+        assert render_prompt.PRODUCT_STAYS_PLACED in prompt
         assert BRIEF_FIELDS["productName"] in prompt
         assert render_prompt.GROUNDING in prompt
 
     for index in (4, 5, 6):
         prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=True)
 
-        assert render_prompt.PRODUCT_NOT_YET not in prompt
+        assert render_prompt.PRODUCT_STAYS_PLACED not in prompt
 
 
-def test_the_reference_does_not_ask_to_keep_a_product_that_is_not_there() -> None:
-    """⚠️ 1번 칸은 후킹이라 제품이 없습니다. 레퍼런스에 없는 것을 유지하라고 하면 모델이
-    제품을 지어내 앞 칸에 그립니다 (이슈 #272).
+def test_the_solution_panel_highlights_a_product_that_is_already_there() -> None:
+    """4번 칸("이럴 땐 이 제품이 좋아요")이 제품을 어딘가에서 꺼내 오면, 그 순간 제품이 그
+    칸에서 처음 생긴 물건이 되어 앞 칸에 놓여 있던 것과 이어지지 않습니다 (2026-08-29).
 
-    ⚠️ **대가가 있습니다** - 4 ~ 6번 칸의 포장 모양이 서로 고정되지 않습니다. 다섯 칸 모두
-    1번 칸 하나를 레퍼런스로 보기 때문이고(ADR-0017 의 동시 호출), 고정하려면 제품 사진을
-    두 번째 레퍼런스로 보내야 합니다. 이 시험은 그것까지 재지 않습니다.
+    5 · 6번 칸에는 붙지 않습니다 - 제품을 쓰는 장면이 이미 시작됐고, 유지는 레퍼런스가 말합니다.
     """
-    assert "제품" not in render_prompt.KEEP_REFERENCE
+    request = comic_request()
+
+    assert render_prompt.PRODUCT_ALREADY_PLACED in render_prompt.build_panel(
+        request, comic_panel(4), with_reference=True
+    )
+
+    for index in (1, 2, 3, 5, 6):
+        prompt = render_prompt.build_panel(request, comic_panel(index), with_reference=index > 1)
+
+        assert render_prompt.PRODUCT_ALREADY_PLACED not in prompt
+
+
+def test_the_reference_keeps_the_product_that_the_first_panel_drew() -> None:
+    """⚠️ 2026-08-26 에 뺐던 "제품을 유지한다" 가 2026-08-29 에 돌아왔습니다. 그때 뺀 이유는
+    1번 칸에 제품이 없어 모델이 제품을 지어냈기 때문이고(이슈 #272), 지금은 1번 칸이 제품과
+    주배경을 반드시 그립니다.
+
+    ⚠️ **한 쌍입니다.** 1번 칸에서 제품을 빼는 변경을 하면 이 문장도 함께 빼야 하고, 그러지
+    않으면 08-26 의 "지어낸 제품" 이 그대로 돌아옵니다.
+    """
+    assert "제품" in render_prompt.KEEP_REFERENCE
+    assert "배경" in render_prompt.KEEP_REFERENCE
 
 
 def test_the_character_reaches_the_panel_that_has_no_reference() -> None:

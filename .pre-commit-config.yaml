@@ -7,7 +7,7 @@ repos:
   # 노트북 출력 셀 제거 — .gitattributes의 nbstripout filter와 동일 목적의 안전망.
   # 신규 팀원이 `nbstripout --install`을 빠뜨려도 여기서 차단된다.
   - repo: https://github.com/kynan/nbstripout
-    rev: 0.9.1
+    rev: 0.9.2
     hooks:
       - id: nbstripout
 
@@ -54,7 +54,7 @@ repos:
   #       커밋도 CI도 통과하지 못합니다. Dependabot이 한 곳만 올린 PR이 실제로 이 드리프트를
   #       만든 적이 있어(#2) 검사로 승격했습니다.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.4
+    rev: v0.17.6
     hooks:
       # id는 `ruff-check`. 예전 이름 `ruff`는 legacy alias로 아직 동작하지만 실행할 때마다
       # "(legacy alias)" 경고를 찍으므로, 버전 상향과 함께 정식 id로 정리합니다.
